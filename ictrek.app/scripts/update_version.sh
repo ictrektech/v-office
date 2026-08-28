@@ -18,8 +18,9 @@ Commit application code changes before running this script.
 EOF
 }
 
-bump_version_from() {
-  local current="$1" part="$2" major minor patch
+bump_version() {
+  local part="$1" current major minor patch
+  current="$(tr -d '[:space:]' < "$VERSION_FILE")"
   [[ "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
     echo "invalid VERSION: $current" >&2
     exit 1
@@ -48,7 +49,7 @@ git diff --quiet && git diff --cached --quiet || {
   exit 1
 }
 
-version="$(bump_version_from "$(tr -d '[:space:]' < "$VERSION_FILE")" "$part")"
+version="$(bump_version "$part")"
 tag="${TAG_PREFIX}${version}"
 public_tag="v${version}"
 
@@ -65,7 +66,7 @@ fi
 printf '%s\n' "$version" > "$VERSION_FILE"
 git add "$VERSION_FILE"
 git commit -m "chore: release VOS ${APP_LABEL} ${version}"
-git tag -f "$tag"
+git tag "$tag"
 branch="$(git branch --show-current)"
 git push origin "$branch"
 git push origin "$tag"
