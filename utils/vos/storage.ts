@@ -10,7 +10,9 @@
 
 import { getVOSAccessToken, clearVOSAuthCache, isVOSMode } from "./fastpath";
 
-const API_BASE = process.env.NEXT_PUBLIC_STORAGE_API || "/api/com.ictrek.ziziyi-office";
+const API_BASE =
+  process.env.NEXT_PUBLIC_STORAGE_API ||
+  "/api/com.ictrek.ziziyi-office/api/v1";
 
 export interface CloudFile {
   name: string;
@@ -29,7 +31,7 @@ export class CloudUnavailableError extends Error {
 export async function clientLog(message: string): Promise<void> {
   if (typeof window === "undefined") return;
   try {
-    await fetch(`${API_BASE}/client-log`, {
+    await fetch(`${API_BASE.replace(/\/api\/v1$/, "")}/client-log`, {
       method: "POST",
       headers: { "Content-Type": "text/plain" },
       body: message.slice(0, 2000),

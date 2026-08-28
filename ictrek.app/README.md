@@ -7,20 +7,20 @@
 ## 应用形态
 
 - `ziziyi-office-web`：纯前端静态服务。Next.js 静态导出 + OnlyOffice 前端资源（fonts / sdkjs / web-apps / sdkjs-plugins），Caddy 在容器内 80 端口提供静态服务，无状态。
-- `ziziyi-office-storage`：映射目录文档存储服务（FastAPI，见 fork 内 `server/`）。校验 VOS OIDC Fastpath 令牌后，只读写 `ZIZIYI_OFFICE_DATA_PATH/<用户名>/` 中的文档。
+- `ziziyi-office-storage`：应用私有文档存储服务（FastAPI，见 fork 内 `server/`）。校验 VOS OIDC Fastpath 令牌后，只读写 `${VOS_APP_STORAGE_PATH}/documents/<用户名>/` 中的文档。
 - `amd` / `arm` 两个 profile，安装时由 VOS 为每个 profile 各选择一对镜像（web + storage）。
 
-## VOS 认证与映射目录访问
+## VOS 认证与应用私有存储
 
 - `manifest.yml` 声明 `oauth2.client`（public client + PKCE S256）。VOS 1.1+ 向同域 iframe 注入 `window.vos_platform.api.v1000.oauth2`，前端（`utils/vos/fastpath.ts`）静默完成 authorize/token 换取 access token 并缓存，过期用 refresh_token 静默续期——全程无 OAuth 跳转，不会反复弹授权。
-- 前端所有云端请求带 Bearer 令牌访问同域相对路径 `/api/com.ictrek.ziziyi-office`（Traefik 剥前缀转发到存储服务）；存储服务每次请求调 VOS `/v1000/oauth2/userinfo` 校验令牌（带短 TTL 用户名缓存），取不到有效用户即 401。
-- 每个 VOS 用户只访问自己的 `DATA_ROOT/<用户名>/` 目录；文件名经过 Office 后缀白名单与路径穿越校验，接口无法跨用户读取、覆盖或删除文件。
+- 前端和外部 Agent 带 Bearer 令牌访问同域 API `/api/com.ictrek.ziziyi-office/api/v1`（Traefik 剥网关前缀后转发到存储服务）；存储服务每次请求调 VOS `/v1000/oauth2/userinfo` 校验令牌（带短 TTL 用户名缓存），取不到有效用户即 401。
+- VOS 自动分配 `VOS_APP_STORAGE_PATH`，安装页不再要求用户指定文档目录；每个 VOS 用户只访问其中 `documents/<用户名>/` 目录。该目录不会出现在 VOS 公共文件中，文件名仍经过 Office 后缀白名单与路径穿越校验。
 - 新文档第一次保存（Ctrl+S）时直接要求输入文件名，随后保存覆盖同一文件；上传失败时保持保存错误，不会改成浏览器下载。编辑器右上角提供关闭当前文档按钮。
 - 独立部署（非 VOS iframe）检测不到 `window.vos_platform`，云端入口自动隐藏，应用回到本地优先行为（IndexedDB / 本地文件句柄）。
 
 ## 安装配置
 
-- `ZIZIYI_OFFICE_DATA_PATH`（type: path，默认 `/data/vos_workspace/ziziyi-office`）：宿主机文档存储映射路径，用户可选；应用在其中按 VOS 用户名建立隔离子目录。
+- 文档目录无需配置：VOS 自动注入 `VOS_APP_STORAGE_PATH`，应用固定使用其 `documents/` 子目录。
 - `VOS_OIDC_USERINFO_URL`（默认 `http://172.17.0.1:8105/v1000/oauth2/userinfo`）：存储服务校验令牌的 VOS 地址，默认适配 VOS backend host 网络 `SITE_PORT=8105` 部署，一般不改。
 
 ## 目录结构
@@ -32,7 +32,7 @@
 | `src/manifest.yml` | 应用元数据（id、分类 `office`、profiles、frontend basePath、oauth2 client）。 |
 | `src/docker-compose.yml` | web + storage 双服务定义，Traefik 路由与 `vos_default` 外部网络。 |
 | `src/routers.yml` | 侧边栏导航：`com-ictrek-ziziyi-office` 组 + `ziziyi-office` 页面。 |
-| `src/configs.yml` | 安装配置：文档存储映射路径、VOS OIDC userinfo 地址。 |
+| `src/configs.yml` | 安装配置：仅保留 VOS OIDC userinfo 地址；文档目录由平台自动分配。 |
 | `src/README.zh-CN.md` / `src/README.en.md` | 打进安装包的应用商店简版说明。 |
 | `src/icon.png` | 应用图标（256x256 PNG，由上游 `public/logo.svg` 渲染）。 |
 | `scripts/package.sh` | pull 模式打包脚本（读飞书版本 → 渲染 → 打 tar → 自校验）。 |
@@ -45,9 +45,10 @@
 
 - `next.config.ts`：新增 `basePath: process.env.NEXT_PUBLIC_BASE_PATH || ""`，用于 VOS 子路径部署；不设置该环境变量时行为与上游一致。
 - `Dockerfile`：builder stage 新增 `ARG NEXT_PUBLIC_BASE_PATH` 透传，并把 `NEXT_PUBLIC_APP_ROOT` 改为 `${NEXT_PUBLIC_BASE_PATH}/v${DS_VERSION}-${HASH}`；不传该参数时与上游产物一致。
-- `server/`：新增逐用户文档存储服务（仅 VOS 部署使用）。
+- `server/`：新增应用私有存储中的逐用户文档服务（仅 VOS 部署使用）。
 - `utils/vos/`：新增 VOS OIDC Fastpath 静默认证与云端存储客户端。
-- `components/main/open-view.tsx`：新增"云端文档"列表（VOS 模式才显示）。
+- `components/main/open-view.tsx`：新增"云端文档"列表以及逐文件打开、下载、删除操作（VOS 模式才显示）。
+- `components/main/api-guide-view.tsx`：新增 API 接入指南，包含版本化接口、认证说明和可复制的 Agent 调用示例。
 - `utils/editor/server.ts`：保存时 VOS 模式改为自动入云，新文档首次保存先命名。
 - `app/editor/page.tsx`：新增首次保存命名对话框和关闭当前文档按钮。
 - `package.json`：新增 `js-sha256` 依赖（PKCE S256，兼容非 HTTPS 门户）。

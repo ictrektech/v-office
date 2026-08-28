@@ -475,7 +475,7 @@ export class EditorServer {
           return { status: "error" };
         }
 
-        // VOS deployment: persist directly into the mapped document directory.
+        // VOS deployment: persist directly into the private app storage.
         // A failed server save must remain an error instead of silently changing
         // the operation into a browser download.
         if (vosMode) {

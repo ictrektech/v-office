@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useExtracted } from "next-intl";
-import { FolderOpen, Layout, Settings, Info } from "lucide-react";
+import { FolderOpen, Layout, Settings, Info, Code2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface MobileNavProps {
@@ -20,6 +20,12 @@ export function MobileNav({ pathname, className }: MobileNavProps) {
       label: t("Template"),
       icon: Layout,
       href: "/template",
+    },
+    {
+      id: "api",
+      label: "API",
+      icon: Code2,
+      href: "/api-guide",
     },
     {
       id: "settings",
@@ -43,7 +49,7 @@ export function MobileNav({ pathname, className }: MobileNavProps) {
             key={item.id}
             href={item.href}
             className={cn(
-              "flex flex-col items-center justify-center gap-1.5 px-4 py-2 rounded-lg transition-colors min-w-[64px]",
+              "flex min-w-[52px] flex-col items-center justify-center gap-1.5 rounded-lg px-2 py-2 transition-colors",
               isActive
                 ? "text-primary bg-primary/10"
                 : "text-text-secondary hover:text-foreground active:bg-muted",
@@ -65,7 +71,7 @@ export function MobileNav({ pathname, className }: MobileNavProps) {
       <Link
         href="/about"
         className={cn(
-          "flex flex-col items-center justify-center gap-1.5 px-4 py-2 rounded-lg transition-colors min-w-[64px]",
+          "flex min-w-[52px] flex-col items-center justify-center gap-1.5 rounded-lg px-2 py-2 transition-colors",
           pathname === "/about"
             ? "text-primary bg-primary/10"
             : "text-text-secondary hover:text-foreground active:bg-muted",

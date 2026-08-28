@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { FolderOpen, Cloud, Clock, X, Loader2 } from "lucide-react";
+import { FolderOpen, Cloud, Clock, Download, X, Loader2 } from "lucide-react";
 import { useExtracted } from "next-intl";
 import { cn } from "@/lib/utils";
 import { getNewUrl } from "@/utils/editor/utils";
@@ -52,6 +52,9 @@ export function OpenView({
     "checking",
   );
   const [loadingCloudFile, setLoadingCloudFile] = useState<string | null>(null);
+  const [downloadingCloudFile, setDownloadingCloudFile] = useState<
+    string | null
+  >(null);
 
   const router = useRouter();
   const server = useAppStore((state) => state.server);
@@ -150,6 +153,30 @@ export function OpenView({
       setCloudFiles((files) => files.filter((f) => f.name !== name));
     } catch (error) {
       console.error("Failed to delete cloud file:", error);
+    }
+  };
+
+  const handleCloudFileDownload = async (
+    e: React.MouseEvent,
+    file: CloudFile,
+  ) => {
+    e.stopPropagation();
+    if (downloadingCloudFile) return;
+    setDownloadingCloudFile(file.name);
+    try {
+      const downloaded = await openCloudFile(file.name);
+      const url = URL.createObjectURL(downloaded);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = file.name;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (error) {
+      console.error("Failed to download cloud file:", error);
+    } finally {
+      setDownloadingCloudFile(null);
     }
   };
 
@@ -286,7 +313,7 @@ export function OpenView({
         </div>
       </section>
 
-      {/* Cloud Documents (VOS deployment: mapped host document directory) */}
+      {/* Cloud Documents (VOS deployment: private app storage) */}
       {cloudState !== "off" && (
         <section>
           <div className="flex items-center justify-between mb-4">
@@ -346,33 +373,68 @@ export function OpenView({
                     message: "Click to open this cloud document",
                   })}
                 >
-                  <div className="flex items-center gap-4">
+                  <div className="flex min-w-0 items-center gap-4">
                     <DocumentIcon
                       type={file.name.split(".").pop()?.toLowerCase() || ""}
                       size="sm"
                     />
-                    <div className="text-left">
-                      <p className="font-semibold text-sm">{file.name}</p>
+                    <div className="min-w-0 text-left">
+                      <p className="truncate font-semibold text-sm">
+                        {file.name}
+                      </p>
                       <p className="text-[10px] text-text-secondary">
                         {formatFileSize(file.size)} ·{" "}
                         {formatRelativeTime(file.modified * 1000)}
                       </p>
                     </div>
                   </div>
-                  {loadingCloudFile === file.name ? (
-                    <Loader2 className="w-4 h-4 text-text-secondary animate-spin" />
-                  ) : (
+                  <div className="ml-4 flex shrink-0 items-center gap-2">
                     <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCloudFileClick(file);
+                      }}
+                      disabled={loadingCloudFile !== null}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-2 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
+                      title={t({
+                        id: "vosCloudOpenHint",
+                        message: "Click to open this cloud document",
+                      })}
+                    >
+                      {loadingCloudFile === file.name ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <FolderOpen className="h-4 w-4" />
+                      )}
+                      {t("Open")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => handleCloudFileDownload(e, file)}
+                      disabled={downloadingCloudFile !== null}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-sidebar-hover disabled:opacity-50"
+                      title={t("Downloads")}
+                    >
+                      {downloadingCloudFile === file.name ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Download className="h-4 w-4" />
+                      )}
+                      {t("Downloads")}
+                    </button>
+                    <button
+                      type="button"
                       onClick={(e) => handleCloudFileDelete(e, file.name)}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-border/50 rounded"
+                      className="rounded-lg p-2 text-text-secondary transition-colors hover:bg-red-500/10 hover:text-red-500"
                       title={t({
                         id: "vosCloudDeleteHint",
                         message: "Delete from cloud",
                       })}
                     >
-                      <X className="w-4 h-4 text-text-secondary" />
+                      <X className="h-4 w-4" />
                     </button>
-                  )}
+                  </div>
                 </div>
               ))}
             </div>

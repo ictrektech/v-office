@@ -76,10 +76,10 @@
   "E3qn6j": "免費 Office 範本 — Word、Excel 和 PowerPoint | ZIZIYI Office",
   "Lrib/G": "免費線上 Office 編輯器 — Word、Excel、PowerPoint | ZIZIYI",
   "vosCloudTitle": "云端文件",
-  "vosCloudUserHint": "已透過 VOS 登入 —— 正在使用你的專屬文件目錄",
+  "vosCloudUserHint": "已透過 VOS 登入 —— 正在使用應用程式私有儲存空間",
   "vosCloudLoading": "正在加载云端文件…",
   "vosCloudEmpty": "暂无云端文件",
-  "vosCloudEmptyHint": "在編輯器中保存的文件會寫入你的專屬文件目錄",
+  "vosCloudEmptyHint": "在編輯器中保存的文件會寫入應用程式私有儲存空間",
   "vosCloudOpenHint": "點擊開啟该云端文件",
   "vosCloudDeleteHint": "從雲端刪除",
   "vosAppVersionLabel": "VOS 應用版本"

@@ -1,13 +1,13 @@
-"""ZIZIYI Office mapped-directory document storage service.
+"""ZIZIYI Office private app-storage document service.
 
 Serves a minimal REST API for the VOS deployment of ZIZIYI Office:
 
-    GET    /healthz            liveness probe (no auth)
-    GET    /me                 current VOS username
-    GET    /files              list the current user's documents
-    GET    /files/{name}       download one document
-    PUT    /files/{name}       create or overwrite one document
-    DELETE /files/{name}       delete one document
+    GET    /healthz                       liveness probe (no auth)
+    GET    /api/v1/me                     current VOS username
+    GET    /api/v1/files                  list the current user's documents
+    GET    /api/v1/files/{name}           download one document
+    PUT    /api/v1/files/{name}           create or overwrite one document
+    DELETE /api/v1/files/{name}           delete one document
 
 Every request (except /healthz and /client-log) must carry a VOS OIDC Fastpath
 access token as `Authorization: Bearer <token>`. The token is verified against
@@ -137,6 +137,7 @@ def safe_target(username: str, name: str) -> Path:
     return target
 
 
+@app.get("/api/v1/health")
 @app.get("/healthz")
 async def healthz() -> JSONResponse:
     return JSONResponse({"status": "ok"})
@@ -151,13 +152,15 @@ async def client_log(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
-@app.get("/me")
+@app.get("/api/v1/me")
+@app.get("/me", include_in_schema=False)
 async def me(request: Request) -> JSONResponse:
     username = await current_username(request)
     return JSONResponse({"username": username})
 
 
-@app.get("/files")
+@app.get("/api/v1/files")
+@app.get("/files", include_in_schema=False)
 async def list_files(request: Request) -> JSONResponse:
     username = await current_username(request)
     directory = storage_dir(username)
@@ -176,7 +179,8 @@ async def list_files(request: Request) -> JSONResponse:
     return JSONResponse({"files": items})
 
 
-@app.get("/files/{name}")
+@app.get("/api/v1/files/{name}")
+@app.get("/files/{name}", include_in_schema=False)
 async def get_file(name: str, request: Request) -> FileResponse:
     username = await current_username(request)
     target = safe_target(username, name)
@@ -185,7 +189,8 @@ async def get_file(name: str, request: Request) -> FileResponse:
     return FileResponse(target, filename=name)
 
 
-@app.put("/files/{name}")
+@app.put("/api/v1/files/{name}")
+@app.put("/files/{name}", include_in_schema=False)
 async def put_file(name: str, request: Request) -> JSONResponse:
     username = await current_username(request)
     target = safe_target(username, name)
@@ -204,7 +209,8 @@ async def put_file(name: str, request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok", "name": name, "size": len(body)})
 
 
-@app.delete("/files/{name}")
+@app.delete("/api/v1/files/{name}")
+@app.delete("/files/{name}", include_in_schema=False)
 async def delete_file(name: str, request: Request) -> JSONResponse:
     username = await current_username(request)
     target = safe_target(username, name)

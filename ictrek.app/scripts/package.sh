@@ -21,7 +21,7 @@ PACKAGE_ROOT="${DIST_DIR}/package-root"
 VERSION_FILE="${ROOT_DIR}/VERSION"
 LOCK_DIR="${DIST_DIR}/.package.lock"
 
-# ZIZIYI Office is a static frontend plus a mapped-directory storage service:
+# ZIZIYI Office is a static frontend plus a private app-storage service:
 # two images, no base images and no GPU differences. Only the arch differs
 # between profiles.
 PROFILES=(
@@ -151,6 +151,14 @@ if bad_names & set(names):
 bad_compose = bad_names & compose_profiles
 if bad_compose:
     raise SystemExit(f"docker-compose.yml profiles must not use Feishu sheet names: {sorted(bad_compose)!r}")
+
+directories = ((manifest.get("storage") or {}).get("directories") or [])
+if not any(isinstance(item, dict) and item.get("path") == "documents" for item in directories):
+    raise SystemExit("manifest storage.directories must pre-create documents")
+if "${VOS_APP_STORAGE_PATH}/documents:/data" not in compose_text:
+    raise SystemExit("storage service must mount VOS_APP_STORAGE_PATH/documents at /data")
+if "ZIZIYI_OFFICE_DATA_PATH" in compose_text:
+    raise SystemExit("public document path config must not remain in docker-compose.yml")
 PYPROFILE
 
   "${PYTHON_BIN}" - "${STAGE_DIR}/configs.yml" <<'PYCONFIG' \
@@ -179,7 +187,8 @@ PYCONFIG
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     local profile
     for profile in amd arm; do
-      docker compose --env-file "${STAGE_DIR}/.env" -f "${STAGE_DIR}/docker-compose.yml" --profile "$profile" config >/dev/null \
+      VOS_APP_STORAGE_PATH="${VOS_APP_STORAGE_PATH:-/tmp/ziziyi-office-app-storage}" \
+        docker compose --env-file "${STAGE_DIR}/.env" -f "${STAGE_DIR}/docker-compose.yml" --profile "$profile" config >/dev/null \
         || die "docker compose config failed for profile ${profile}"
     done
   else

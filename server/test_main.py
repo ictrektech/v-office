@@ -61,6 +61,27 @@ class MountedDirectoryContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(alice_file.read_bytes(), b"alice")
         self.assertFalse(self.data_root.joinpath("bob", "private.docx").exists())
 
+    async def test_versioned_api_supports_the_full_file_lifecycle(self) -> None:
+        health = await self.client.get("/api/v1/health")
+        saved = await self.client.put(
+            "/api/v1/files/agent-report.docx", content=b"agent output"
+        )
+        listed = await self.client.get("/api/v1/files")
+        downloaded = await self.client.get("/api/v1/files/agent-report.docx")
+        deleted = await self.client.delete("/api/v1/files/agent-report.docx")
+
+        self.assertEqual(health.json(), {"status": "ok"})
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(
+            [item["name"] for item in listed.json()["files"]],
+            ["agent-report.docx"],
+        )
+        self.assertEqual(downloaded.content, b"agent output")
+        self.assertEqual(deleted.status_code, 200)
+        self.assertFalse(
+            self.data_root.joinpath("local", "agent-report.docx").exists()
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

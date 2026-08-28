@@ -8,6 +8,7 @@ import {
   Info,
   Settings,
   Puzzle,
+  Code2,
 } from "lucide-react";
 import { useExtracted } from "next-intl";
 import { useState, useEffect } from "react";
@@ -15,6 +16,7 @@ import { cn } from "@/lib/utils";
 import { getNewUrl } from "@/utils/editor/utils";
 import { isExtensionAvailable, EXTENSION_STORE_URL } from "@/utils/extension";
 import { getDocConfig } from "@/lib/document-types";
+import { useResolvedLanguage } from "@/store";
 import {
   Popover,
   PopoverContent,
@@ -27,6 +29,8 @@ interface SidebarProps {
 
 export function Sidebar({ pathname }: SidebarProps) {
   const t = useExtracted();
+  const language = useResolvedLanguage();
+  const isChinese = language.toLowerCase().startsWith("zh");
   const [hasExtension, setHasExtension] = useState(true); // default true to avoid flash
 
   useEffect(() => {
@@ -56,6 +60,12 @@ export function Sidebar({ pathname }: SidebarProps) {
   const sidebarItems = [
     { id: "open", label: t("Open"), icon: FolderOpen, href: "/" },
     { id: "template", label: t("Template"), icon: Layout, href: "/template" },
+    {
+      id: "api",
+      label: isChinese ? "API 接入指南" : "API Guide",
+      icon: Code2,
+      href: "/api-guide",
+    },
   ];
 
   return (

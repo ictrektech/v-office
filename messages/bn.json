@@ -76,10 +76,10 @@
   "E3qn6j": "বিনামূল্যে Office টেমপ্লেট — Word, Excel এবং PowerPoint | ZIZIYI Office",
   "Lrib/G": "বিনামূল্যে অনলাইন Office সম্পাদক — Word, Excel, PowerPoint | ZIZIYI",
   "vosCloudTitle": "Cloud documents",
-  "vosCloudUserHint": "Signed in via VOS — using the mapped document directory",
+  "vosCloudUserHint": "Signed in via VOS — using your private app storage",
   "vosCloudLoading": "Loading cloud documents...",
   "vosCloudEmpty": "No cloud documents yet",
-  "vosCloudEmptyHint": "Documents saved in the editor are stored directly in the mapped document directory",
+  "vosCloudEmptyHint": "Documents saved in the editor are stored in your private app storage",
   "vosCloudOpenHint": "Click to open this cloud document",
   "vosCloudDeleteHint": "Delete from cloud",
   "vosAppVersionLabel": "VOS App Version"
