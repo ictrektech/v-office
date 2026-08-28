@@ -3,8 +3,8 @@ name:
   zh-CN: ZIZIYI Office
   en: ZIZIYI Office
 description:
-  zh-CN: 本地优先的浏览器 Office 套件，在浏览器中查看和编辑 Word、Excel、PPT 文档；VOS 部署下直接访问服务端映射文档目录，自动完成 VOS OIDC 免登录。
-  en: Local-first browser office suite for viewing and editing Word, Excel and PowerPoint documents; on VOS, it directly accesses the mapped server document directory with automatic VOS OIDC sign-in.
+  zh-CN: 本地优先的浏览器 Office 套件，在浏览器中查看和编辑 Word、Excel、PPT 文档；VOS 部署下按用户隔离访问服务端映射文档目录，自动完成 VOS OIDC 免登录。
+  en: Local-first browser office suite for viewing and editing Word, Excel and PowerPoint documents; on VOS, it accesses an isolated per-user folder in the mapped server document directory with automatic VOS OIDC sign-in.
 version: __APP_VERSION__
 author: ictrek
 category: [office]

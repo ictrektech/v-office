@@ -76,10 +76,10 @@
   "E3qn6j": "免费 Office 模板 — Word、Excel 和 PowerPoint | ZIZIYI Office",
   "Lrib/G": "免费在线 Office 编辑器 — Word、Excel、PowerPoint | ZIZIYI",
   "vosCloudTitle": "云端文档",
-  "vosCloudUserHint": "已通过 VOS 登录 —— 正在使用映射文档目录",
+  "vosCloudUserHint": "已通过 VOS 登录 —— 正在使用你的专属文档目录",
   "vosCloudLoading": "正在加载云端文档…",
   "vosCloudEmpty": "暂无云端文档",
-  "vosCloudEmptyHint": "在编辑器中保存的文档会直接写入映射文档目录",
+  "vosCloudEmptyHint": "在编辑器中保存的文档会写入你的专属文档目录",
   "vosCloudOpenHint": "点击打开该云端文档",
   "vosCloudDeleteHint": "从云端删除",
   "vosAppVersionLabel": "VOS 应用版本"

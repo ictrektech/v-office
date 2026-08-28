@@ -48,6 +48,10 @@ export class EditorServer {
   private file: File | null = null;
   private fileType: string = "docx";
   private title: string = "";
+  private isNewDocument = false;
+  private requestFileName:
+    | ((suggestedName: string, extension: string) => Promise<string | null>)
+    | null = null;
   private fsMap: Map<string, Uint8Array> = new Map();
   private urlsMap: Map<string, string> = new Map();
 
@@ -73,6 +77,7 @@ export class EditorServer {
     this.id = randomId();
     this.file = file;
     this.title = title;
+    this.isNewDocument = false;
     const buffer = await file.arrayBuffer();
     this.loadPromise = this.loadDocument(buffer, this.fileType);
 
@@ -87,6 +92,7 @@ export class EditorServer {
     // TODO: should generate new id?
     this.id = this.id || randomId();
     this.title = "New Document";
+    this.isNewDocument = true;
     const documentType = getDocumentType(this.fileType);
 
     let binData: Uint8Array | null = null;
@@ -136,6 +142,7 @@ export class EditorServer {
     const documentType = getDocumentType(this.fileType);
     this.id = randomId();
     this.title = title;
+    this.isNewDocument = false;
     this.loadPromise = this.loadDocument(() => loader(url), this.fileType);
 
     return {
@@ -211,6 +218,14 @@ export class EditorServer {
       ...this.client,
       ...info,
     };
+  }
+
+  setFileNameRequester(
+    requester:
+      | ((suggestedName: string, extension: string) => Promise<string | null>)
+      | null,
+  ) {
+    this.requestFileName = requester;
   }
 
   handleConnect({ socket }: { socket: MockSocket }) {
@@ -397,9 +412,8 @@ export class EditorServer {
 
       console.log("downloadAs -> ", cmd, buffer);
 
-      const fileTo = "doc." + cmd.title.split(".").pop();
       let formatTo = cmd.outputformat;
-      if (!formatTo && fileTo.endsWith(".pdf")) {
+      if (!formatTo && this.fileType === "pdf") {
         formatTo = 513;
       }
 
@@ -414,11 +428,36 @@ export class EditorServer {
       };
 
       const download = async () => {
+        const vosMode = await isVOSMode();
+        let saveName = this.title || cmd.title || `document.${this.fileType}`;
+        if (vosMode && this.isNewDocument) {
+          if (!this.requestFileName) {
+            console.error("File-name prompt is unavailable");
+            return { status: "error" };
+          }
+          const requestedName = await this.requestFileName(
+            saveName.replace(/\.[a-z0-9]{2,5}$/i, ""),
+            this.fileType,
+          );
+          if (!requestedName) {
+            return { status: "error" };
+          }
+          saveName = requestedName;
+          if (!/\.[a-z0-9]{2,5}$/i.test(saveName)) {
+            saveName += `.${this.fileType}`;
+          }
+          this.title = saveName;
+          this.isNewDocument = false;
+        }
+
         const input = mergeBuffers(this.downloadParts);
         let fileFrom = "from.bin";
         if (cmd.format == "pdf") {
           fileFrom = "from.pdf";
         }
+
+        const fileTo =
+          "doc." + (getFileExt(cmd.title) || this.fileType || "docx");
 
         let { output } = await converter.convert({
           data: input.buffer,
@@ -439,18 +478,14 @@ export class EditorServer {
         // VOS deployment: persist directly into the mapped document directory.
         // A failed server save must remain an error instead of silently changing
         // the operation into a browser download.
-        if (await isVOSMode()) {
-          let name = cmd.title || "document." + (this.fileType || "docx");
-          if (!/\.[a-z0-9]{2,5}$/i.test(name)) {
-            name += "." + (this.fileType || "docx");
-          }
-          clientLog(`save-begin: ${name} (${output.byteLength} bytes)`);
+        if (vosMode) {
+          clientLog(`save-begin: ${saveName} (${output.byteLength} bytes)`);
           try {
-            await saveCloudFile(name, output);
-            clientLog(`save-ok: ${name}`);
+            await saveCloudFile(saveName, output);
+            clientLog(`save-ok: ${saveName}`);
             return { status: "ok" };
           } catch (error) {
-            clientLog(`save-failed: ${name} :: ${error}`);
+            clientLog(`save-failed: ${saveName} :: ${error}`);
             console.error("Failed to save document to VOS storage", error);
             return { status: "error" };
           }

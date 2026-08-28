@@ -1,6 +1,13 @@
 "use client";
 
-import { useLayoutEffect, useRef, useEffect, useState } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useEffect,
+  useState,
+} from "react";
+import { X } from "lucide-react";
 import { useAppStore, useResolvedLanguage, useHasHydrated } from "@/store";
 import {
   API_JS,
@@ -14,6 +21,14 @@ import { createXHRProxy } from "@/utils/editor/xhr";
 import { DocEditor } from "@/utils/editor/types";
 import { createExtensionLoader } from "@/utils/extension";
 import InstallExtensionDialog from "@/components/install-extension-dialog";
+import DocumentNameDialog from "@/components/document-name-dialog";
+import { sitePath } from "@/utils/site-path";
+
+interface NameRequest {
+  id: number;
+  suggestedName: string;
+  extension: string;
+}
 
 export default function Page() {
   const server = useAppStore((state) => state.server);
@@ -22,7 +37,57 @@ export default function Page() {
   const hasHydrated = useHasHydrated();
   const isDirty = useRef(false);
   const [showInstallHint, setShowInstallHint] = useState(false);
+  const [nameRequest, setNameRequest] = useState<NameRequest | null>(null);
   const tryDirectRef = useRef<(() => Promise<void>) | null>(null);
+  const nameResolverRef = useRef<((name: string | null) => void) | null>(null);
+  const nameRequestIdRef = useRef(0);
+
+  const requestFileName = useCallback(
+    (suggestedName: string, extension: string) => {
+      nameResolverRef.current?.(null);
+      return new Promise<string | null>((resolve) => {
+        nameResolverRef.current = resolve;
+        setNameRequest({
+          id: ++nameRequestIdRef.current,
+          suggestedName,
+          extension,
+        });
+      });
+    },
+    [],
+  );
+
+  const finishNameRequest = useCallback((name: string | null) => {
+    const resolve = nameResolverRef.current;
+    nameResolverRef.current = null;
+    setNameRequest(null);
+    resolve?.(name);
+  }, []);
+
+  const closeDocument = useCallback(() => {
+    const zh = language.toLowerCase().startsWith("zh");
+    if (
+      isDirty.current &&
+      !window.confirm(
+        zh
+          ? "文档有未保存的更改，确定要关闭吗？"
+          : "This document has unsaved changes. Close it?",
+      )
+    ) {
+      return;
+    }
+    isDirty.current = false;
+    window.location.href = sitePath("/");
+  }, [language]);
+
+  useEffect(() => {
+    server.setFileNameRequester(requestFileName);
+    return () => {
+      server.setFileNameRequester(null);
+      nameResolverRef.current?.(null);
+      nameResolverRef.current = null;
+    };
+  }, [requestFileName, server]);
 
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -260,11 +325,38 @@ export default function Page() {
 
   return (
     <>
+    {nameRequest && (
+      <DocumentNameDialog
+        key={nameRequest.id}
+        suggestedName={nameRequest.suggestedName}
+        extension={nameRequest.extension}
+        language={language}
+        onCancel={() => finishNameRequest(null)}
+        onSave={(name) => finishNameRequest(name)}
+      />
+    )}
     <InstallExtensionDialog
       open={showInstallHint}
       onClose={() => setShowInstallHint(false)}
       onTryDirect={tryDirectRef.current || undefined}
     />
+    <button
+      type="button"
+      onClick={closeDocument}
+      aria-label={
+        language.toLowerCase().startsWith("zh")
+          ? "关闭当前文档"
+          : "Close document"
+      }
+      title={
+        language.toLowerCase().startsWith("zh")
+          ? "关闭当前文档"
+          : "Close document"
+      }
+      className="fixed right-3 top-3 z-50 flex h-9 w-9 items-center justify-center rounded-lg bg-background/90 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted"
+    >
+      <X className="h-5 w-5" />
+    </button>
     <div>
       <div className="w-screen h-screen">
         <div id="placeholder">

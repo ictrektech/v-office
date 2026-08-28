@@ -298,7 +298,7 @@ export function OpenView({
                 className="inline-flex items-center gap-1.5 text-xs text-text-secondary"
                 title={t({
                   id: "vosCloudUserHint",
-                  message: "Signed in via VOS — using the mapped document directory",
+                  message: "Signed in via VOS — using your private document directory",
                 })}
               >
                 <Cloud className="w-3.5 h-3.5" />
@@ -329,7 +329,7 @@ export function OpenView({
                   {t({
                     id: "vosCloudEmptyHint",
                     message:
-                      "Documents saved in the editor are stored directly in the mapped document directory",
+                      "Documents saved in the editor are stored in your private document directory",
                   })}
                 </p>
               </div>

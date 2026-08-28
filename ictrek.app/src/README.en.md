@@ -6,7 +6,7 @@ Local-first browser office suite for viewing and editing Word (.docx), Excel (.x
 
 - Open and edit `.docx`, `.xlsx` and `.pptx` documents
 - VOS single sign-on: VOS OIDC Fastpath authentication runs automatically — no manual login, no redirect loops
-- Direct mapped-directory access: list, open and save files at the root of the mapped host document directory
+- Per-user mapped-directory access: each user can only list, open and save files under `<username>/`
 - Quickly create new Word / Excel / PowerPoint documents
 - Local files can still be opened and edited directly (local-first)
 
@@ -14,11 +14,11 @@ Local-first browser office suite for viewing and editing Word (.docx), Excel (.x
 
 After installation, open **ZIZIYI Office** from the VOS sidebar:
 
-1. The "Cloud documents" section on the home page lists files in the mapped document directory; click to open
+1. The "Cloud documents" section lists files in the current user's private directory; click to open
 2. Create a new document or open a local file to edit
-3. Saving in the editor (Ctrl+S) writes the document directly to the mapped directory; a failed save stays an error and never changes into a browser download
+3. The first save (Ctrl+S) of a new document asks for its file name; later saves overwrite that same file. Use the top-right button to close the document.
 
 ## Notes
 
-- The "Document Storage Path" install option selects the host directory; the app directly accesses supported documents at its root.
+- The "Document Storage Path" install option selects the host directory. The app creates an isolated subdirectory for each VOS username, and users cannot access one another's documents.
 - Standalone deployments outside VOS keep the original behavior: documents stay in the browser (IndexedDB / local file handles) with no server dependency.

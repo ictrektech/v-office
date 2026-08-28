@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
@@ -23,7 +24,8 @@ class MountedDirectoryContractTest(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self.client.aclose)
 
     async def test_lists_reads_and_overwrites_files_in_mounted_directory(self) -> None:
-        target = self.data_root / "mapped.docx"
+        target = self.data_root / "local" / "mapped.docx"
+        target.parent.mkdir()
         target.write_bytes(b"original")
 
         listed = await self.client.get("/files")
@@ -38,6 +40,26 @@ class MountedDirectoryContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(read_back.status_code, 200)
         self.assertEqual(read_back.content, b"edited")
         self.assertEqual(target.read_bytes(), b"edited")
+
+    async def test_users_cannot_access_each_others_files(self) -> None:
+        self.data_root.joinpath("alice").mkdir()
+        alice_file = self.data_root / "alice" / "private.docx"
+        alice_file.write_bytes(b"alice")
+
+        with patch.object(main, "current_username", AsyncMock(return_value="bob")):
+            listed = await self.client.get("/files")
+            read_other = await self.client.get("/files/private.docx")
+            overwrite_same_name = await self.client.put(
+                "/files/private.docx", content=b"bob"
+            )
+            delete_same_name = await self.client.delete("/files/private.docx")
+
+        self.assertEqual(listed.json()["files"], [])
+        self.assertEqual(read_other.status_code, 404)
+        self.assertEqual(overwrite_same_name.status_code, 200)
+        self.assertEqual(delete_same_name.status_code, 200)
+        self.assertEqual(alice_file.read_bytes(), b"alice")
+        self.assertFalse(self.data_root.joinpath("bob", "private.docx").exists())
 
 
 if __name__ == "__main__":
