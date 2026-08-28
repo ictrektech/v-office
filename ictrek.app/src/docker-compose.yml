@@ -14,6 +14,8 @@
 x-ziziyi-office-web-base: &ziziyi-office-web-base
   restart: unless-stopped
   pull_policy: always
+  environment:
+    VOS_APP_VERSION: "__APP_VERSION__"
   networks:
     vos_default:
       aliases:

@@ -81,5 +81,6 @@
   "vosCloudEmpty": "No cloud documents yet",
   "vosCloudEmptyHint": "Documents you save in the editor are stored in your private space on the server",
   "vosCloudOpenHint": "Click to open this cloud document",
-  "vosCloudDeleteHint": "Delete from cloud"
+  "vosCloudDeleteHint": "Delete from cloud",
+  "vosAppVersionLabel": "VOS App Version"
 }

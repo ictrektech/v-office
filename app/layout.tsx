@@ -101,6 +101,11 @@ export default async function RootLayout({
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
         />
+        {/* VOS deployments write this file from the container entrypoint
+            (VOS_APP_VERSION); it does not exist on standalone deployments. */}
+        <script
+          src={`${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/runtime-config.js`}
+        />
       </head>
       <body>
         <ProgressProvider>

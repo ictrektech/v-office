@@ -81,5 +81,6 @@
   "vosCloudEmpty": "暂无云端文件",
   "vosCloudEmptyHint": "在編輯器中保存的文件会自動存入伺服器你的私有空间",
   "vosCloudOpenHint": "點擊開啟该云端文件",
-  "vosCloudDeleteHint": "從雲端刪除"
+  "vosCloudDeleteHint": "從雲端刪除",
+  "vosAppVersionLabel": "VOS 應用版本"
 }

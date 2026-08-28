@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Github, Info, ShieldCheck, Heart } from "lucide-react";
 import { useExtracted } from "next-intl";
 import { usePageTitle } from "@/hooks/use-page-title";
@@ -7,11 +8,26 @@ import { useAppStore } from "@/store";
 import { isDarkTheme } from "@/utils/utils";
 import { Logo } from "../svg";
 
+declare global {
+  interface Window {
+    __VOS_APP_VERSION__?: string;
+  }
+}
+
+const ORIGIN_REPO_URL = "https://github.com/ictrektech/ziziyi-office";
+
 export function AboutView() {
   const t = useExtracted();
   usePageTitle(t("About — ZIZIYI Office"));
   const { theme } = useAppStore();
   const isDark = isDarkTheme(theme);
+  // Version injected by the VOS container entrypoint (runtime-config.js);
+  // empty on standalone deployments, where the row stays hidden.
+  const [vosVersion, setVosVersion] = useState("");
+
+  useEffect(() => {
+    setVosVersion(window.__VOS_APP_VERSION__?.trim() || "");
+  }, []);
 
   return (
     <div className="max-w-4xl mx-auto space-y-12 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -27,6 +43,15 @@ export function AboutView() {
             "A modern, high-performance web-based office suite designed for the future of productivity.",
           )}
         </p>
+
+        {vosVersion && (
+          <p className="text-sm text-text-secondary">
+            {t({ id: "vosAppVersionLabel", message: "VOS App Version" })}:{" "}
+            <span className="font-semibold text-text-primary">
+              {vosVersion}
+            </span>
+          </p>
+        )}
 
         <div className="pt-6 flex justify-center">
           <a
@@ -58,7 +83,7 @@ export function AboutView() {
             )}
           </p>
           <a
-            href="https://github.com/baotlake/office-website"
+            href={ORIGIN_REPO_URL}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center text-sm font-semibold text-primary hover:underline"
