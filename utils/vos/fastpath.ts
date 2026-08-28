@@ -54,6 +54,9 @@ interface VOSPlatform {
 declare global {
   interface Window {
     vos_platform?: VOSPlatform;
+    // Legacy VOS builds expose the session token without OIDC injection.
+    __VOS_APP_CONTEXT__?: { accessToken?: string; token?: string };
+    __VOS_ACCESS_TOKEN__?: string;
   }
 }
 
@@ -97,6 +100,11 @@ export function getVOSFastpathPlatform(): VOSPlatform | null {
 }
 
 let platformPromise: Promise<VOSPlatform | null> | null = null;
+// A failed probe is cached only briefly: OnlyOffice initialization blocks
+// the main thread for long stretches on the editor page, so a wall-clock
+// probe can expire while the injection callback is still queued.
+const NEGATIVE_PROBE_TTL_MS = 30_000;
+let negativeProbedAt = 0;
 
 export async function waitForVOSFastpathPlatform(
   timeoutMs = DETECT_TIMEOUT_MS,
@@ -104,26 +112,31 @@ export async function waitForVOSFastpathPlatform(
   const existing = getVOSFastpathPlatform();
   if (existing) return existing;
   if (typeof window === "undefined" || window.parent === window) return null;
-  // Probe once; the injection is a one-shot at iframe load, so a negative
-  // result stays negative and later calls resolve immediately.
-  if (!platformPromise) {
-    platformPromise = new Promise((resolve) => {
-      const start = Date.now();
-      const timer = window.setInterval(() => {
-        const platform = getVOSFastpathPlatform();
-        if (platform) {
-          window.clearInterval(timer);
-          resolve(platform);
-          return;
-        }
-        if (Date.now() - start >= timeoutMs) {
-          window.clearInterval(timer);
-          resolve(null);
-        }
-      }, 50);
-    });
+  if (Date.now() - negativeProbedAt < NEGATIVE_PROBE_TTL_MS) return null;
+  // Probe with a fresh interval each time; a positive result is cached for
+  // the session, a negative one only for NEGATIVE_PROBE_TTL_MS.
+  const probe = new Promise<VOSPlatform | null>((resolve) => {
+    const start = Date.now();
+    const timer = window.setInterval(() => {
+      const platform = getVOSFastpathPlatform();
+      if (platform) {
+        window.clearInterval(timer);
+        resolve(platform);
+        return;
+      }
+      if (Date.now() - start >= timeoutMs) {
+        window.clearInterval(timer);
+        resolve(null);
+      }
+    }, 50);
+  });
+  platformPromise = probe;
+  const result = await probe;
+  if (!result) {
+    negativeProbedAt = Date.now();
+    platformPromise = null;
   }
-  return platformPromise;
+  return result;
 }
 
 /**
@@ -177,20 +190,59 @@ function tokenUsable(set: VOSFastpathTokenSet): boolean {
 }
 
 /**
+ * Legacy VOS builds expose the current session token without OIDC:
+ * window.__VOS_APP_CONTEXT__.accessToken/.token, window.__VOS_ACCESS_TOKEN__,
+ * or a same-origin localStorage store whose key ends with "-core-access".
+ */
+export function legacyVOSAccessToken(): string | null {
+  if (typeof window === "undefined") return null;
+  const ctx = window.__VOS_APP_CONTEXT__;
+  const injected = [ctx?.accessToken, ctx?.token, window.__VOS_ACCESS_TOKEN__];
+  for (const candidate of injected) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  try {
+    for (let i = 0; i < window.localStorage.length; i += 1) {
+      const key = window.localStorage.key(i);
+      if (!key || !key.endsWith("-core-access")) continue;
+      const raw = window.localStorage.getItem(key);
+      if (!raw) continue;
+      const trimmed = raw.trim();
+      if (trimmed.startsWith("ey")) return trimmed;
+      const parsed = JSON.parse(trimmed);
+      const payload =
+        typeof parsed === "string"
+          ? parsed
+          : (parsed?.value ?? parsed?.data ?? parsed);
+      if (typeof payload === "string" && payload.startsWith("ey")) {
+        return payload;
+      }
+      const token = payload?.access_token ?? payload?.accessToken;
+      if (typeof token === "string" && token.trim()) return token.trim();
+    }
+  } catch {
+    // Tolerate unreadable/encrypted stores; fastpath remains the primary path.
+  }
+  return null;
+}
+
+/**
  * Returns a valid VOS access token, or null when not running under VOS (or
  * when the silent flow fails). Never navigates: the only flows are the
- * injected authorize()/token() calls plus refresh_token renewal.
+ * injected authorize()/token() calls plus refresh_token renewal, with the
+ * legacy injected-token sources as fallback for older portals.
  */
 export async function getVOSAccessToken(): Promise<string | null> {
   const platform = await waitForVOSFastpathPlatform();
   const oauth2 = platform?.api?.v1000?.oauth2;
-  if (!oauth2) return null;
 
   if (cachedToken && tokenUsable(cachedToken)) {
     return cachedToken.access_token;
   }
 
-  if (cachedToken?.refresh_token) {
+  if (oauth2 && cachedToken?.refresh_token) {
     try {
       const refreshed = await oauth2.token({
         grant_type: "refresh_token",
@@ -207,16 +259,20 @@ export async function getVOSAccessToken(): Promise<string | null> {
     }
   }
 
-  try {
-    const tokenSet = await authorizeAndExchange(oauth2);
-    if (!tokenSet) return null;
-    cachedToken = tokenSet;
-    cachedExpiresAt = Date.now() + (tokenSet.expires_in ?? 3600) * 1000;
-    return tokenSet.access_token;
-  } catch (error) {
-    console.error("VOS fastpath auth failed", error);
-    return null;
+  if (oauth2) {
+    try {
+      const tokenSet = await authorizeAndExchange(oauth2);
+      if (tokenSet) {
+        cachedToken = tokenSet;
+        cachedExpiresAt = Date.now() + (tokenSet.expires_in ?? 3600) * 1000;
+        return tokenSet.access_token;
+      }
+    } catch (error) {
+      console.error("VOS fastpath auth failed", error);
+    }
   }
+
+  return legacyVOSAccessToken();
 }
 
 export function clearVOSAuthCache(): void {
