@@ -66,19 +66,22 @@ VOS 网关把 `/app/com.ictrek.ziziyi-office/` 前缀剥离后转发到容器，
 
 ## 镜像构建与发布流程
 
-镜像构建需要在有 Docker 的构建机上执行，共两个镜像 × 两个架构。web 镜像用仓库根目录 `build.sh` 的参数并追加构建参数；storage 镜像用 `server/Dockerfile`：
+镜像构建需要在有 Docker 的构建机上执行（无 CUDA 参与，amd 用 x86_64 构建机如 tc232，arm 用 aarch64 构建机如 tc192）。仓库根目录 `build_image.sh` 按 WeKnora 构建规则完成：基础镜像拉取（带国内镜像源回退）→ 构建两个镜像 → 推送 SWR → 按飞书规则写回发布表（列不存在则追加列，日期行不存在则在 A4 插入新行）。
 
 ```bash
-# web 镜像（amd64 示例；arm64 在 ARM 构建机执行）
-docker buildx build --platform linux/amd64 --load --provenance=false --sbom=false \
-  --build-arg DS_VERSION=9.3.1 --build-arg HASH=1 \
-  --build-arg NEXT_PUBLIC_BASE_PATH=/app/com.ictrek.ziziyi-office \
-  --tag swr.cn-southwest-2.myhuaweicloud.com/ictrek/ziziyi-office:amd_<date> .
+# amd 构建机（tc232）
+FEISHU_CONFIG_FILE=/home/jhu/.feishu.components.json ./build_image.sh --target amd
 
-# storage 镜像
-docker buildx build --platform linux/amd64 --load --provenance=false --sbom=false \
-  --tag swr.cn-southwest-2.myhuaweicloud.com/ictrek/ziziyi-office-storage:amd_<date> .
+# arm 构建机（tc192）
+FEISHU_CONFIG_FILE=/home/jhu/.feishu.components.json ./build_image.sh --target arm
 ```
+
+产物：
+
+- `swr.cn-southwest-2.myhuaweicloud.com/ictrek/ziziyi-office:{amd|arm}_${YYYYMMDD}`（web，注入 `NEXT_PUBLIC_BASE_PATH=/app/com.ictrek.ziziyi-office`）
+- `swr.cn-southwest-2.myhuaweicloud.com/ictrek/ziziyi-office-storage:{amd|arm}_${YYYYMMDD}`（storage）
+
+可选开关：`--web-only` / `--storage-only` / `--no-push` / `--no-feishu` / `--feishu-only` / `--dry-run` / `--tag` / `--sheet`；`ZIZIYI_DS_VERSION`、`ZIZIYI_ASSET_HASH` 控制 OnlyOffice 资源版本目录。
 
 发布步骤：
 
