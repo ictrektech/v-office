@@ -1,0 +1,55 @@
+# =============================================================================
+# ZIZIYI Office — VOS 应用 Docker Compose
+# =============================================================================
+# 纯前端静态应用：Next.js 静态导出 + OnlyOffice 前端资源，由 Caddy 在容器内
+# 80 端口提供静态服务，无后端、无数据库、无持久化卷（文档保存在浏览器
+# IndexedDB 中）。镜像从华为云 SWR 拉取（pull 模式），标签由 package.sh 从
+# 飞书发布表读取并写入 .env。双 profile（amd / arm），安装时由 VOS 选择其一。
+# =============================================================================
+
+x-ziziyi-office-base: &ziziyi-office-base
+  restart: unless-stopped
+  pull_policy: always
+  networks:
+    vos_default:
+      aliases:
+        - ziziyi-office
+  labels:
+    - "traefik.enable=true"
+    - "traefik.docker.network=vos_default"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-top-open.rule=PathPrefix(`/app/com.ictrek.ziziyi-office`) && HeadersRegexp(`Sec-Fetch-Dest`, `document`)"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-top-open.priority=1000"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-top-open.service=${COMPOSE_PROJECT_NAME:-ziziyi-office}-web"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-top-open.middlewares=${COMPOSE_PROJECT_NAME:-ziziyi-office}-top-open-redirect"
+    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-ziziyi-office}-top-open-redirect.redirectregex.regex=^(https?://[^/]+)/app/com\\.ictrek\\.ziziyi-office/?(?:\\?.*)?$"
+    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-ziziyi-office}-top-open-redirect.redirectregex.replacement=$${1}/#/app/com.ictrek.ziziyi-office/com-ictrek-ziziyi-office/ziziyi-office"
+    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-ziziyi-office}-top-open-redirect.redirectregex.permanent=false"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-web.rule=PathPrefix(`/app/com.ictrek.ziziyi-office`)"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-web.service=${COMPOSE_PROJECT_NAME:-ziziyi-office}-web"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-web.middlewares=${COMPOSE_PROJECT_NAME:-ziziyi-office}-web-slash,${COMPOSE_PROJECT_NAME:-ziziyi-office}-web-strip"
+    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-ziziyi-office}-web-slash.redirectregex.regex=^(.*)/app/com\\.ictrek\\.ziziyi-office$"
+    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-ziziyi-office}-web-slash.redirectregex.replacement=$${1}/app/com.ictrek.ziziyi-office/"
+    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-ziziyi-office}-web-slash.redirectregex.permanent=true"
+    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-ziziyi-office}-web-strip.stripprefix.prefixes=/app/com.ictrek.ziziyi-office"
+    - "traefik.http.services.${COMPOSE_PROJECT_NAME:-ziziyi-office}-web.loadbalancer.server.port=80"
+  healthcheck:
+    test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/"]
+    interval: 30s
+    timeout: 10s
+    start_period: 15s
+    retries: 3
+
+services:
+  ziziyi-office-amd:
+    <<: *ziziyi-office-base
+    profiles: ["amd"]
+    image: ${ZIZIYI_OFFICE_AMD_IMAGE}
+
+  ziziyi-office-arm:
+    <<: *ziziyi-office-base
+    profiles: ["arm"]
+    image: ${ZIZIYI_OFFICE_ARM_IMAGE}
+
+networks:
+  vos_default:
+    external: true
