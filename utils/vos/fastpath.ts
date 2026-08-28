@@ -127,10 +127,13 @@ export async function waitForVOSFastpathPlatform(
 }
 
 /**
- * True when the app runs inside a VOS same-origin iframe with the Fastpath
- * API injected. Resolved once; standalone deployments stay in local mode.
+ * True when running as a VOS deployment. A VOS image is built with
+ * NEXT_PUBLIC_BASE_PATH baked in, so the build flag alone is a reliable
+ * signal even if the portal does not inject window.vos_platform (pre-1.1);
+ * root-path standalone builds keep the injection probe.
  */
 export async function isVOSMode(): Promise<boolean> {
+  if (process.env.NEXT_PUBLIC_BASE_PATH) return true;
   return (await waitForVOSFastpathPlatform()) !== null;
 }
 
