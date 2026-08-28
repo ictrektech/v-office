@@ -441,7 +441,13 @@ export class EditorServer {
         // back to a download so the output is never lost on upload failure.
         if (await isVOSMode()) {
           try {
-            await saveCloudFile(cmd.title || "document.docx", output);
+            // New documents carry a title without an extension; the storage
+            // service whitelist requires one, so derive it from the doc type.
+            let name = cmd.title || "document." + (this.fileType || "docx");
+            if (!/\.[a-z0-9]{2,5}$/i.test(name)) {
+              name += "." + (this.fileType || "docx");
+            }
+            await saveCloudFile(name, output);
             return { status: "ok" };
           } catch (error) {
             console.error("Failed to save document to VOS storage", error);

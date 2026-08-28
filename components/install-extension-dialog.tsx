@@ -4,6 +4,7 @@ import { useState } from "react";
 import Image from "next/image";
 import { useExtracted } from "next-intl";
 import { EXTENSION_STORE_URL } from "@/utils/extension";
+import { sitePath } from "@/utils/site-path";
 
 interface InstallExtensionDialogProps {
   open: boolean;
@@ -41,7 +42,7 @@ export default function InstallExtensionDialog({
       <div className="w-[400px] bg-popover rounded-2xl shadow-2xl ring-1 ring-foreground/10 overflow-hidden">
         <div className="px-8 pt-8 pb-4 flex flex-col items-center">
           <Image
-            src="/logo.svg"
+            src={sitePath("/logo.svg")}
             alt="ZIZIYI Office"
             width={56}
             height={56}
@@ -67,7 +68,7 @@ export default function InstallExtensionDialog({
           <button
             onClick={() => {
               onClose?.();
-              window.location.href = "/";
+              window.location.href = sitePath("/");
             }}
             className="w-full px-4 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
           >

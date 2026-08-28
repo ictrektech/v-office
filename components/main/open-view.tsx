@@ -14,6 +14,7 @@ import { getDocConfig } from "@/lib/document-types";
 import type { Template } from "@/utils/templates";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { useAppStore } from "@/store";
+import { sitePath } from "@/utils/site-path";
 import {
   getRecentFiles,
   openRecentFile,
@@ -92,7 +93,7 @@ export function OpenView({
     if (loadingTemplate) return;
     setLoadingTemplate(tpl.name);
     try {
-      const url = `/files/${encodeURIComponent(tpl.filename)}`;
+      const url = sitePath(`/files/${encodeURIComponent(tpl.filename)}`);
       await server.openUrl(url, { fileType: tpl.type, fileName: tpl.filename });
       router.push("/editor");
     } catch (err) {
@@ -255,7 +256,7 @@ export function OpenView({
                 <Image
                   width={480}
                   height={270}
-                  src={`/files/${encodeURIComponent(tpl.preview)}`}
+                  src={sitePath(`/files/${encodeURIComponent(tpl.preview)}`)}
                   alt={tpl.name}
                   className="w-full min-h-full h-auto object-cover object-top group-hover:scale-105 transition-transform duration-500 opacity-90 group-hover:opacity-100"
                 />
@@ -379,11 +380,13 @@ export function OpenView({
         </section>
       )}
 
-      {/* Recent Files */}
-      <section>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-bold">{t("Recent")}</h2>
-        </div>
+      {/* Recent Files — local file handles only; in VOS mode the cloud
+          documents section above is the document surface, so hide this. */}
+      {cloudState === "off" && (
+        <section>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-bold">{t("Recent")}</h2>
+          </div>
         {isLoading ? (
           <div className="bg-card/50 border border-border rounded-xl overflow-hidden shadow-sm p-12 flex items-center justify-center">
             <div className="text-center text-text-secondary">
@@ -430,7 +433,8 @@ export function OpenView({
             ))}
           </div>
         )}
-      </section>
+        </section>
+      )}
     </div>
   );
 }

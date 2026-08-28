@@ -4,6 +4,7 @@ import { getMessages } from "next-intl/server";
 import { I18nProvider } from "@/components/i18n-provider";
 import { ProgressProvider } from "@/components/progress-provider";
 import "./globals.css";
+import { sitePath } from "@/utils/site-path";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://office.ziziyi.com"),
@@ -31,10 +32,10 @@ export const metadata: Metadata = {
   ],
   icons: {
     icon: [
-      { url: "/favicon.ico", sizes: "any" },
-      { url: "/logo.svg", type: "image/svg+xml" },
+      { url: sitePath("/favicon.ico"), sizes: "any" },
+      { url: sitePath("/logo.svg"), type: "image/svg+xml" },
     ],
-    apple: "/logo.png",
+    apple: sitePath("/logo.png"),
   },
   openGraph: {
     siteName: "ZIZIYI Office",

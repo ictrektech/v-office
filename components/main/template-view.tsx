@@ -14,6 +14,7 @@ import { useExtracted } from "next-intl";
 import { cn } from "@/lib/utils";
 import { useRouter } from "next/navigation";
 import { useAppStore } from "@/store";
+import { sitePath } from "@/utils/site-path";
 
 import type { Template } from "@/utils/templates";
 import { usePageTitle } from "@/hooks/use-page-title";
@@ -38,7 +39,7 @@ export function TemplateView({
     if (loadingTemplate) return;
     setLoadingTemplate(tpl.name);
     try {
-      const url = `/files/${encodeURIComponent(tpl.filename)}`;
+      const url = sitePath(`/files/${encodeURIComponent(tpl.filename)}`);
       await server.openUrl(url, { fileType: tpl.type, fileName: tpl.filename });
       router.push("/editor");
     } catch (err) {
@@ -167,7 +168,7 @@ export function TemplateView({
                   <Image
                     width={480}
                     height={270}
-                    src={`/files/${encodeURIComponent(tpl.preview)}`}
+                    src={sitePath(`/files/${encodeURIComponent(tpl.preview)}`)}
                     alt={tpl.name}
                     className="w-full min-h-full h-auto object-cover object-top group-hover:scale-110 transition-transform duration-700 ease-out"
                   />
