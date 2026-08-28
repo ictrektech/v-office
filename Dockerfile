@@ -37,6 +37,11 @@ ARG HASH
 # deployments that strip the prefix before proxying; empty for root deploys.
 ARG NEXT_PUBLIC_BASE_PATH
 
+# npm registry override for mirror-rich environments (defaults to upstream).
+ARG NPM_REGISTRY=https://registry.npmjs.org
+ENV COREPACK_NPM_REGISTRY=${NPM_REGISTRY}
+ENV npm_config_registry=${NPM_REGISTRY}
+
 # Expose the versioned asset path to Next.js at build time. When a sub-path
 # prefix is set, both the site basePath and the OnlyOffice asset root move
 # under it so absolute browser-side URLs keep resolving after the gateway
@@ -52,8 +57,10 @@ RUN corepack enable && corepack prepare pnpm@latest --activate
 # Copy dependency manifests first for better layer caching.
 COPY package.json pnpm-lock.yaml ./
 
-# Install dependencies (frozen lockfile for reproducibility).
-RUN pnpm install --frozen-lockfile
+# Install dependencies (frozen lockfile for reproducibility). Build scripts
+# of native optional deps (sharp/@swc/parcel-watcher) are not needed for the
+# static export and pnpm >= 10 aborts on unapproved ones in CI.
+RUN pnpm install --frozen-lockfile --ignore-scripts
 
 # Copy the rest of the source code.
 COPY . .
