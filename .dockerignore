@@ -17,6 +17,8 @@ vercel.json
 wrangler.json
 wrangler.jsonc
 edgeone.json
+ictrek.app
+UPSTREAM
 
 # Docs & examples
 README.md

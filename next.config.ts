@@ -18,6 +18,10 @@ const withNextIntl = createNextIntlPlugin({
 const nextConfig: NextConfig = {
   /* config options here */
   output: "export",
+  // Sub-path deployments (e.g. the VOS gateway serving the site under
+  // /app/<app-id>/ after stripping that prefix) inject this at build time so
+  // /_next/* asset URLs resolve; unset it and behavior stays upstream-default.
+  basePath: process.env.NEXT_PUBLIC_BASE_PATH || "",
   images: {
     unoptimized: true,
   },
