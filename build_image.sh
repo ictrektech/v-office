@@ -11,11 +11,12 @@ set -euo pipefail
 # Pure CPU images (static frontend + small Python storage service) — no CUDA
 # involved; amd builds on x86_64 hosts, arm builds on aarch64 hosts.
 
-# SWR org that caches shared base images for this target architecture,
-# following the repo-wide ictrek (amd) / ictrek-arm (arm) convention. Release
-# builds reference bases from here so repeat builds never re-pull multi-GB
-# images from Docker Hub; the first build mirrors them automatically.
-REGISTRY_PREFIX=""
+# App images always live under the ictrek org with the architecture in the
+# tag (amd_YYYYMMDD / arm_YYYYMMDD) — the single-repo convention package.sh
+# uses when composing image references from the Feishu table. Shared base
+# images are cached per architecture: ictrek (amd) / ictrek-arm (arm).
+APP_REGISTRY_PREFIX="swr.cn-southwest-2.myhuaweicloud.com/ictrek"
+BASE_REGISTRY_PREFIX=""
 WEB_IMAGE=""
 STORAGE_IMAGE=""
 
@@ -142,7 +143,7 @@ pull_base_image() {
 # hosts — never pull them from Docker Hub again.
 cache_base_image() {
   local upstream="$1"
-  local swr_ref="${REGISTRY_PREFIX}/${2}"
+  local swr_ref="${BASE_REGISTRY_PREFIX}/${2}"
 
   if docker image inspect "${swr_ref}" >/dev/null 2>&1; then
     log "Base image cached locally: ${swr_ref}"
@@ -153,6 +154,7 @@ cache_base_image() {
     log "Base image pulled from SWR: ${swr_ref}"
     return 0
   fi
+  log "SWR pull failed for ${swr_ref} (see docker error above); falling back to upstream"
 
   if docker image inspect "${upstream}" >/dev/null 2>&1; then
     log "Base image found locally under upstream tag; mirroring to SWR: ${swr_ref}"
@@ -547,12 +549,12 @@ fi
 case "$TARGET" in
   amd)
     PROFILE_TAG="amd"
-    REGISTRY_PREFIX="swr.cn-southwest-2.myhuaweicloud.com/ictrek"
+    BASE_REGISTRY_PREFIX="swr.cn-southwest-2.myhuaweicloud.com/ictrek"
     TARGET_SHEET_SPEC="${TARGET_SHEET_SPEC:-AMD_with_cuda,AMD_with_mxn100}"
     ;;
   arm)
     PROFILE_TAG="arm"
-    REGISTRY_PREFIX="swr.cn-southwest-2.myhuaweicloud.com/ictrek-arm"
+    BASE_REGISTRY_PREFIX="swr.cn-southwest-2.myhuaweicloud.com/ictrek-arm"
     TARGET_SHEET_SPEC="${TARGET_SHEET_SPEC:-ARM_without_cuda,l4t,ARM_with_cuda,thor_spark,SOPHON_bm1688}"
     ;;
   *)
@@ -561,8 +563,8 @@ case "$TARGET" in
     ;;
 esac
 
-WEB_IMAGE="${REGISTRY_PREFIX}/ziziyi-office"
-STORAGE_IMAGE="${REGISTRY_PREFIX}/ziziyi-office-storage"
+WEB_IMAGE="${APP_REGISTRY_PREFIX}/ziziyi-office"
+STORAGE_IMAGE="${APP_REGISTRY_PREFIX}/ziziyi-office-storage"
 
 IFS=',' read -r -a TARGET_SHEET_TITLES <<< "$TARGET_SHEET_SPEC"
 if [[ "${#TARGET_SHEET_TITLES[@]}" -eq 0 ]]; then
@@ -627,9 +629,9 @@ if [[ "$SKIP_BUILD" != "1" && "$BUILD_WEB" == "1" ]]; then
   docker_build_image \
     --build-arg "DS_VERSION=${DS_VERSION}" \
     --build-arg "HASH=${HASH}" \
-    --build-arg "DS_IMAGE=${REGISTRY_PREFIX}/onlyoffice-documentserver:${DS_VERSION}" \
-    --build-arg "NODE_IMAGE=${REGISTRY_PREFIX}/node:22-alpine" \
-    --build-arg "CADDY_IMAGE=${REGISTRY_PREFIX}/caddy:2-alpine" \
+    --build-arg "DS_IMAGE=${BASE_REGISTRY_PREFIX}/onlyoffice-documentserver:${DS_VERSION}" \
+    --build-arg "NODE_IMAGE=${BASE_REGISTRY_PREFIX}/node:22-alpine" \
+    --build-arg "CADDY_IMAGE=${BASE_REGISTRY_PREFIX}/caddy:2-alpine" \
     --build-arg "NEXT_PUBLIC_BASE_PATH=${NEXT_PUBLIC_BASE_PATH}" \
     --build-arg "NPM_REGISTRY=${NPM_REGISTRY:-https://registry.npmmirror.com}" \
     -t "${WEB_IMAGE}:${TAG}" \
@@ -638,7 +640,7 @@ fi
 
 if [[ "$SKIP_BUILD" != "1" && "$BUILD_STORAGE" == "1" ]]; then
   docker_build_image \
-    --build-arg "BASE_IMAGE=${REGISTRY_PREFIX}/python:3.12-slim" \
+    --build-arg "BASE_IMAGE=${BASE_REGISTRY_PREFIX}/python:3.12-slim" \
     --build-arg "PIP_INDEX_URL=${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}" \
     -f server/Dockerfile \
     -t "${STORAGE_IMAGE}:${TAG}" \
