@@ -13,10 +13,19 @@ ARG DS_VERSION=9.3.1
 # the DocumentServer version itself.
 ARG HASH=1
 
+# Base image references. Defaults point at the upstream registries; release
+# builds override them with SWR mirrors (ictrek / ictrek-arm orgs) so repeat
+# builds never re-pull multi-GB images from Docker Hub. Slashes in upstream
+# multi-path names are flattened for SWR (onlyoffice/documentserver ->
+# onlyoffice-documentserver).
+ARG DS_IMAGE=onlyoffice/documentserver:${DS_VERSION}
+ARG NODE_IMAGE=node:22-alpine
+ARG CADDY_IMAGE=caddy:2-alpine
+
 # ============================================================
 # Stage 1: OnlyOffice DocumentServer assets source
 # ============================================================
-FROM onlyoffice/documentserver:${DS_VERSION} AS documentserver
+FROM ${DS_IMAGE} AS documentserver
 
 # AllFonts.js and themes.js are NOT present in the image — they are
 # generated at container startup by documentserver-generate-allfonts.sh.
@@ -27,7 +36,7 @@ RUN documentserver-generate-allfonts.sh false
 # ============================================================
 # Stage 2: Next.js website builder
 # ============================================================
-FROM node:22-alpine AS builder
+FROM ${NODE_IMAGE} AS builder
 
 # Re-declare args inside this stage to make them visible here.
 ARG DS_VERSION
@@ -71,7 +80,7 @@ RUN pnpm build
 # ============================================================
 # Stage 3: Caddy production server
 # ============================================================
-FROM caddy:2-alpine AS final
+FROM ${CADDY_IMAGE} AS final
 
 # Re-declare args inside this stage.
 ARG DS_VERSION
@@ -97,5 +106,11 @@ RUN cp "./v${DS_VERSION}-${HASH}/web-apps/apps/api/documents/api.js.tpl" \
 
 # Copy Caddyfile.
 COPY Caddyfile /etc/caddy/Caddyfile
+
+# Inject runtime configuration (VOS app version) before Caddy starts.
+COPY caddy-entrypoint.sh /usr/local/bin/caddy-entrypoint.sh
+RUN chmod +x /usr/local/bin/caddy-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/caddy-entrypoint.sh"]
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
 
 EXPOSE 80 443
