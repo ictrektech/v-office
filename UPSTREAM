@@ -1,0 +1,14 @@
+# 上游仓库记录
+#
+# origin   git@github.com:ictrektech/ziziyi-office.git   ictrek 维护 fork（本仓库）
+# 上游     git@github.com:baotlake/office-website.git    原始仓库，用于定期同步功能更新
+#
+# 同步上游功能更新：
+#
+#   git remote add upstream git@github.com:baotlake/office-website.git
+#   git fetch upstream
+#   git merge upstream/main
+#
+# 合并原则：保留 ictrek.app/（VOS 打包与文档）、UPSTREAM 文件和 next.config.ts 中
+# 的 basePath 适配；上游功能代码尽量合入，不做无关重构。
+# 流程细节可参考 apps/WeKnora/ictrek.app/docs/upstream-sync.md。
