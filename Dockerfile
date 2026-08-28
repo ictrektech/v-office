@@ -33,8 +33,16 @@ FROM node:22-alpine AS builder
 ARG DS_VERSION
 ARG HASH
 
-# Expose the versioned asset path to Next.js at build time.
-ENV NEXT_PUBLIC_APP_ROOT=/v${DS_VERSION}-${HASH}
+# Optional sub-path prefix (e.g. /app/com.ictrek.ziziyi-office) for gateway
+# deployments that strip the prefix before proxying; empty for root deploys.
+ARG NEXT_PUBLIC_BASE_PATH
+
+# Expose the versioned asset path to Next.js at build time. When a sub-path
+# prefix is set, both the site basePath and the OnlyOffice asset root move
+# under it so absolute browser-side URLs keep resolving after the gateway
+# strips the prefix.
+ENV NEXT_PUBLIC_BASE_PATH=${NEXT_PUBLIC_BASE_PATH}
+ENV NEXT_PUBLIC_APP_ROOT=${NEXT_PUBLIC_BASE_PATH}/v${DS_VERSION}-${HASH}
 
 WORKDIR /app
 

@@ -31,7 +31,8 @@
 上游同步原则见仓库根目录 `UPSTREAM` 文件。当前 fork 相对上游 `baotlake/office-website` 的差异：
 
 - `next.config.ts`：新增 `basePath: process.env.NEXT_PUBLIC_BASE_PATH || ""`，用于 VOS 子路径部署（见下节）；不设置该环境变量时行为与上游一致。
-- `ictrek.app/`、`UPSTREAM`：ictrek 新增，上游合并时保留。
+- `Dockerfile`：builder stage 新增 `ARG NEXT_PUBLIC_BASE_PATH` 透传，并把 `NEXT_PUBLIC_APP_ROOT` 改为 `${NEXT_PUBLIC_BASE_PATH}/v${DS_VERSION}-${HASH}`；不传该参数时与上游产物一致。
+- `ictrek.app/`、`UPSTREAM`、`.dockerignore`（排除 ictrek.app 与 UPSTREAM）：ictrek 新增，上游合并时保留。
 
 ## VOS 子路径适配
 
