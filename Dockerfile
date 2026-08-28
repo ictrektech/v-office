@@ -74,8 +74,9 @@ RUN pnpm install --frozen-lockfile --ignore-scripts
 # Copy the rest of the source code.
 COPY . .
 
-# Run the Next.js static export build.
-RUN pnpm build
+# Run the Next.js static export build, then verify that Worker-loaded assets
+# retain the configured deployment prefix in the emitted browser bundle.
+RUN pnpm build && node scripts/check-exported-worker-paths.mjs
 
 # ============================================================
 # Stage 3: Caddy production server

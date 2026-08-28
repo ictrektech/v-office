@@ -4,10 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build && pnpm verify:export-paths",
+    "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "verify:export-paths": "node scripts/check-exported-worker-paths.mjs",
     "svgr": "npx @svgr/cli --out-dir components/svg --typescript -- public/svg",
     "pages:dev": "npx wrangler pages dev ./out",
     "deploy": "pnpm build && npx wrangler pages deploy ./out --project-name=office-website",
