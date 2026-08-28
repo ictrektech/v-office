@@ -5,7 +5,7 @@ import { emptyDocx, emptyPdf, emptyPptx, emptyXlsx } from "./empty";
 import { getDocumentType, getFileExt } from "./utils";
 import { allPlugins, featuredPlugins, getPluginsData } from "./plugins";
 import { isVOSMode } from "@/utils/vos/fastpath";
-import { saveCloudFile } from "@/utils/vos/storage";
+import { saveCloudFile, clientLog } from "@/utils/vos/storage";
 
 function mergeBuffers(buffers: Uint8Array[]) {
   const totalLength = buffers.reduce((acc, buffer) => acc + buffer.length, 0);
@@ -439,23 +439,26 @@ export class EditorServer {
         // VOS deployment: persist into the signed-in user's private server
         // space instead of popping a browser download on every save. Fall
         // back to a download so the output is never lost on upload failure.
+        // Every step reports to the storage service log for remote triage.
         if (await isVOSMode()) {
+          let name = cmd.title || "document." + (this.fileType || "docx");
+          if (!/\.[a-z0-9]{2,5}$/i.test(name)) {
+            name += "." + (this.fileType || "docx");
+          }
+          clientLog(`save-begin: ${name} (${output.byteLength} bytes)`);
           try {
-            // New documents carry a title without an extension; the storage
-            // service whitelist requires one, so derive it from the doc type.
-            let name = cmd.title || "document." + (this.fileType || "docx");
-            if (!/\.[a-z0-9]{2,5}$/i.test(name)) {
-              name += "." + (this.fileType || "docx");
-            }
             await saveCloudFile(name, output);
+            clientLog(`save-ok: ${name}`);
             return { status: "ok" };
           } catch (error) {
+            clientLog(`save-failed: ${name} :: ${error}`);
             console.error("Failed to save document to VOS storage", error);
             browserDownload(output);
             return { status: "error" };
           }
         }
 
+        clientLog("save-skipped: not vos mode");
         browserDownload(output);
         return { status: "ok" };
       };

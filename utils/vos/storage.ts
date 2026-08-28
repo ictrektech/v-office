@@ -25,6 +25,21 @@ export class CloudUnavailableError extends Error {
   }
 }
 
+/** Fire-and-forget diagnostic line, surfaced in the storage service logs. */
+export async function clientLog(message: string): Promise<void> {
+  if (typeof window === "undefined") return;
+  try {
+    await fetch(`${API_BASE}/client-log`, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: message.slice(0, 2000),
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch {
+    // Logging must never throw.
+  }
+}
+
 async function request(
   path: string,
   init: RequestInit & { retry?: boolean } = {},
@@ -42,6 +57,9 @@ async function request(
       ...(init.headers || {}),
       Authorization: `Bearer ${token}`,
     },
+    // Never hang the editor UI: storage calls fail fast and the editor
+    // falls back to a local download instead.
+    signal: AbortSignal.timeout(30_000),
   });
   if (response.status === 401 && init.retry !== false) {
     // Token expired or revoked: drop the cache and retry once with a

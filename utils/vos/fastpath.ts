@@ -150,6 +150,15 @@ export async function isVOSMode(): Promise<boolean> {
   return (await waitForVOSFastpathPlatform()) !== null;
 }
 
+function withTimeout<T>(promise: Promise<T>, ms = 30_000): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`VOS auth timeout (${ms}ms)`)), ms),
+    ),
+  ]);
+}
+
 async function authorizeAndExchange(
   oauth2: VOSPlatformOAuth2,
 ): Promise<VOSFastpathTokenSet | null> {
@@ -158,7 +167,7 @@ async function authorizeAndExchange(
   const nonce = randomBase64url();
   const challenge = computeCodeChallenge(verifier);
 
-  const authResp = await oauth2.authorize({
+  const authResp = await withTimeout(oauth2.authorize({
     client_id: CLIENT_ID,
     response_type: "code",
     scope: SCOPE,
@@ -166,18 +175,18 @@ async function authorizeAndExchange(
     code_challenge: challenge,
     code_challenge_method: "S256",
     nonce,
-  });
+  }), 30_000);
 
   if (authResp.state !== state) {
     throw new Error("VOS OIDC state mismatch");
   }
 
-  const tokenResp = await oauth2.token({
+  const tokenResp = await withTimeout(oauth2.token({
     grant_type: "authorization_code",
     code: authResp.code,
     code_verifier: verifier,
     client_id: CLIENT_ID,
-  });
+  }), 30_000);
 
   return tokenResp?.access_token ? tokenResp : null;
 }
@@ -244,11 +253,11 @@ export async function getVOSAccessToken(): Promise<string | null> {
 
   if (oauth2 && cachedToken?.refresh_token) {
     try {
-      const refreshed = await oauth2.token({
+      const refreshed = await withTimeout(oauth2.token({
         grant_type: "refresh_token",
         refresh_token: cachedToken.refresh_token,
         client_id: CLIENT_ID,
-      });
+      }));
       if (refreshed?.access_token) {
         cachedToken = refreshed;
         cachedExpiresAt = Date.now() + (refreshed.expires_in ?? 3600) * 1000;

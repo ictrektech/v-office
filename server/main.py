@@ -135,6 +135,15 @@ async def healthz() -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
+@app.post("/client-log")
+async def client_log(request: Request) -> JSONResponse:
+    """Unauthenticated diagnostic sink: the frontend reports save-flow steps
+    and failures here so they are visible in the container logs."""
+    body = (await request.body())[:2048]
+    LOG.warning("client: %s", body.decode("utf-8", "replace"))
+    return JSONResponse({"status": "ok"})
+
+
 @app.get("/me")
 async def me(request: Request) -> JSONResponse:
     username = await current_username(request)
