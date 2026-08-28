@@ -104,7 +104,7 @@ COPY --from=documentserver /var/www/onlyoffice/documentserver/sdkjs-plugins ./v$
 RUN cp "./v${DS_VERSION}-${HASH}/web-apps/apps/api/documents/api.js.tpl" \
        "./v${DS_VERSION}-${HASH}/web-apps/apps/api/documents/api.js"
 
-# In the VOS build, save (download-as) uploads to the user's workspace, so
+# In the VOS build, save (download-as) uploads to the mapped document directory, so
 # relabel OnlyOffice's "Downloading document" progress toast accordingly.
 RUN find "./v${DS_VERSION}-${HASH}/web-apps" -type f \( -name "*.json" -o -name "*.js" \) -exec sed -i \
       -e 's/Downloading document/Saving document/g' \

@@ -57,8 +57,8 @@ async function request(
       ...(init.headers || {}),
       Authorization: `Bearer ${token}`,
     },
-    // Never hang the editor UI: storage calls fail fast and the editor
-    // falls back to a local download instead.
+    // Never hang the editor UI: storage calls fail fast and surface a save
+    // error instead of changing the operation into a browser download.
     signal: AbortSignal.timeout(30_000),
   });
   if (response.status === 401 && init.retry !== false) {

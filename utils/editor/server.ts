@@ -436,10 +436,9 @@ export class EditorServer {
           return { status: "error" };
         }
 
-        // VOS deployment: persist into the signed-in user's private server
-        // space instead of popping a browser download on every save. Fall
-        // back to a download so the output is never lost on upload failure.
-        // Every step reports to the storage service log for remote triage.
+        // VOS deployment: persist directly into the mapped document directory.
+        // A failed server save must remain an error instead of silently changing
+        // the operation into a browser download.
         if (await isVOSMode()) {
           let name = cmd.title || "document." + (this.fileType || "docx");
           if (!/\.[a-z0-9]{2,5}$/i.test(name)) {
@@ -453,7 +452,6 @@ export class EditorServer {
           } catch (error) {
             clientLog(`save-failed: ${name} :: ${error}`);
             console.error("Failed to save document to VOS storage", error);
-            browserDownload(output);
             return { status: "error" };
           }
         }

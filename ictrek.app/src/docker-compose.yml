@@ -4,8 +4,8 @@
 # 两个服务，安装时由 VOS 按 profile（amd / arm）各选其一：
 #   - ziziyi-office-web:     纯静态前端（Next.js 静态导出 + OnlyOffice 前端
 #                            资源），Caddy 在容器内 80 端口提供静态服务。
-#   - ziziyi-office-storage: 逐用户文档存储服务（FastAPI），校验 VOS OIDC
-#                            Fastpath 令牌后按用户名分目录读写
+#   - ziziyi-office-storage: 文档存储服务（FastAPI），校验 VOS OIDC
+#                            Fastpath 令牌后直接读写
 #                            ZIZIYI_OFFICE_DATA_PATH 映射的宿主机目录。
 # 镜像从华为云 SWR 拉取（pull 模式），标签由 package.sh 从飞书发布表读取
 # 并写入 .env。前端无状态；所有文档落在用户选择的映射路径下。

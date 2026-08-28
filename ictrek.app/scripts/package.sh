@@ -21,7 +21,7 @@ PACKAGE_ROOT="${DIST_DIR}/package-root"
 VERSION_FILE="${ROOT_DIR}/VERSION"
 LOCK_DIR="${DIST_DIR}/.package.lock"
 
-# ZIZIYI Office is a static frontend plus a small per-user storage service:
+# ZIZIYI Office is a static frontend plus a mapped-directory storage service:
 # two images, no base images and no GPU differences. Only the arch differs
 # between profiles.
 PROFILES=(

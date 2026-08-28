@@ -45,7 +45,7 @@ export function OpenView({
   const [isLoading, setIsLoading] = useState(true);
   const [loadingTemplate, setLoadingTemplate] = useState<string | null>(null);
 
-  // Cloud documents (VOS deployment only): per-user files on the server.
+  // Mapped documents (VOS deployment only): files from the shared host path.
   const [cloudUser, setCloudUser] = useState<string | null>(null);
   const [cloudFiles, setCloudFiles] = useState<CloudFile[]>([]);
   const [cloudState, setCloudState] = useState<"checking" | "off" | "ready">(
@@ -286,7 +286,7 @@ export function OpenView({
         </div>
       </section>
 
-      {/* Cloud Documents (VOS deployment: per-user server storage) */}
+      {/* Cloud Documents (VOS deployment: mapped host document directory) */}
       {cloudState !== "off" && (
         <section>
           <div className="flex items-center justify-between mb-4">
@@ -298,7 +298,7 @@ export function OpenView({
                 className="inline-flex items-center gap-1.5 text-xs text-text-secondary"
                 title={t({
                   id: "vosCloudUserHint",
-                  message: "Signed in via VOS — your files are private to your account",
+                  message: "Signed in via VOS — using the mapped document directory",
                 })}
               >
                 <Cloud className="w-3.5 h-3.5" />
@@ -329,7 +329,7 @@ export function OpenView({
                   {t({
                     id: "vosCloudEmptyHint",
                     message:
-                      "Documents you save in the editor are stored in your private space on the server",
+                      "Documents saved in the editor are stored directly in the mapped document directory",
                   })}
                 </p>
               </div>

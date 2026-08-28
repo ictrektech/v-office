@@ -1,8 +1,7 @@
 # =============================================================================
 # ZIZIYI Office — 声明式配置定义
 # =============================================================================
-# 前端为纯静态应用；文档由配套存储服务按 VOS 用户分目录保存在服务端映射
-# 路径下（每个用户相互隔离）。
+# 前端为纯静态应用；文档由配套存储服务直接读写服务端映射路径。
 # =============================================================================
 
 configs:
@@ -12,8 +11,8 @@ configs:
       zh-CN: 文档存储路径
       en: Document Storage Path
     description:
-      zh-CN: 宿主机上映射给文档存储服务的固定目录，每个 VOS 用户的文件自动保存在该目录下以用户名命名的独立子目录中，相互分离。
-      en: Fixed host directory mapped to the storage service. Each VOS user's files are kept in a separate per-username subdirectory below it.
+      zh-CN: 宿主机上映射给文档存储服务的固定目录，应用直接列出、打开和保存该目录根层级中的文档。
+      en: Fixed host directory mapped to the storage service. The app directly lists, opens and saves documents at the root of this directory.
     default: /data/vos_workspace/ziziyi-office
 
   - name: VOS_OIDC_USERINFO_URL

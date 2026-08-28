@@ -7,20 +7,20 @@
 ## 应用形态
 
 - `ziziyi-office-web`：纯前端静态服务。Next.js 静态导出 + OnlyOffice 前端资源（fonts / sdkjs / web-apps / sdkjs-plugins），Caddy 在容器内 80 端口提供静态服务，无状态。
-- `ziziyi-office-storage`：逐用户文档存储服务（FastAPI，见 fork 内 `server/`）。校验 VOS OIDC Fastpath 令牌后，按 VOS 用户名在 `ZIZIYI_OFFICE_DATA_PATH` 映射目录下建立独立子目录读写文档，用户之间相互分离。
+- `ziziyi-office-storage`：映射目录文档存储服务（FastAPI，见 fork 内 `server/`）。校验 VOS OIDC Fastpath 令牌后，直接读写 `ZIZIYI_OFFICE_DATA_PATH` 映射目录根层级中的文档。
 - `amd` / `arm` 两个 profile，安装时由 VOS 为每个 profile 各选择一对镜像（web + storage）。
 
-## VOS 认证与用户隔离
+## VOS 认证与映射目录访问
 
 - `manifest.yml` 声明 `oauth2.client`（public client + PKCE S256）。VOS 1.1+ 向同域 iframe 注入 `window.vos_platform.api.v1000.oauth2`，前端（`utils/vos/fastpath.ts`）静默完成 authorize/token 换取 access token 并缓存，过期用 refresh_token 静默续期——全程无 OAuth 跳转，不会反复弹授权。
 - 前端所有云端请求带 Bearer 令牌访问同域相对路径 `/api/com.ictrek.ziziyi-office`（Traefik 剥前缀转发到存储服务）；存储服务每次请求调 VOS `/v1000/oauth2/userinfo` 校验令牌（带短 TTL 用户名缓存），取不到有效用户即 401。
-- 用户名映射为 `DATA_ROOT/<username>/` 独立目录，文件名白名单校验（office 后缀 + 防路径穿越）。
-- 编辑器保存（Ctrl+S / downloadas）在 VOS 模式下自动 `PUT` 到当前用户私有空间，不再弹浏览器下载；上传失败回退浏览器下载，输出不丢。
+- 所有通过 VOS 认证的应用用户访问同一个 `DATA_ROOT/` 映射目录；文件名经过 Office 后缀白名单与路径穿越校验。
+- 编辑器保存（Ctrl+S / downloadas）在 VOS 模式下自动 `PUT` 到映射文档目录；上传失败时保持保存错误，不会改成浏览器下载。
 - 独立部署（非 VOS iframe）检测不到 `window.vos_platform`，云端入口自动隐藏，应用回到本地优先行为（IndexedDB / 本地文件句柄）。
 
 ## 安装配置
 
-- `ZIZIYI_OFFICE_DATA_PATH`（type: path，默认 `/data/vos_workspace/ziziyi-office`）：宿主机文档存储映射路径，用户可选；所有用户文件落在其下按用户名命名的子目录。
+- `ZIZIYI_OFFICE_DATA_PATH`（type: path，默认 `/data/vos_workspace/ziziyi-office`）：宿主机文档存储映射路径，用户可选；应用直接列出、打开和保存其根层级中的文件。
 - `VOS_OIDC_USERINFO_URL`（默认 `http://172.17.0.1:8105/v1000/oauth2/userinfo`）：存储服务校验令牌的 VOS 地址，默认适配 VOS backend host 网络 `SITE_PORT=8105` 部署，一般不改。
 
 ## 目录结构

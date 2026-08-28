@@ -1,4 +1,4 @@
-"""ZIZIYI Office per-user document storage service.
+"""ZIZIYI Office mapped-directory document storage service.
 
 Serves a minimal REST API for the VOS deployment of ZIZIYI Office:
 
@@ -9,10 +9,11 @@ Serves a minimal REST API for the VOS deployment of ZIZIYI Office:
     PUT    /files/{name}       create or overwrite one document
     DELETE /files/{name}       delete one document
 
-Every request (except /healthz) must carry a VOS OIDC Fastpath access token
-as `Authorization: Bearer <token>`. The token is verified against the VOS
-`/v1000/oauth2/userinfo` endpoint, and the verified username keys a separate
-subdirectory under DATA_ROOT — users never see each other's files.
+Every request (except /healthz and /client-log) must carry a VOS OIDC Fastpath
+access token as `Authorization: Bearer <token>`. The token is verified against
+the VOS `/v1000/oauth2/userinfo` endpoint. Authenticated users read and write
+the files directly under DATA_ROOT, which is the document directory selected
+when the VOS app is installed.
 """
 
 import asyncio
@@ -115,17 +116,17 @@ async def current_username(request: Request) -> str:
         return username
 
 
-def user_dir(username: str) -> Path:
-    directory = DATA_ROOT / username
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory
+def storage_dir() -> Path:
+    DATA_ROOT.mkdir(parents=True, exist_ok=True)
+    return DATA_ROOT
 
 
-def safe_target(username: str, name: str) -> Path:
+def safe_target(name: str) -> Path:
     if not FILENAME_RE.fullmatch(name):
         raise HTTPException(status_code=400, detail="unsupported file name")
-    target = (user_dir(username) / name).resolve()
-    if target.parent != user_dir(username).resolve():
+    directory = storage_dir().resolve()
+    target = (directory / name).resolve()
+    if target.parent != directory:
         raise HTTPException(status_code=400, detail="unsupported file name")
     return target
 
@@ -152,7 +153,8 @@ async def me(request: Request) -> JSONResponse:
 
 @app.get("/files")
 async def list_files(request: Request) -> JSONResponse:
-    directory = user_dir(await current_username(request))
+    await current_username(request)
+    directory = storage_dir()
     items = []
     for path in sorted(directory.iterdir()):
         if not path.is_file() or path.name.endswith(".tmp"):
@@ -170,8 +172,8 @@ async def list_files(request: Request) -> JSONResponse:
 
 @app.get("/files/{name}")
 async def get_file(name: str, request: Request) -> FileResponse:
-    username = await current_username(request)
-    target = safe_target(username, name)
+    await current_username(request)
+    target = safe_target(name)
     if not target.is_file():
         raise HTTPException(status_code=404, detail="file not found")
     return FileResponse(target, filename=name)
@@ -180,7 +182,7 @@ async def get_file(name: str, request: Request) -> FileResponse:
 @app.put("/files/{name}")
 async def put_file(name: str, request: Request) -> JSONResponse:
     username = await current_username(request)
-    target = safe_target(username, name)
+    target = safe_target(name)
     length = request.headers.get("Content-Length")
     if length and length.isdigit() and int(length) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file too large")
@@ -199,7 +201,7 @@ async def put_file(name: str, request: Request) -> JSONResponse:
 @app.delete("/files/{name}")
 async def delete_file(name: str, request: Request) -> JSONResponse:
     username = await current_username(request)
-    target = safe_target(username, name)
+    target = safe_target(name)
     if not target.is_file():
         raise HTTPException(status_code=404, detail="file not found")
     target.unlink()
