@@ -1,7 +1,27 @@
 # =============================================================================
 # ZIZIYI Office — 声明式配置定义
 # =============================================================================
-# 纯前端应用：文档保存在浏览器 IndexedDB，无服务端状态，无安装配置项。
+# 前端为纯静态应用；文档由配套存储服务按 VOS 用户分目录保存在服务端映射
+# 路径下（每个用户相互隔离）。
 # =============================================================================
 
-configs: []
+configs:
+  - name: ZIZIYI_OFFICE_DATA_PATH
+    type: path
+    title:
+      zh-CN: 文档存储路径
+      en: Document Storage Path
+    description:
+      zh-CN: 宿主机上映射给文档存储服务的固定目录，每个 VOS 用户的文件自动保存在该目录下以用户名命名的独立子目录中，相互分离。
+      en: Fixed host directory mapped to the storage service. Each VOS user's files are kept in a separate per-username subdirectory below it.
+    default: /data/vos_workspace/ziziyi-office
+
+  - name: VOS_OIDC_USERINFO_URL
+    type: string
+    title:
+      zh-CN: VOS OIDC UserInfo 地址
+      en: VOS OIDC UserInfo URL
+    description:
+      zh-CN: 存储服务校验 VOS OIDC Fastpath 令牌使用的 /v1000/oauth2/userinfo 地址，默认适配 VOS backend 使用 host 网络 `SITE_PORT=8105` 的部署，一般无需修改。
+      en: /v1000/oauth2/userinfo endpoint used by the storage service to verify VOS OIDC Fastpath tokens. The default matches a VOS backend on the host network with `SITE_PORT=8105`; usually no change is needed.
+    default: http://172.17.0.1:8105/v1000/oauth2/userinfo

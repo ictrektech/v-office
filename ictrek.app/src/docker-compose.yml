@@ -1,13 +1,17 @@
 # =============================================================================
 # ZIZIYI Office — VOS 应用 Docker Compose
 # =============================================================================
-# 纯前端静态应用：Next.js 静态导出 + OnlyOffice 前端资源，由 Caddy 在容器内
-# 80 端口提供静态服务，无后端、无数据库、无持久化卷（文档保存在浏览器
-# IndexedDB 中）。镜像从华为云 SWR 拉取（pull 模式），标签由 package.sh 从
-# 飞书发布表读取并写入 .env。双 profile（amd / arm），安装时由 VOS 选择其一。
+# 两个服务，安装时由 VOS 按 profile（amd / arm）各选其一：
+#   - ziziyi-office-web:     纯静态前端（Next.js 静态导出 + OnlyOffice 前端
+#                            资源），Caddy 在容器内 80 端口提供静态服务。
+#   - ziziyi-office-storage: 逐用户文档存储服务（FastAPI），校验 VOS OIDC
+#                            Fastpath 令牌后按用户名分目录读写
+#                            ZIZIYI_OFFICE_DATA_PATH 映射的宿主机目录。
+# 镜像从华为云 SWR 拉取（pull 模式），标签由 package.sh 从飞书发布表读取
+# 并写入 .env。前端无状态；所有文档落在用户选择的映射路径下。
 # =============================================================================
 
-x-ziziyi-office-base: &ziziyi-office-base
+x-ziziyi-office-web-base: &ziziyi-office-web-base
   restart: unless-stopped
   pull_policy: always
   networks:
@@ -39,16 +43,54 @@ x-ziziyi-office-base: &ziziyi-office-base
     start_period: 15s
     retries: 3
 
+x-ziziyi-office-storage-base: &ziziyi-office-storage-base
+  restart: unless-stopped
+  pull_policy: always
+  networks:
+    vos_default:
+      aliases:
+        - ziziyi-office-storage
+  environment:
+    DATA_ROOT: /data
+    VOS_APP_VERSION: "__APP_VERSION__"
+    VOS_OIDC_USERINFO_URL: ${VOS_OIDC_USERINFO_URL:-http://172.17.0.1:8105/v1000/oauth2/userinfo}
+  volumes:
+    - ${ZIZIYI_OFFICE_DATA_PATH:-/data/vos_workspace/ziziyi-office}:/data
+  labels:
+    - "traefik.enable=true"
+    - "traefik.docker.network=vos_default"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-api.rule=PathPrefix(`/api/com.ictrek.ziziyi-office`)"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-api.service=${COMPOSE_PROJECT_NAME:-ziziyi-office}-api"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-api.middlewares=${COMPOSE_PROJECT_NAME:-ziziyi-office}-api-strip"
+    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-ziziyi-office}-api-strip.stripprefix.prefixes=/api/com.ictrek.ziziyi-office"
+    - "traefik.http.services.${COMPOSE_PROJECT_NAME:-ziziyi-office}-api.loadbalancer.server.port=5000"
+  healthcheck:
+    test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/healthz', timeout=5)\""]
+    interval: 30s
+    timeout: 10s
+    start_period: 15s
+    retries: 3
+
 services:
-  ziziyi-office-amd:
-    <<: *ziziyi-office-base
+  ziziyi-office-web-amd:
+    <<: *ziziyi-office-web-base
     profiles: ["amd"]
     image: ${ZIZIYI_OFFICE_AMD_IMAGE}
 
-  ziziyi-office-arm:
-    <<: *ziziyi-office-base
+  ziziyi-office-storage-amd:
+    <<: *ziziyi-office-storage-base
+    profiles: ["amd"]
+    image: ${ZIZIYI_OFFICE_STORAGE_AMD_IMAGE}
+
+  ziziyi-office-web-arm:
+    <<: *ziziyi-office-web-base
     profiles: ["arm"]
     image: ${ZIZIYI_OFFICE_ARM_IMAGE}
+
+  ziziyi-office-storage-arm:
+    <<: *ziziyi-office-storage-base
+    profiles: ["arm"]
+    image: ${ZIZIYI_OFFICE_STORAGE_ARM_IMAGE}
 
 networks:
   vos_default:

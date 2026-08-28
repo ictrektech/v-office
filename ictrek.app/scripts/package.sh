@@ -21,14 +21,16 @@ PACKAGE_ROOT="${DIST_DIR}/package-root"
 VERSION_FILE="${ROOT_DIR}/VERSION"
 LOCK_DIR="${DIST_DIR}/.package.lock"
 
-# ZIZIYI Office is a pure static frontend: one image, one service, no base
-# images and no GPU differences. Only the arch differs between profiles.
+# ZIZIYI Office is a static frontend plus a small per-user storage service:
+# two images, no base images and no GPU differences. Only the arch differs
+# between profiles.
 PROFILES=(
   "amd|AMD_with_cuda"
   "arm|ARM_with_cuda"
 )
 COMPONENTS=(
   "ZIZIYI_OFFICE|ziziyi-office|swr.cn-southwest-2.myhuaweicloud.com/ictrek/ziziyi-office"
+  "ZIZIYI_OFFICE_STORAGE|ziziyi-office-storage|swr.cn-southwest-2.myhuaweicloud.com/ictrek/ziziyi-office-storage"
 )
 
 usage() {

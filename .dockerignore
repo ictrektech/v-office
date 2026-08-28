@@ -19,6 +19,8 @@ wrangler.jsonc
 edgeone.json
 ictrek.app
 UPSTREAM
+server
+.github
 
 # Docs & examples
 README.md
