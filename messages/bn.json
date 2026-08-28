@@ -74,5 +74,12 @@
   "rfMyMs": "সম্পর্কে — ZIZIYI Office",
   "uQDRsY": "পরে",
   "E3qn6j": "বিনামূল্যে Office টেমপ্লেট — Word, Excel এবং PowerPoint | ZIZIYI Office",
-  "Lrib/G": "বিনামূল্যে অনলাইন Office সম্পাদক — Word, Excel, PowerPoint | ZIZIYI"
+  "Lrib/G": "বিনামূল্যে অনলাইন Office সম্পাদক — Word, Excel, PowerPoint | ZIZIYI",
+  "vosCloudTitle": "Cloud documents",
+  "vosCloudUserHint": "Signed in via VOS — your files are private to your account",
+  "vosCloudLoading": "Loading cloud documents...",
+  "vosCloudEmpty": "No cloud documents yet",
+  "vosCloudEmptyHint": "Documents you save in the editor are stored in your private space on the server",
+  "vosCloudOpenHint": "Click to open this cloud document",
+  "vosCloudDeleteHint": "Delete from cloud"
 }

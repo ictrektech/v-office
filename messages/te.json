@@ -74,5 +74,12 @@
   "rfMyMs": "గురించి — ZIZIYI Office",
   "uQDRsY": "తర్వాత",
   "E3qn6j": "ఉచిత Office టెంప్లేట్‌లు — Word, Excel & PowerPoint | ZIZIYI Office",
-  "Lrib/G": "ఉచిత ఆన్‌లైన్ Office ఎడిటర్ — Word, Excel, PowerPoint | ZIZIYI"
+  "Lrib/G": "ఉచిత ఆన్‌లైన్ Office ఎడిటర్ — Word, Excel, PowerPoint | ZIZIYI",
+  "vosCloudTitle": "Cloud documents",
+  "vosCloudUserHint": "Signed in via VOS — your files are private to your account",
+  "vosCloudLoading": "Loading cloud documents...",
+  "vosCloudEmpty": "No cloud documents yet",
+  "vosCloudEmptyHint": "Documents you save in the editor are stored in your private space on the server",
+  "vosCloudOpenHint": "Click to open this cloud document",
+  "vosCloudDeleteHint": "Delete from cloud"
 }

@@ -74,5 +74,12 @@
   "rfMyMs": "Névjegy — ZIZIYI Office",
   "uQDRsY": "Később",
   "E3qn6j": "Ingyenes Office sablonok — Word, Excel és PowerPoint | ZIZIYI Office",
-  "Lrib/G": "Ingyenes online Office szerkesztő — Word, Excel, PowerPoint | ZIZIYI"
+  "Lrib/G": "Ingyenes online Office szerkesztő — Word, Excel, PowerPoint | ZIZIYI",
+  "vosCloudTitle": "Cloud documents",
+  "vosCloudUserHint": "Signed in via VOS — your files are private to your account",
+  "vosCloudLoading": "Loading cloud documents...",
+  "vosCloudEmpty": "No cloud documents yet",
+  "vosCloudEmptyHint": "Documents you save in the editor are stored in your private space on the server",
+  "vosCloudOpenHint": "Click to open this cloud document",
+  "vosCloudDeleteHint": "Delete from cloud"
 }

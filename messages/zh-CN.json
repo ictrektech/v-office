@@ -74,5 +74,12 @@
   "rfMyMs": "关于 — ZIZIYI Office",
   "uQDRsY": "以后再说",
   "E3qn6j": "免费 Office 模板 — Word、Excel 和 PowerPoint | ZIZIYI Office",
-  "Lrib/G": "免费在线 Office 编辑器 — Word、Excel、PowerPoint | ZIZIYI"
+  "Lrib/G": "免费在线 Office 编辑器 — Word、Excel、PowerPoint | ZIZIYI",
+  "vosCloudTitle": "云端文档",
+  "vosCloudUserHint": "已通过 VOS 登录 —— 文件仅对你自己的账号可见",
+  "vosCloudLoading": "正在加载云端文档…",
+  "vosCloudEmpty": "暂无云端文档",
+  "vosCloudEmptyHint": "在编辑器中保存的文档会自动存入服务端你的私有空间",
+  "vosCloudOpenHint": "点击打开该云端文档",
+  "vosCloudDeleteHint": "从云端删除"
 }

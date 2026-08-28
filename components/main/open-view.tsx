@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { FolderOpen, Clock, X, Loader2 } from "lucide-react";
+import { FolderOpen, Cloud, Clock, X, Loader2 } from "lucide-react";
 import { useExtracted } from "next-intl";
 import { cn } from "@/lib/utils";
 import { getNewUrl } from "@/utils/editor/utils";
@@ -20,8 +20,16 @@ import {
   removeRecentFile,
   addRecentFile,
   formatRelativeTime,
+  formatFileSize,
   type RecentFileRecord,
 } from "@/utils/recent-files";
+import {
+  listCloudFiles,
+  openCloudFile,
+  deleteCloudFile,
+  whoAmI,
+  type CloudFile,
+} from "@/utils/vos/storage";
 
 export function OpenView({
   recommendedTemplates,
@@ -36,12 +44,21 @@ export function OpenView({
   const [isLoading, setIsLoading] = useState(true);
   const [loadingTemplate, setLoadingTemplate] = useState<string | null>(null);
 
+  // Cloud documents (VOS deployment only): per-user files on the server.
+  const [cloudUser, setCloudUser] = useState<string | null>(null);
+  const [cloudFiles, setCloudFiles] = useState<CloudFile[]>([]);
+  const [cloudState, setCloudState] = useState<"checking" | "off" | "ready">(
+    "checking",
+  );
+  const [loadingCloudFile, setLoadingCloudFile] = useState<string | null>(null);
+
   const router = useRouter();
   const server = useAppStore((state) => state.server);
 
   // Load recent files on mount
   useEffect(() => {
     loadRecentFiles();
+    initCloudFiles();
   }, []);
 
   const loadRecentFiles = async () => {
@@ -92,6 +109,46 @@ export function OpenView({
       await loadRecentFiles();
     } catch (error) {
       console.error("Failed to remove recent file:", error);
+    }
+  };
+
+  const initCloudFiles = async () => {
+    try {
+      const user = await whoAmI();
+      if (!user) {
+        setCloudState("off");
+        return;
+      }
+      setCloudUser(user);
+      setCloudFiles(await listCloudFiles());
+      setCloudState("ready");
+    } catch (error) {
+      console.error("Cloud documents unavailable:", error);
+      setCloudState("off");
+    }
+  };
+
+  const handleCloudFileClick = async (file: CloudFile) => {
+    if (loadingCloudFile) return;
+    setLoadingCloudFile(file.name);
+    try {
+      const downloaded = await openCloudFile(file.name);
+      await server.open(downloaded);
+      router.push("/editor");
+    } catch (error) {
+      console.error("Failed to open cloud file:", error);
+    } finally {
+      setLoadingCloudFile(null);
+    }
+  };
+
+  const handleCloudFileDelete = async (e: React.MouseEvent, name: string) => {
+    e.stopPropagation();
+    try {
+      await deleteCloudFile(name);
+      setCloudFiles((files) => files.filter((f) => f.name !== name));
+    } catch (error) {
+      console.error("Failed to delete cloud file:", error);
     }
   };
 
@@ -227,6 +284,100 @@ export function OpenView({
           ))}
         </div>
       </section>
+
+      {/* Cloud Documents (VOS deployment: per-user server storage) */}
+      {cloudState !== "off" && (
+        <section>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-bold">
+              {t({ id: "vosCloudTitle", message: "Cloud documents" })}
+            </h2>
+            {cloudUser && (
+              <span
+                className="inline-flex items-center gap-1.5 text-xs text-text-secondary"
+                title={t({
+                  id: "vosCloudUserHint",
+                  message: "Signed in via VOS — your files are private to your account",
+                })}
+              >
+                <Cloud className="w-3.5 h-3.5" />
+                {cloudUser}
+              </span>
+            )}
+          </div>
+          {cloudState === "checking" ? (
+            <div className="bg-card/50 border border-border rounded-xl overflow-hidden shadow-sm p-12 flex items-center justify-center">
+              <div className="text-center text-text-secondary">
+                <Cloud className="w-8 h-8 mx-auto mb-2 animate-pulse" />
+                <p className="text-sm">
+                  {t({
+                    id: "vosCloudLoading",
+                    message: "Loading cloud documents...",
+                  })}
+                </p>
+              </div>
+            </div>
+          ) : cloudFiles.length === 0 ? (
+            <div className="bg-card/50 border border-border rounded-xl overflow-hidden shadow-sm p-12 flex items-center justify-center">
+              <div className="text-center text-text-secondary">
+                <Cloud className="w-12 h-12 mx-auto mb-3 opacity-40" />
+                <p className="text-sm font-medium mb-1">
+                  {t({ id: "vosCloudEmpty", message: "No cloud documents yet" })}
+                </p>
+                <p className="text-xs">
+                  {t({
+                    id: "vosCloudEmptyHint",
+                    message:
+                      "Documents you save in the editor are stored in your private space on the server",
+                  })}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="">
+              {cloudFiles.map((file) => (
+                <div
+                  key={file.name}
+                  onClick={() => handleCloudFileClick(file)}
+                  className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-sidebar-hover border-b border-border last:border-0 transition-colors group cursor-pointer"
+                  title={t({
+                    id: "vosCloudOpenHint",
+                    message: "Click to open this cloud document",
+                  })}
+                >
+                  <div className="flex items-center gap-4">
+                    <DocumentIcon
+                      type={file.name.split(".").pop()?.toLowerCase() || ""}
+                      size="sm"
+                    />
+                    <div className="text-left">
+                      <p className="font-semibold text-sm">{file.name}</p>
+                      <p className="text-[10px] text-text-secondary">
+                        {formatFileSize(file.size)} ·{" "}
+                        {formatRelativeTime(file.modified * 1000)}
+                      </p>
+                    </div>
+                  </div>
+                  {loadingCloudFile === file.name ? (
+                    <Loader2 className="w-4 h-4 text-text-secondary animate-spin" />
+                  ) : (
+                    <button
+                      onClick={(e) => handleCloudFileDelete(e, file.name)}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-border/50 rounded"
+                      title={t({
+                        id: "vosCloudDeleteHint",
+                        message: "Delete from cloud",
+                      })}
+                    >
+                      <X className="w-4 h-4 text-text-secondary" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Recent Files */}
       <section>

@@ -4,6 +4,8 @@ import { User, Participant, AscSaveTypes, ServerOptions } from "./types";
 import { emptyDocx, emptyPdf, emptyPptx, emptyXlsx } from "./empty";
 import { getDocumentType, getFileExt } from "./utils";
 import { allPlugins, featuredPlugins, getPluginsData } from "./plugins";
+import { isVOSMode } from "@/utils/vos/fastpath";
+import { saveCloudFile } from "@/utils/vos/storage";
 
 function mergeBuffers(buffers: Uint8Array[]) {
   const totalLength = buffers.reduce((acc, buffer) => acc + buffer.length, 0);
@@ -401,6 +403,16 @@ export class EditorServer {
         formatTo = 513;
       }
 
+      const browserDownload = (data: Uint8Array) => {
+        const blob = new Blob([new Uint8Array(data)]);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = cmd.title || "test.docx";
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+
       const download = async () => {
         const input = mergeBuffers(this.downloadParts);
         let fileFrom = "from.bin";
@@ -423,14 +435,22 @@ export class EditorServer {
           // TODO: error message
           return { status: "error" };
         }
-        const blob = new Blob([new Uint8Array(output)]);
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = cmd.title || "test.docx";
-        a.click();
-        URL.revokeObjectURL(url);
 
+        // VOS deployment: persist into the signed-in user's private server
+        // space instead of popping a browser download on every save. Fall
+        // back to a download so the output is never lost on upload failure.
+        if (await isVOSMode()) {
+          try {
+            await saveCloudFile(cmd.title || "document.docx", output);
+            return { status: "ok" };
+          } catch (error) {
+            console.error("Failed to save document to VOS storage", error);
+            browserDownload(output);
+            return { status: "error" };
+          }
+        }
+
+        browserDownload(output);
         return { status: "ok" };
       };
 

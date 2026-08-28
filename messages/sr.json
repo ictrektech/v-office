@@ -74,5 +74,12 @@
   "rfMyMs": "О програму — ZIZIYI Office",
   "uQDRsY": "Касније",
   "E3qn6j": "Бесплатни Office шаблони — Word, Excel и PowerPoint | ZIZIYI Office",
-  "Lrib/G": "Бесплатни онлајн Office уређивач — Word, Excel, PowerPoint | ZIZIYI"
+  "Lrib/G": "Бесплатни онлајн Office уређивач — Word, Excel, PowerPoint | ZIZIYI",
+  "vosCloudTitle": "Cloud documents",
+  "vosCloudUserHint": "Signed in via VOS — your files are private to your account",
+  "vosCloudLoading": "Loading cloud documents...",
+  "vosCloudEmpty": "No cloud documents yet",
+  "vosCloudEmptyHint": "Documents you save in the editor are stored in your private space on the server",
+  "vosCloudOpenHint": "Click to open this cloud document",
+  "vosCloudDeleteHint": "Delete from cloud"
 }

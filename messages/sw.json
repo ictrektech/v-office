@@ -74,5 +74,12 @@
   "rfMyMs": "Kuhusu — ZIZIYI Office",
   "uQDRsY": "Baadaye",
   "E3qn6j": "Violezo vya Office Bure — Word, Excel na PowerPoint | ZIZIYI Office",
-  "Lrib/G": "Kihariri cha Office Mtandaoni Bure — Word, Excel, PowerPoint | ZIZIYI"
+  "Lrib/G": "Kihariri cha Office Mtandaoni Bure — Word, Excel, PowerPoint | ZIZIYI",
+  "vosCloudTitle": "Cloud documents",
+  "vosCloudUserHint": "Signed in via VOS — your files are private to your account",
+  "vosCloudLoading": "Loading cloud documents...",
+  "vosCloudEmpty": "No cloud documents yet",
+  "vosCloudEmptyHint": "Documents you save in the editor are stored in your private space on the server",
+  "vosCloudOpenHint": "Click to open this cloud document",
+  "vosCloudDeleteHint": "Delete from cloud"
 }

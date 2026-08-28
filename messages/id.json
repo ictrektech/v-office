@@ -74,5 +74,12 @@
   "rfMyMs": "Tentang — ZIZIYI Office",
   "uQDRsY": "Nanti",
   "E3qn6j": "Template Office Gratis — Word, Excel & PowerPoint | ZIZIYI Office",
-  "Lrib/G": "Editor Office Online Gratis — Word, Excel, PowerPoint | ZIZIYI"
+  "Lrib/G": "Editor Office Online Gratis — Word, Excel, PowerPoint | ZIZIYI",
+  "vosCloudTitle": "Cloud documents",
+  "vosCloudUserHint": "Signed in via VOS — your files are private to your account",
+  "vosCloudLoading": "Loading cloud documents...",
+  "vosCloudEmpty": "No cloud documents yet",
+  "vosCloudEmptyHint": "Documents you save in the editor are stored in your private space on the server",
+  "vosCloudOpenHint": "Click to open this cloud document",
+  "vosCloudDeleteHint": "Delete from cloud"
 }
