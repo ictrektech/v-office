@@ -4,7 +4,15 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { FolderOpen, Cloud, Clock, Download, X, Loader2 } from "lucide-react";
+import {
+  FolderOpen,
+  Cloud,
+  Clock,
+  Download,
+  X,
+  Loader2,
+  Pencil,
+} from "lucide-react";
 import { useExtracted } from "next-intl";
 import { cn } from "@/lib/utils";
 import { getNewUrl } from "@/utils/editor/utils";
@@ -13,7 +21,8 @@ import { DocumentIcon } from "@/components/document-icon";
 import { getDocConfig } from "@/lib/document-types";
 import type { Template } from "@/utils/templates";
 import { usePageTitle } from "@/hooks/use-page-title";
-import { useAppStore } from "@/store";
+import { useAppStore, useResolvedLanguage } from "@/store";
+import DocumentNameDialog from "@/components/document-name-dialog";
 import { sitePath } from "@/utils/site-path";
 import {
   getRecentFiles,
@@ -28,6 +37,7 @@ import {
   listCloudFiles,
   openCloudFile,
   deleteCloudFile,
+  renameCloudFile,
   whoAmI,
   type CloudFile,
 } from "@/utils/vos/storage";
@@ -55,9 +65,13 @@ export function OpenView({
   const [downloadingCloudFile, setDownloadingCloudFile] = useState<
     string | null
   >(null);
+  const [renamingCloudFile, setRenamingCloudFile] = useState<CloudFile | null>(
+    null,
+  );
 
   const router = useRouter();
   const server = useAppStore((state) => state.server);
+  const language = useResolvedLanguage();
 
   // Load recent files on mount
   useEffect(() => {
@@ -180,6 +194,29 @@ export function OpenView({
     }
   };
 
+  const handleCloudFileRename = async (newName: string) => {
+    if (!renamingCloudFile) return;
+    const oldName = renamingCloudFile.name;
+    try {
+      await renameCloudFile(oldName, newName);
+    } catch (error) {
+      if (
+        language.toLowerCase().startsWith("zh") &&
+        error instanceof Error &&
+        error.message === "A file with that name already exists"
+      ) {
+        throw new Error("已存在同名文档");
+      }
+      throw error;
+    }
+    setCloudFiles((files) =>
+      files.map((file) =>
+        file.name === oldName ? { ...file, name: newName } : file,
+      ),
+    );
+    setRenamingCloudFile(null);
+  };
+
   const handleFileSelectWithHandle = async (
     file: File,
     handle?: FileSystemFileHandle,
@@ -216,7 +253,18 @@ export function OpenView({
   ];
 
   return (
-    <div className="space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <>
+      {renamingCloudFile && (
+        <DocumentNameDialog
+          suggestedName={renamingCloudFile.name.replace(/\.[^.]+$/, "")}
+          extension={renamingCloudFile.name.split(".").pop() || "docx"}
+          language={language}
+          mode="rename"
+          onCancel={() => setRenamingCloudFile(null)}
+          onSave={handleCloudFileRename}
+        />
+      )}
+      <div className="space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <section>
         {/* File Picker Card for uploading files */}
         <FilePickerCard onFileSelectWithHandle={handleFileSelectWithHandle} />
@@ -425,6 +473,24 @@ export function OpenView({
                     </button>
                     <button
                       type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setRenamingCloudFile(file);
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-sidebar-hover"
+                      title={
+                        language.toLowerCase().startsWith("zh")
+                          ? "重命名文档"
+                          : "Rename document"
+                      }
+                    >
+                      <Pencil className="h-4 w-4" />
+                      {language.toLowerCase().startsWith("zh")
+                        ? "重命名"
+                        : "Rename"}
+                    </button>
+                    <button
+                      type="button"
                       onClick={(e) => handleCloudFileDelete(e, file.name)}
                       className="rounded-lg p-2 text-text-secondary transition-colors hover:bg-red-500/10 hover:text-red-500"
                       title={t({
@@ -497,6 +563,7 @@ export function OpenView({
         )}
         </section>
       )}
-    </div>
+      </div>
+    </>
   );
 }

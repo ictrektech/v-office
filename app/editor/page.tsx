@@ -23,6 +23,9 @@ import { createExtensionLoader } from "@/utils/extension";
 import InstallExtensionDialog from "@/components/install-extension-dialog";
 import DocumentNameDialog from "@/components/document-name-dialog";
 import { sitePath } from "@/utils/site-path";
+import { isVOSMode } from "@/utils/vos/fastpath";
+
+const AUTO_SAVE_INTERVAL_MS = 10_000;
 
 interface NameRequest {
   id: number;
@@ -36,6 +39,9 @@ export default function Page() {
   const theme = useAppStore((state) => state.theme);
   const hasHydrated = useHasHydrated();
   const isDirty = useRef(false);
+  const editVersionRef = useRef(0);
+  const editorRef = useRef<DocEditor | null>(null);
+  const autoSaveInFlightRef = useRef(false);
   const [showInstallHint, setShowInstallHint] = useState(false);
   const [nameRequest, setNameRequest] = useState<NameRequest | null>(null);
   const tryDirectRef = useRef<(() => Promise<void>) | null>(null);
@@ -101,6 +107,41 @@ export default function Page() {
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    let interval: ReturnType<typeof setInterval> | null = null;
+
+    void isVOSMode().then((vosMode) => {
+      if (!active || !vosMode) return;
+      interval = setInterval(async () => {
+        const currentEditor = editorRef.current;
+        if (
+          !currentEditor ||
+          !isDirty.current ||
+          autoSaveInFlightRef.current
+        ) {
+          return;
+        }
+
+        const savingVersion = editVersionRef.current;
+        autoSaveInFlightRef.current = true;
+        try {
+          const saved = await server.requestSave(currentEditor);
+          if (saved && editVersionRef.current === savingVersion) {
+            isDirty.current = false;
+          }
+        } finally {
+          autoSaveInFlightRef.current = false;
+        }
+      }, AUTO_SAVE_INTERVAL_MS);
+    });
+
+    return () => {
+      active = false;
+      if (interval) clearInterval(interval);
+    };
+  }, [server]);
 
   useLayoutEffect(() => {
     if (!hasHydrated) return;
@@ -230,6 +271,7 @@ export default function Page() {
             console.log("Document state change", e);
             if (e.data) {
               isDirty.current = true;
+              editVersionRef.current += 1;
             }
           },
           onRequestOpen: (e: unknown) => {
@@ -270,6 +312,7 @@ export default function Page() {
       Object.assign(window, {
         editor,
       });
+      editorRef.current = editor;
       return editor;
     };
 
@@ -319,6 +362,7 @@ export default function Page() {
       MockSocket.off("connect", server.handleConnect);
       MockSocket.off("disconnect", server.handleDisconnect);
       editor?.destroyEditor?.();
+      editorRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasHydrated]);

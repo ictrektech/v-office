@@ -1,6 +1,12 @@
 import { converter } from "./x2t";
 import { MockSocket } from "./socket";
-import { User, Participant, AscSaveTypes, ServerOptions } from "./types";
+import {
+  User,
+  Participant,
+  AscSaveTypes,
+  ServerOptions,
+  DocEditor,
+} from "./types";
 import { emptyDocx, emptyPdf, emptyPptx, emptyXlsx } from "./empty";
 import { getDocumentType, getFileExt } from "./utils";
 import { allPlugins, featuredPlugins, getPluginsData } from "./plugins";
@@ -51,6 +57,12 @@ export class EditorServer {
   private isNewDocument = false;
   private requestFileName:
     | ((suggestedName: string, extension: string) => Promise<string | null>)
+    | null = null;
+  private saveRequest:
+    | {
+        resolve: (success: boolean) => void;
+        timer: ReturnType<typeof setTimeout>;
+      }
     | null = null;
   private fsMap: Map<string, Uint8Array> = new Map();
   private urlsMap: Map<string, string> = new Map();
@@ -226,6 +238,34 @@ export class EditorServer {
       | null,
   ) {
     this.requestFileName = requester;
+  }
+
+  requestSave(editor: DocEditor): Promise<boolean> {
+    if (this.saveRequest) {
+      return Promise.resolve(false);
+    }
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        if (!this.saveRequest) return;
+        this.saveRequest = null;
+        resolve(false);
+      }, 60_000);
+      this.saveRequest = { resolve, timer };
+      try {
+        editor.downloadAs({ extension: this.fileType, isDownload: false });
+      } catch (error) {
+        console.error("Failed to request document save", error);
+        this.finishSaveRequest(false);
+      }
+    });
+  }
+
+  private finishSaveRequest(success: boolean) {
+    if (!this.saveRequest) return;
+    const { resolve, timer } = this.saveRequest;
+    this.saveRequest = null;
+    clearTimeout(timer);
+    resolve(success);
   }
 
   handleConnect({ socket }: { socket: MockSocket }) {
@@ -512,12 +552,14 @@ export class EditorServer {
           this.downloadParts.push(new Uint8Array(buffer));
           result = await download();
           this.downloadParts = [];
+          this.finishSaveRequest(result.status === "ok");
           break;
         case AscSaveTypes.CompleteAll:
           this.downloadId = "_" + Math.round(Math.random() * 1000);
           this.downloadParts = [new Uint8Array(buffer)];
           result = await download();
           this.downloadParts = [];
+          this.finishSaveRequest(result.status === "ok");
           break;
       }
 

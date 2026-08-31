@@ -68,7 +68,14 @@ class MountedDirectoryContractTest(unittest.IsolatedAsyncioTestCase):
         )
         listed = await self.client.get("/api/v1/files")
         downloaded = await self.client.get("/api/v1/files/agent-report.docx")
-        deleted = await self.client.delete("/api/v1/files/agent-report.docx")
+        renamed = await self.client.patch(
+            "/api/v1/files/agent-report.docx",
+            json={"name": "renamed-report.docx"},
+        )
+        renamed_download = await self.client.get(
+            "/api/v1/files/renamed-report.docx"
+        )
+        deleted = await self.client.delete("/api/v1/files/renamed-report.docx")
 
         self.assertEqual(health.json(), {"status": "ok"})
         self.assertEqual(saved.status_code, 200)
@@ -77,9 +84,32 @@ class MountedDirectoryContractTest(unittest.IsolatedAsyncioTestCase):
             ["agent-report.docx"],
         )
         self.assertEqual(downloaded.content, b"agent output")
+        self.assertEqual(renamed.status_code, 200)
+        self.assertEqual(renamed.json()["name"], "renamed-report.docx")
+        self.assertEqual(renamed_download.content, b"agent output")
         self.assertEqual(deleted.status_code, 200)
         self.assertFalse(
             self.data_root.joinpath("local", "agent-report.docx").exists()
+        )
+
+    async def test_rename_rejects_existing_target_and_invalid_names(self) -> None:
+        directory = self.data_root / "local"
+        directory.mkdir()
+        directory.joinpath("source.docx").write_bytes(b"source")
+        directory.joinpath("existing.docx").write_bytes(b"existing")
+
+        conflict = await self.client.patch(
+            "/files/source.docx", json={"name": "existing.docx"}
+        )
+        invalid = await self.client.patch(
+            "/files/source.docx", json={"name": "../escape.docx"}
+        )
+
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(directory.joinpath("source.docx").read_bytes(), b"source")
+        self.assertEqual(
+            directory.joinpath("existing.docx").read_bytes(), b"existing"
         )
 
 

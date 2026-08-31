@@ -7,6 +7,7 @@ import {
   Code2,
   Download,
   FileUp,
+  Pencil,
   KeyRound,
   List,
   ShieldCheck,
@@ -69,6 +70,7 @@ export function ApiGuideView() {
       list: `curl -s "$BASE/api/v1/files" -H "$AUTH" | jq`,
       download: `curl -L "$BASE/api/v1/files/report.docx" \\\n  -H "$AUTH" -o report.docx`,
       upload: `curl -X PUT "$BASE/api/v1/files/report.docx" \\\n  -H "$AUTH" -H 'Content-Type: application/octet-stream' \\\n  --data-binary @report.docx`,
+      rename: `curl -X PATCH "$BASE/api/v1/files/report.docx" -H "$AUTH" -H 'Content-Type: application/json' -d '{"name":"quarterly-report.docx"}'`,
       remove: `curl -X DELETE "$BASE/api/v1/files/report.docx" -H "$AUTH"`,
       agent: `# 先确认 token 归属，再操作该账户的专属目录\ncurl -s "$BASE/api/v1/me" -H "$AUTH"\n\n# 文件名含空格或中文时必须 URL 编码\nNAME=$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))' 'Agent 报告.docx')\ncurl -X PUT "$BASE/api/v1/files/$NAME" -H "$AUTH" \\\n  -H 'Content-Type: application/octet-stream' --data-binary @report.docx`,
     }),
@@ -80,6 +82,7 @@ export function ApiGuideView() {
     ["GET", "/api/v1/files", zh ? "列出当前用户文档" : "List current user's files"],
     ["GET", "/api/v1/files/<name>", zh ? "打开或下载文档" : "Open or download a file"],
     ["PUT", "/api/v1/files/<name>", zh ? "新建或覆盖文档" : "Create or overwrite a file"],
+    ["PATCH", "/api/v1/files/<name>", zh ? "重命名文档" : "Rename a file"],
     ["DELETE", "/api/v1/files/<name>", zh ? "删除文档" : "Delete a file"],
     ["GET", "/api/v1/health", zh ? "健康检查（无需认证）" : "Health check (no auth)"],
   ];
@@ -167,6 +170,10 @@ export function ApiGuideView() {
         <div className="space-y-2">
           <h3 className="flex items-center gap-2 font-semibold"><FileUp className="h-4 w-4 text-primary" />{zh ? "上传或覆盖" : "Upload or overwrite"}</h3>
           <CopyCode>{examples.upload}</CopyCode>
+        </div>
+        <div className="space-y-2">
+          <h3 className="flex items-center gap-2 font-semibold"><Pencil className="h-4 w-4 text-primary" />{zh ? "重命名文档" : "Rename a file"}</h3>
+          <CopyCode>{examples.rename}</CopyCode>
         </div>
         <div className="space-y-2">
           <h3 className="flex items-center gap-2 font-semibold"><Trash2 className="h-4 w-4 text-red-500" />{zh ? "删除文档" : "Delete a file"}</h3>

@@ -125,3 +125,20 @@ export async function deleteCloudFile(name: string): Promise<void> {
     throw new Error(`Delete cloud file failed: ${response.status}`);
   }
 }
+
+export async function renameCloudFile(
+  name: string,
+  newName: string,
+): Promise<void> {
+  const response = await request(`/files/${encodeURIComponent(name)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: newName }),
+  });
+  if (!response.ok) {
+    if (response.status === 409) {
+      throw new Error("A file with that name already exists");
+    }
+    throw new Error(`Rename cloud file failed: ${response.status}`);
+  }
+}

@@ -7,6 +7,7 @@ Serves a minimal REST API for the VOS deployment of V-Office:
     GET    /api/v1/files                  list the current user's documents
     GET    /api/v1/files/{name}           download one document
     PUT    /api/v1/files/{name}           create or overwrite one document
+    PATCH  /api/v1/files/{name}           rename one document
     DELETE /api/v1/files/{name}           delete one document
 
 Every request (except /healthz and /client-log) must carry a VOS OIDC Fastpath
@@ -28,6 +29,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 LOG = logging.getLogger("v-office-storage")
 
@@ -57,7 +59,7 @@ app = FastAPI(title="v-office-storage", docs_url=None, redoc_url=None)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET", "PUT", "DELETE"],
+    allow_methods=["GET", "PUT", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -66,6 +68,10 @@ _username_lock = asyncio.Lock()
 # token -> (username, expiry); avoids a userinfo round-trip on every call
 # within a short window. Tokens themselves stay valid per VOS TTL.
 _username_cache: dict[str, tuple[str, float]] = {}
+
+
+class RenameFileRequest(BaseModel):
+    name: str
 
 
 def http_client() -> httpx.AsyncClient:
@@ -219,6 +225,25 @@ async def delete_file(name: str, request: Request) -> JSONResponse:
     target.unlink()
     LOG.info("deleted %s for %s", name, username)
     return JSONResponse({"status": "ok"})
+
+
+@app.patch("/api/v1/files/{name}")
+@app.patch("/files/{name}", include_in_schema=False)
+async def rename_file(
+    name: str, payload: RenameFileRequest, request: Request
+) -> JSONResponse:
+    username = await current_username(request)
+    source = safe_target(username, name)
+    target = safe_target(username, payload.name)
+    if not source.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    if source == target:
+        return JSONResponse({"status": "ok", "name": target.name})
+    if target.exists():
+        raise HTTPException(status_code=409, detail="file already exists")
+    os.replace(source, target)
+    LOG.info("renamed %s to %s for %s", name, target.name, username)
+    return JSONResponse({"status": "ok", "name": target.name})
 
 
 if __name__ == "__main__":

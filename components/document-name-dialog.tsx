@@ -7,7 +7,8 @@ interface DocumentNameDialogProps {
   extension: string;
   language: string;
   onCancel: () => void;
-  onSave: (name: string) => void;
+  onSave: (name: string) => void | Promise<void>;
+  mode?: "save" | "rename";
 }
 
 export default function DocumentNameDialog({
@@ -16,12 +17,14 @@ export default function DocumentNameDialog({
   language,
   onCancel,
   onSave,
+  mode = "save",
 }: DocumentNameDialogProps) {
   const zh = language.toLowerCase().startsWith("zh");
   const [name, setName] = useState(suggestedName);
   const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = (event: FormEvent) => {
+  const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     const trimmed = name
       .trim()
@@ -38,7 +41,20 @@ export default function DocumentNameDialog({
       );
       return;
     }
-    onSave(`${trimmed}.${extension}`);
+    setSubmitting(true);
+    try {
+      await onSave(`${trimmed}.${extension}`);
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : zh
+            ? "操作失败，请重试"
+            : "The operation failed. Try again.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -48,12 +64,22 @@ export default function DocumentNameDialog({
         className="w-[420px] rounded-2xl bg-popover p-7 shadow-2xl ring-1 ring-foreground/10"
       >
         <h2 className="text-lg font-semibold text-foreground">
-          {zh ? "保存文档" : "Save document"}
+          {mode === "rename"
+            ? zh
+              ? "重命名文档"
+              : "Rename document"
+            : zh
+              ? "保存文档"
+              : "Save document"}
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          {zh
-            ? "请输入文件名，文档将保存到你的专属目录。"
-            : "Enter a file name. The document will be saved in your private folder."}
+          {mode === "rename"
+            ? zh
+              ? "请输入新的文件名。文件类型保持不变。"
+              : "Enter a new file name. The file type will not change."
+            : zh
+              ? "请输入文件名，文档将保存到你的专属目录。"
+              : "Enter a file name. The document will be saved in your private folder."}
         </p>
         <div className="mt-5 flex items-center rounded-lg border border-input bg-background focus-within:ring-2 focus-within:ring-ring">
           <input
@@ -73,15 +99,27 @@ export default function DocumentNameDialog({
           <button
             type="button"
             onClick={onCancel}
+            disabled={submitting}
             className="rounded-lg px-4 py-2 text-sm text-muted-foreground hover:bg-muted"
           >
             {zh ? "取消" : "Cancel"}
           </button>
           <button
             type="submit"
+            disabled={submitting}
             className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
           >
-            {zh ? "保存" : "Save"}
+            {submitting
+              ? zh
+                ? "处理中…"
+                : "Working…"
+              : mode === "rename"
+                ? zh
+                  ? "重命名"
+                  : "Rename"
+                : zh
+                  ? "保存"
+                  : "Save"}
           </button>
         </div>
       </form>

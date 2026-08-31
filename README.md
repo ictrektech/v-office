@@ -47,7 +47,8 @@
 - **🛠️ Rich Tools**: Integrated with advanced editing capabilities.
 - **📦 Persistent Storage**: Uses IndexedDB for local file management.
 - **🌐 Cloud Integration**: Easy file selection via Uppy (Google Drive, Dropbox, OneDrive).
-- **🤖 VOS Agent API**: VOS deployments expose a versioned, per-user document API for listing, downloading, uploading, overwriting, and deleting files, with an in-app guide.
+- **💾 VOS Auto-save**: Edited documents save every 10 seconds; the first save asks for a name, and cloud documents can be opened, downloaded, renamed or deleted.
+- **🤖 VOS Agent API**: VOS deployments expose a versioned, per-user document API for listing, downloading, uploading, overwriting, renaming, and deleting files, with an in-app guide.
 
 ## 🛠️ Technology Stack
 
