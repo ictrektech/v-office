@@ -70,6 +70,12 @@ export class EditorServer {
   private downloadId: string = "";
   private downloadParts: Uint8Array[] = [];
 
+  /** 导出模式：非空表示当前 downloadAs 会话用于导出字节（上传知识库） */
+  private exportResolver:
+    | ((result: { fileName: string; data: Uint8Array } | null) => void)
+    | null = null;
+  private exportFileName: string | null = null;
+
   private options: ServerOptions = {};
 
   constructor(options: ServerOptions = {}) {
@@ -241,7 +247,7 @@ export class EditorServer {
   }
 
   requestSave(editor: DocEditor): Promise<boolean> {
-    if (this.saveRequest) {
+    if (this.saveRequest || this.exportResolver) {
       return Promise.resolve(false);
     }
     return new Promise<boolean>((resolve) => {
@@ -256,6 +262,39 @@ export class EditorServer {
       } catch (error) {
         console.error("Failed to request document save", error);
         this.finishSaveRequest(false);
+      }
+    });
+  }
+
+  /** 导出当前文档字节（供「上传到知识库」复用），失败或超时返回 null */
+  exportDocument(
+    editor: DocEditor,
+    fileName: string,
+  ): Promise<{ fileName: string; data: Uint8Array } | null> {
+    if (!editor || this.saveRequest || this.exportResolver) {
+      return Promise.resolve(null);
+    }
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.exportResolver = null;
+        this.exportFileName = null;
+        console.error("Document export timed out");
+        resolve(null);
+      }, 60_000);
+      this.exportResolver = (result) => {
+        clearTimeout(timer);
+        this.exportResolver = null;
+        this.exportFileName = null;
+        resolve(result);
+      };
+      const originalFileName = this.exportFileName;
+      this.exportFileName = fileName;
+      try {
+        editor.downloadAs({ extension: this.fileType, isDownload: false });
+      } catch (error) {
+        console.error("Failed to request document export", error);
+        this.exportFileName = originalFileName;
+        this.exportResolver(null);
       }
     });
   }
@@ -469,8 +508,11 @@ export class EditorServer {
 
       const download = async () => {
         const vosMode = await isVOSMode();
-        let saveName = this.title || cmd.title || `document.${this.fileType}`;
-        if (vosMode && this.isNewDocument) {
+        const exporting = this.exportResolver !== null && this.exportFileName !== null;
+        let saveName = exporting
+          ? this.exportFileName!
+          : this.title || cmd.title || `document.${this.fileType}`;
+        if (vosMode && this.isNewDocument && !exporting) {
           if (!this.requestFileName) {
             console.error("File-name prompt is unavailable");
             return { status: "error" };
@@ -513,6 +555,17 @@ export class EditorServer {
           console.error("Conversion failed");
           // TODO: error message
           return { status: "error" };
+        }
+
+        // 导出模式（上传知识库）：把转换后的字节回调出去，不落 VOS 存储、
+        // 不做浏览器下载。
+        if (exporting && this.exportResolver) {
+          const resolver = this.exportResolver;
+          this.exportResolver = null;
+          const exportedName = this.exportFileName || saveName;
+          this.exportFileName = null;
+          resolver({ fileName: exportedName, data: output });
+          return { status: "ok" };
         }
 
         // VOS deployment: persist directly into the private app storage.

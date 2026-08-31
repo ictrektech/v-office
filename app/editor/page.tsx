@@ -7,7 +7,8 @@ import {
   useEffect,
   useState,
 } from "react";
-import { X } from "lucide-react";
+import { X, Upload } from "lucide-react";
+import { Toaster } from "sonner";
 import { useAppStore, useResolvedLanguage, useHasHydrated } from "@/store";
 import {
   API_JS,
@@ -22,6 +23,8 @@ import { DocEditor } from "@/utils/editor/types";
 import { createExtensionLoader } from "@/utils/extension";
 import InstallExtensionDialog from "@/components/install-extension-dialog";
 import DocumentNameDialog from "@/components/document-name-dialog";
+import KnowledgeBaseUploadDialog from "@/components/knowledge-base-upload-dialog";
+import { uploadKnowledgeFile } from "@/utils/hybrag/client";
 import { sitePath } from "@/utils/site-path";
 import { isVOSMode } from "@/utils/vos/fastpath";
 
@@ -44,6 +47,8 @@ export default function Page() {
   const autoSaveInFlightRef = useRef(false);
   const [showInstallHint, setShowInstallHint] = useState(false);
   const [nameRequest, setNameRequest] = useState<NameRequest | null>(null);
+  const [showKbUpload, setShowKbUpload] = useState(false);
+  const [vosMode, setVosMode] = useState(false);
   const tryDirectRef = useRef<(() => Promise<void>) | null>(null);
   const nameResolverRef = useRef<((name: string | null) => void) | null>(null);
   const nameRequestIdRef = useRef(0);
@@ -86,6 +91,34 @@ export default function Page() {
     window.location.href = sitePath("/");
   }, [language]);
 
+  /** 上传到知识库：导出当前文档字节 → hybrag 上传 */
+  const handleKbUpload = useCallback(
+    async (fileName: string, knowledgeBaseId: string) => {
+      const currentEditor = editorRef.current;
+      if (!currentEditor) {
+        throw new Error(
+          language.toLowerCase().startsWith("zh")
+            ? "编辑器尚未就绪，请稍后重试"
+            : "The editor is not ready yet. Try again later.",
+        );
+      }
+      const exported = await server.exportDocument(currentEditor, fileName);
+      if (!exported) {
+        throw new Error(
+          language.toLowerCase().startsWith("zh")
+            ? "文件导出失败，请重试"
+            : "Failed to export the document. Try again.",
+        );
+      }
+      await uploadKnowledgeFile(
+        knowledgeBaseId,
+        exported.fileName,
+        exported.data,
+      );
+    },
+    [language, server],
+  );
+
   useEffect(() => {
     server.setFileNameRequester(requestFileName);
     return () => {
@@ -113,6 +146,7 @@ export default function Page() {
     let interval: ReturnType<typeof setInterval> | null = null;
 
     void isVOSMode().then((vosMode) => {
+      setVosMode(vosMode);
       if (!active || !vosMode) return;
       interval = setInterval(async () => {
         const currentEditor = editorRef.current;
@@ -384,6 +418,30 @@ export default function Page() {
       onClose={() => setShowInstallHint(false)}
       onTryDirect={tryDirectRef.current || undefined}
     />
+    {vosMode && (
+      <button
+        type="button"
+        onClick={() => setShowKbUpload(true)}
+        aria-label={
+          language.toLowerCase().startsWith("zh")
+            ? "上传到知识库"
+            : "Upload to knowledge base"
+        }
+        title={
+          language.toLowerCase().startsWith("zh")
+            ? "上传到知识库"
+            : "Upload to knowledge base"
+        }
+        className="fixed right-52 top-3 z-50 flex h-9 items-center gap-1.5 rounded-lg bg-background/90 px-3 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted"
+      >
+        <Upload className="h-4 w-4" />
+        <span className="text-sm font-medium">
+          {language.toLowerCase().startsWith("zh")
+            ? "上传到知识库"
+            : "Upload to KB"}
+        </span>
+      </button>
+    )}
     <button
       type="button"
       onClick={closeDocument}
@@ -411,6 +469,25 @@ export default function Page() {
         </div>
       </div>
     </div>
+    {showKbUpload && (
+      <KnowledgeBaseUploadDialog
+        language={language}
+        suggestedName={server.getDocument().title}
+        extension={server.getDocument().fileType}
+        onCancel={() => setShowKbUpload(false)}
+        onUpload={handleKbUpload}
+      />
+    )}
+    <Toaster
+      richColors
+      position="top-center"
+      theme={
+        typeof document !== "undefined" &&
+        document.documentElement.classList.contains("dark")
+          ? "dark"
+          : "light"
+      }
+    />
     </>
   );
 }
