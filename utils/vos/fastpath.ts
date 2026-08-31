@@ -60,7 +60,7 @@ declare global {
   }
 }
 
-const CLIENT_ID = "com.ictrek.ziziyi-office";
+const CLIENT_ID = "com.ictrek.v-office";
 const SCOPE = "openid profile email";
 const DETECT_TIMEOUT_MS = 3000;
 // Refresh slightly before the real expiry to avoid in-flight 401s.

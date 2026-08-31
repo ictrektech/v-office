@@ -5,7 +5,6 @@ import {
   Sheet,
   Presentation,
   FileType2,
-  Files,
 } from "lucide-react";
 import Image from "next/image";
 import { PropsWithChildren } from "react";
@@ -48,10 +47,16 @@ export function Header({ children }: PropsWithChildren<{ className?: string }>) 
     <header className="h-16 flex items-center justify-between px-4 z-20 w-full shrink-0">
       <div className="flex items-center gap-3">
         <div className="flex items-center justify-center">
-          <Image width={40} height={40} src={sitePath("/logo.svg")} className="w-10 h-10" alt="ZIZIYI Office logo" />
+          <Image
+            width={40}
+            height={40}
+            src={sitePath("/logo.svg")}
+            className="w-10 h-10"
+            alt="V-Office logo"
+          />
         </div>
         <h1 className="text-xl font-extrabold tracking-normal text-foreground leading-5">
-          {"ZIZIYI OFFICE"}
+          {"V-OFFICE"}
         </h1>
       </div>
 

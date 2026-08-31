@@ -17,7 +17,7 @@ import { usePageTitle } from "@/hooks/use-page-title";
 import { useResolvedLanguage } from "@/store";
 import { whoAmI } from "@/utils/vos/storage";
 
-const GATEWAY_PATH = "/api/com.ictrek.ziziyi-office";
+const GATEWAY_PATH = "/api/com.ictrek.v-office";
 
 function CopyCode({ children }: { children: string }) {
   const [copied, setCopied] = useState(false);
@@ -55,7 +55,7 @@ export function ApiGuideView() {
   const [username, setUsername] = useState<string | null>(null);
   const [origin, setOrigin] = useState("https://<vos-host>");
 
-  usePageTitle(zh ? "API 接入指南 — ZIZIYI Office" : "API Guide — ZIZIYI Office");
+  usePageTitle(zh ? "API 接入指南 — V-Office" : "API Guide — V-Office");
 
   useEffect(() => {
     setOrigin(window.location.origin);

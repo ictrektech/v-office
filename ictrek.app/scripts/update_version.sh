@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_LABEL="ziziyi-office"
-TAG_PREFIX="vos-ziziyi-office-v"
+APP_LABEL="v-office"
+TAG_PREFIX="vos-v-office-v"
 VERSION_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/VERSION"
 REPO_ROOT="$(git -C "$(dirname "$VERSION_FILE")" rev-parse --show-toplevel)"
 

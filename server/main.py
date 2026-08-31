@@ -1,6 +1,6 @@
-"""ZIZIYI Office private app-storage document service.
+"""V-Office private app-storage document service.
 
-Serves a minimal REST API for the VOS deployment of ZIZIYI Office:
+Serves a minimal REST API for the VOS deployment of V-Office:
 
     GET    /healthz                       liveness probe (no auth)
     GET    /api/v1/me                     current VOS username
@@ -29,14 +29,14 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-LOG = logging.getLogger("ziziyi-office-storage")
+LOG = logging.getLogger("v-office-storage")
 
 DATA_ROOT = Path(os.environ.get("DATA_ROOT", "/data"))
 VOS_OIDC_USERINFO_URL = os.environ.get(
     "VOS_OIDC_USERINFO_URL", "http://172.17.0.1:8105/v1000/oauth2/userinfo"
 )
 # Standalone/dev escape hatch only; keep disabled on VOS.
-AUTH_DISABLED = os.environ.get("ZIZIYI_OFFICE_AUTH_DISABLED", "").lower() in (
+AUTH_DISABLED = os.environ.get("V_OFFICE_AUTH_DISABLED", "").lower() in (
     "1",
     "true",
     "yes",
@@ -53,7 +53,7 @@ FILENAME_RE = re.compile(
 # VOS usernames are mapped onto directory names; everything unusual becomes "_".
 USERNAME_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 
-app = FastAPI(title="ziziyi-office-storage", docs_url=None, redoc_url=None)
+app = FastAPI(title="v-office-storage", docs_url=None, redoc_url=None)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

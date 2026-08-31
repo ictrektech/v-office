@@ -42,7 +42,7 @@ FROM ${NODE_IMAGE} AS builder
 ARG DS_VERSION
 ARG HASH
 
-# Optional sub-path prefix (e.g. /app/com.ictrek.ziziyi-office) for gateway
+# Optional sub-path prefix (e.g. /app/com.ictrek.v-office) for gateway
 # deployments that strip the prefix before proxying; empty for root deploys.
 ARG NEXT_PUBLIC_BASE_PATH
 

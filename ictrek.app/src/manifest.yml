@@ -1,7 +1,7 @@
-id: com.ictrek.ziziyi-office
+id: com.ictrek.v-office
 name:
-  zh-CN: ZIZIYI Office
-  en: ZIZIYI Office
+  zh-CN: V-Office
+  en: V-Office
 description:
   zh-CN: 本地优先的浏览器 Office 套件，在浏览器中查看和编辑 Word、Excel、PPT 文档；VOS 部署下使用应用私有存储并按用户隔离，自动完成 VOS OIDC 免登录。
   en: Local-first browser office suite for viewing and editing Word, Excel and PowerPoint documents; on VOS, it uses private app storage with per-user isolation and automatic VOS OIDC sign-in.
@@ -13,7 +13,7 @@ icon: icon.png
 
 frontend:
   enabled: true
-  basePath: /app/com.ictrek.ziziyi-office
+  basePath: /app/com.ictrek.v-office
 
 platform:
   version: ">=3.0.0"
@@ -32,7 +32,7 @@ storage:
 # and does not need to be reachable.
 oauth2:
   client:
-    id: com.ictrek.ziziyi-office
+    id: com.ictrek.v-office
     redirect_uris:
       - https://app.vos-platform.internal/callback
     grant_types:
@@ -55,14 +55,14 @@ profiles:
       zh-CN: AMD64
       en: AMD64
     description:
-      zh-CN: x86_64 / AMD64 平台，使用 AMD_with_cuda 发布表中的 ziziyi-office 镜像。
-      en: x86_64 / AMD64 platform, using the ziziyi-office images from the AMD_with_cuda sheet.
+      zh-CN: x86_64 / AMD64 平台，使用 AMD_with_cuda 发布表中的 v-office 镜像。
+      en: x86_64 / AMD64 platform, using the v-office images from the AMD_with_cuda sheet.
     conflicts: [arm]
   - name: arm
     title:
       zh-CN: ARM64
       en: ARM64
     description:
-      zh-CN: ARM64 平台，使用 ARM_with_cuda 发布表中的 ziziyi-office 镜像。
-      en: ARM64 platform, using the ziziyi-office images from the ARM_with_cuda sheet.
+      zh-CN: ARM64 平台，使用 ARM_with_cuda 发布表中的 v-office 镜像。
+      en: ARM64 platform, using the v-office images from the ARM_with_cuda sheet.
     conflicts: [amd]

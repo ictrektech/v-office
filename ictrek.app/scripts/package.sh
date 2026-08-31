@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="ziziyi-office"
-APP_ID="com.ictrek.ziziyi-office"
-ROUTER_GROUP_ID="com-ictrek-ziziyi-office"
-ROUTER_PAGE_ID="ziziyi-office"
-ROUTER_IFRAME_SRC="/app/com.ictrek.ziziyi-office/?v=__APP_VERSION__"
-ROUTER_HASH_PATH="#/app/com.ictrek.ziziyi-office/com-ictrek-ziziyi-office/ziziyi-office"
-FRONTEND_BASE_PATH="/app/com.ictrek.ziziyi-office"
+APP_NAME="v-office"
+APP_ID="com.ictrek.v-office"
+ROUTER_GROUP_ID="com-ictrek-v-office"
+ROUTER_PAGE_ID="v-office"
+ROUTER_IFRAME_SRC="/app/com.ictrek.v-office/?v=__APP_VERSION__"
+ROUTER_HASH_PATH="#/app/com.ictrek.v-office/com-ictrek-v-office/v-office"
+FRONTEND_BASE_PATH="/app/com.ictrek.v-office"
 SPREADSHEET_TOKEN="${FEISHU_SPREADSHEET_TOKEN:-Htotsn3oahO1zxt73YMcaB1zn8e}"
 FEISHU_CONFIG_FILE="${FEISHU_CONFIG_FILE:-${HOME}/.feishu.components.json}"
 FEISHU_FALLBACK_CONFIG_FILE="${FEISHU_FALLBACK_CONFIG_FILE:-${HOME}/.feishu.json}"
@@ -21,7 +21,7 @@ PACKAGE_ROOT="${DIST_DIR}/package-root"
 VERSION_FILE="${ROOT_DIR}/VERSION"
 LOCK_DIR="${DIST_DIR}/.package.lock"
 
-# ZIZIYI Office is a static frontend plus a private app-storage service:
+# V-Office is a static frontend plus a private app-storage service:
 # two images, no base images and no GPU differences. Only the arch differs
 # between profiles.
 PROFILES=(
@@ -29,8 +29,8 @@ PROFILES=(
   "arm|ARM_with_cuda"
 )
 COMPONENTS=(
-  "ZIZIYI_OFFICE|ziziyi-office|swr.cn-southwest-2.myhuaweicloud.com/ictrek/ziziyi-office"
-  "ZIZIYI_OFFICE_STORAGE|ziziyi-office-storage|swr.cn-southwest-2.myhuaweicloud.com/ictrek/ziziyi-office-storage"
+  "V_OFFICE|v-office|swr.cn-southwest-2.myhuaweicloud.com/ictrek/v-office"
+  "V_OFFICE_STORAGE|v-office-storage|swr.cn-southwest-2.myhuaweicloud.com/ictrek/v-office-storage"
 )
 
 usage() {
@@ -157,7 +157,7 @@ if not any(isinstance(item, dict) and item.get("path") == "documents" for item i
     raise SystemExit("manifest storage.directories must pre-create documents")
 if "${VOS_APP_STORAGE_PATH}/documents:/data" not in compose_text:
     raise SystemExit("storage service must mount VOS_APP_STORAGE_PATH/documents at /data")
-if "ZIZIYI_OFFICE_DATA_PATH" in compose_text:
+if "V_OFFICE_DATA_PATH" in compose_text:
     raise SystemExit("public document path config must not remain in docker-compose.yml")
 PYPROFILE
 
@@ -187,7 +187,7 @@ PYCONFIG
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     local profile
     for profile in amd arm; do
-      VOS_APP_STORAGE_PATH="${VOS_APP_STORAGE_PATH:-/tmp/ziziyi-office-app-storage}" \
+      VOS_APP_STORAGE_PATH="${VOS_APP_STORAGE_PATH:-/tmp/v-office-app-storage}" \
         docker compose --env-file "${STAGE_DIR}/.env" -f "${STAGE_DIR}/docker-compose.yml" --profile "$profile" config >/dev/null \
         || die "docker compose config failed for profile ${profile}"
     done

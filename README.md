@@ -2,7 +2,7 @@
   <img src="./public/logo.svg" width="120" height="120" alt="Office App Logo">
 </p>
 
-<h1 align="center">ZIZIYI Office</h1>
+<h1 align="center">V-Office</h1>
 
 <p align="center">
   <strong>A modern, local-first Office document preview and editing solution.</strong>
@@ -32,7 +32,7 @@
 
 ## 🚀 Overview
 
-**ZIZIYI Office** is a powerful web application designed to provide a seamless experience for viewing and editing Office documents (Word, Excel, PowerPoint) directly in your browser. Built with a "local-first" philosophy, it ensures your documents remain private and secure while providing a desktop-class editing experience.
+**V-Office** is a powerful web application designed to provide a seamless experience for viewing and editing Office documents (Word, Excel, PowerPoint) directly in your browser. Built with a "local-first" philosophy, it ensures your documents remain private and secure while providing a desktop-class editing experience.
 
 ### 🌍 Access Options
 

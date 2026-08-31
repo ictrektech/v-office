@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build and push the ictrek ZIZIYI Office service images.
+# Build and push the ictrek V-Office service images.
 #
 # The Feishu release table uses one service column per image. The same release
 # tag is written to each service that is built:
-#   swr.cn-southwest-2.myhuaweicloud.com/ictrek/ziziyi-office:<tag>
-#   swr.cn-southwest-2.myhuaweicloud.com/ictrek/ziziyi-office-storage:<tag>
+#   swr.cn-southwest-2.myhuaweicloud.com/ictrek/v-office:<tag>
+#   swr.cn-southwest-2.myhuaweicloud.com/ictrek/v-office-storage:<tag>
 #
 # Pure CPU images (static frontend + small Python storage service) — no CUDA
 # involved; amd builds on x86_64 hosts, arm builds on aarch64 hosts.
@@ -22,19 +22,19 @@ STORAGE_IMAGE=""
 
 FEISHU_CONFIG_FILE="${FEISHU_CONFIG_FILE:-${HOME}/.feishu.json}"
 FEISHU_SPREADSHEET_TOKEN="Htotsn3oahO1zxt73YMcaB1zn8e"
-TARGET="${ZIZIYI_BUILD_TARGET:-}"
+TARGET="${V_OFFICE_BUILD_TARGET:-}"
 TARGET_SHEET_SPEC="${FEISHU_SHEET_TITLE:-}"
 PROFILE_TAG=""
 TARGET_SHEET_TITLES=()
 
 # OnlyOffice DocumentServer assets version baked into the web image; keep in
 # sync with the upstream Dockerfile default.
-DS_VERSION="${ZIZIYI_DS_VERSION:-9.3.1}"
+DS_VERSION="${V_OFFICE_DS_VERSION:-9.3.1}"
 # Cache-bust revision for the versioned OnlyOffice asset directory.
-HASH="${ZIZIYI_ASSET_HASH:-1}"
-# VOS serves the app under /app/com.ictrek.ziziyi-office after stripping the
+HASH="${V_OFFICE_ASSET_HASH:-1}"
+# VOS serves the app under /app/com.ictrek.v-office after stripping the
 # prefix; root-path deployments build with NEXT_PUBLIC_BASE_PATH="".
-NEXT_PUBLIC_BASE_PATH="${NEXT_PUBLIC_BASE_PATH:-/app/com.ictrek.ziziyi-office}"
+NEXT_PUBLIC_BASE_PATH="${NEXT_PUBLIC_BASE_PATH:-/app/com.ictrek.v-office}"
 
 BUILD_WEB=1
 BUILD_STORAGE=1
@@ -55,11 +55,11 @@ usage() {
   cat <<'EOF'
 Usage: ./build_image.sh [options]
 
-Builds the ZIZIYI Office images and records each service tag in Feishu.
+Builds the V-Office images and records each service tag in Feishu.
 
 Options:
-  --web-only             Build only swr.../ziziyi-office
-  --storage-only         Build only swr.../ziziyi-office-storage
+  --web-only             Build only swr.../v-office
+  --storage-only         Build only swr.../v-office-storage
   --no-push              Build locally without docker push
   --no-feishu            Do not update Feishu after push
   --feishu-only          Do not build or push; only write selected service tags to Feishu
@@ -71,10 +71,10 @@ Options:
 
 Environment:
   FEISHU_CONFIG_FILE          Defaults to ~/.feishu.json on the build host
-  ZIZIYI_BUILD_TARGET         Optional default for --target
+  V_OFFICE_BUILD_TARGET         Optional default for --target
   FEISHU_SHEET_TITLE          Optional default for --sheet, comma-separated values accepted
-  ZIZIYI_DS_VERSION           OnlyOffice DocumentServer version (default 9.3.1)
-  ZIZIYI_ASSET_HASH           Versioned asset directory revision (default 1)
+  V_OFFICE_DS_VERSION           OnlyOffice DocumentServer version (default 9.3.1)
+  V_OFFICE_ASSET_HASH           Versioned asset directory revision (default 1)
   NEXT_PUBLIC_BASE_PATH       Sub-path prefix baked into the web image
   NPM_REGISTRY                Optional npm registry for the web build
   PIP_INDEX_URL               Optional PyPI index for the storage image
@@ -462,9 +462,9 @@ update_feishu() {
     fi
 
     token="$(get_feishu_token "$app_id" "$app_secret")"
-    [[ "$BUILD_WEB" == "1" ]] && update_feishu_cell "$token" "$sheet_id" "$sheet_title" "ziziyi-office" "$WEB_IMAGE" "$date_row" "$tag"
+    [[ "$BUILD_WEB" == "1" ]] && update_feishu_cell "$token" "$sheet_id" "$sheet_title" "v-office" "$WEB_IMAGE" "$date_row" "$tag"
     token="$(get_feishu_token "$app_id" "$app_secret")"
-    [[ "$BUILD_STORAGE" == "1" ]] && update_feishu_cell "$token" "$sheet_id" "$sheet_title" "ziziyi-office-storage" "$STORAGE_IMAGE" "$date_row" "$tag"
+    [[ "$BUILD_STORAGE" == "1" ]] && update_feishu_cell "$token" "$sheet_id" "$sheet_title" "v-office-storage" "$STORAGE_IMAGE" "$date_row" "$tag"
   done
 
   return 0
@@ -563,8 +563,8 @@ case "$TARGET" in
     ;;
 esac
 
-WEB_IMAGE="${APP_REGISTRY_PREFIX}/ziziyi-office"
-STORAGE_IMAGE="${APP_REGISTRY_PREFIX}/ziziyi-office-storage"
+WEB_IMAGE="${APP_REGISTRY_PREFIX}/v-office"
+STORAGE_IMAGE="${APP_REGISTRY_PREFIX}/v-office-storage"
 
 IFS=',' read -r -a TARGET_SHEET_TITLES <<< "$TARGET_SHEET_SPEC"
 if [[ "${#TARGET_SHEET_TITLES[@]}" -eq 0 ]]; then

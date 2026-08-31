@@ -1,17 +1,17 @@
 # =============================================================================
-# ZIZIYI Office — VOS 应用 Docker Compose
+# V-Office — VOS 应用 Docker Compose
 # =============================================================================
 # 两个服务，安装时由 VOS 按 profile（amd / arm）各选其一：
-#   - ziziyi-office-web:     纯静态前端（Next.js 静态导出 + OnlyOffice 前端
+#   - v-office-web:     纯静态前端（Next.js 静态导出 + OnlyOffice 前端
 #                            资源），Caddy 在容器内 80 端口提供静态服务。
-#   - ziziyi-office-storage: 文档存储服务（FastAPI），校验 VOS OIDC
+#   - v-office-storage: 文档存储服务（FastAPI），校验 VOS OIDC
 #                            Fastpath 令牌后直接读写 VOS 自动分配的
 #                            VOS_APP_STORAGE_PATH/documents 私有目录。
 # 镜像从华为云 SWR 拉取（pull 模式），标签由 package.sh 从飞书发布表读取
 # 并写入 .env。前端无状态；所有文档落在应用私有存储中。
 # =============================================================================
 
-x-ziziyi-office-web-base: &ziziyi-office-web-base
+x-v-office-web-base: &v-office-web-base
   restart: unless-stopped
   pull_policy: always
   environment:
@@ -19,25 +19,25 @@ x-ziziyi-office-web-base: &ziziyi-office-web-base
   networks:
     vos_default:
       aliases:
-        - ziziyi-office
+        - v-office
   labels:
     - "traefik.enable=true"
     - "traefik.docker.network=vos_default"
-    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-top-open.rule=PathPrefix(`/app/com.ictrek.ziziyi-office`) && HeadersRegexp(`Sec-Fetch-Dest`, `document`)"
-    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-top-open.priority=1000"
-    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-top-open.service=${COMPOSE_PROJECT_NAME:-ziziyi-office}-web"
-    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-top-open.middlewares=${COMPOSE_PROJECT_NAME:-ziziyi-office}-top-open-redirect"
-    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-ziziyi-office}-top-open-redirect.redirectregex.regex=^(https?://[^/]+)/app/com\\.ictrek\\.ziziyi-office/?(?:\\?.*)?$"
-    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-ziziyi-office}-top-open-redirect.redirectregex.replacement=$${1}/#/app/com.ictrek.ziziyi-office/com-ictrek-ziziyi-office/ziziyi-office"
-    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-ziziyi-office}-top-open-redirect.redirectregex.permanent=false"
-    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-web.rule=PathPrefix(`/app/com.ictrek.ziziyi-office`)"
-    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-web.service=${COMPOSE_PROJECT_NAME:-ziziyi-office}-web"
-    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-web.middlewares=${COMPOSE_PROJECT_NAME:-ziziyi-office}-web-slash,${COMPOSE_PROJECT_NAME:-ziziyi-office}-web-strip"
-    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-ziziyi-office}-web-slash.redirectregex.regex=^(.*)/app/com\\.ictrek\\.ziziyi-office$"
-    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-ziziyi-office}-web-slash.redirectregex.replacement=$${1}/app/com.ictrek.ziziyi-office/"
-    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-ziziyi-office}-web-slash.redirectregex.permanent=true"
-    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-ziziyi-office}-web-strip.stripprefix.prefixes=/app/com.ictrek.ziziyi-office"
-    - "traefik.http.services.${COMPOSE_PROJECT_NAME:-ziziyi-office}-web.loadbalancer.server.port=80"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-top-open.rule=PathPrefix(`/app/com.ictrek.v-office`) && HeadersRegexp(`Sec-Fetch-Dest`, `document`)"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-top-open.priority=1000"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-top-open.service=${COMPOSE_PROJECT_NAME:-v-office}-web"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-top-open.middlewares=${COMPOSE_PROJECT_NAME:-v-office}-top-open-redirect"
+    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-v-office}-top-open-redirect.redirectregex.regex=^(https?://[^/]+)/app/com\\.ictrek\\.v-office/?(?:\\?.*)?$"
+    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-v-office}-top-open-redirect.redirectregex.replacement=$${1}/#/app/com.ictrek.v-office/com-ictrek-v-office/v-office"
+    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-v-office}-top-open-redirect.redirectregex.permanent=false"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-web.rule=PathPrefix(`/app/com.ictrek.v-office`)"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-web.service=${COMPOSE_PROJECT_NAME:-v-office}-web"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-web.middlewares=${COMPOSE_PROJECT_NAME:-v-office}-web-slash,${COMPOSE_PROJECT_NAME:-v-office}-web-strip"
+    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-v-office}-web-slash.redirectregex.regex=^(.*)/app/com\\.ictrek\\.v-office$"
+    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-v-office}-web-slash.redirectregex.replacement=$${1}/app/com.ictrek.v-office/"
+    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-v-office}-web-slash.redirectregex.permanent=true"
+    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-v-office}-web-strip.stripprefix.prefixes=/app/com.ictrek.v-office"
+    - "traefik.http.services.${COMPOSE_PROJECT_NAME:-v-office}-web.loadbalancer.server.port=80"
   healthcheck:
     test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/"]
     interval: 30s
@@ -45,13 +45,13 @@ x-ziziyi-office-web-base: &ziziyi-office-web-base
     start_period: 15s
     retries: 3
 
-x-ziziyi-office-storage-base: &ziziyi-office-storage-base
+x-v-office-storage-base: &v-office-storage-base
   restart: unless-stopped
   pull_policy: always
   networks:
     vos_default:
       aliases:
-        - ziziyi-office-storage
+        - v-office-storage
   environment:
     DATA_ROOT: /data
     VOS_APP_VERSION: "__APP_VERSION__"
@@ -61,11 +61,11 @@ x-ziziyi-office-storage-base: &ziziyi-office-storage-base
   labels:
     - "traefik.enable=true"
     - "traefik.docker.network=vos_default"
-    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-api.rule=PathPrefix(`/api/com.ictrek.ziziyi-office`)"
-    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-api.service=${COMPOSE_PROJECT_NAME:-ziziyi-office}-api"
-    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-ziziyi-office}-api.middlewares=${COMPOSE_PROJECT_NAME:-ziziyi-office}-api-strip"
-    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-ziziyi-office}-api-strip.stripprefix.prefixes=/api/com.ictrek.ziziyi-office"
-    - "traefik.http.services.${COMPOSE_PROJECT_NAME:-ziziyi-office}-api.loadbalancer.server.port=5000"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-api.rule=PathPrefix(`/api/com.ictrek.v-office`)"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-api.service=${COMPOSE_PROJECT_NAME:-v-office}-api"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-api.middlewares=${COMPOSE_PROJECT_NAME:-v-office}-api-strip"
+    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-v-office}-api-strip.stripprefix.prefixes=/api/com.ictrek.v-office"
+    - "traefik.http.services.${COMPOSE_PROJECT_NAME:-v-office}-api.loadbalancer.server.port=5000"
   healthcheck:
     test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/healthz', timeout=5)\""]
     interval: 30s
@@ -74,25 +74,25 @@ x-ziziyi-office-storage-base: &ziziyi-office-storage-base
     retries: 3
 
 services:
-  ziziyi-office-web-amd:
-    <<: *ziziyi-office-web-base
+  v-office-web-amd:
+    <<: *v-office-web-base
     profiles: ["amd"]
-    image: ${ZIZIYI_OFFICE_AMD_IMAGE}
+    image: ${V_OFFICE_AMD_IMAGE}
 
-  ziziyi-office-storage-amd:
-    <<: *ziziyi-office-storage-base
+  v-office-storage-amd:
+    <<: *v-office-storage-base
     profiles: ["amd"]
-    image: ${ZIZIYI_OFFICE_STORAGE_AMD_IMAGE}
+    image: ${V_OFFICE_STORAGE_AMD_IMAGE}
 
-  ziziyi-office-web-arm:
-    <<: *ziziyi-office-web-base
+  v-office-web-arm:
+    <<: *v-office-web-base
     profiles: ["arm"]
-    image: ${ZIZIYI_OFFICE_ARM_IMAGE}
+    image: ${V_OFFICE_ARM_IMAGE}
 
-  ziziyi-office-storage-arm:
-    <<: *ziziyi-office-storage-base
+  v-office-storage-arm:
+    <<: *v-office-storage-base
     profiles: ["arm"]
-    image: ${ZIZIYI_OFFICE_STORAGE_ARM_IMAGE}
+    image: ${V_OFFICE_STORAGE_ARM_IMAGE}
 
 networks:
   vos_default:

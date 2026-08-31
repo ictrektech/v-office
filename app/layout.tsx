@@ -9,7 +9,7 @@ import { sitePath } from "@/utils/site-path";
 export const metadata: Metadata = {
   metadataBase: new URL("https://office.ziziyi.com"),
   title: {
-    default: "ZIZIYI Office — Free Online Word, Excel & PowerPoint Editor",
+    default: "V-Office — Free Online Word, Excel & PowerPoint Editor",
     template: "%s",
   },
   description:
@@ -28,7 +28,7 @@ export const metadata: Metadata = {
     "edit excel online",
     "serverless office",
     "privacy first",
-    "ZIZIYI",
+    "V-Office",
   ],
   icons: {
     icon: [
@@ -38,7 +38,7 @@ export const metadata: Metadata = {
     apple: sitePath("/logo.png"),
   },
   openGraph: {
-    siteName: "ZIZIYI Office",
+    siteName: "V-Office",
     type: "website",
     locale: "en_US",
   },
@@ -53,7 +53,7 @@ export const metadata: Metadata = {
   other: {
     "mobile-web-app-capable": "yes",
     "apple-mobile-web-app-capable": "yes",
-    "apple-mobile-web-app-title": "ZIZIYI Office",
+    "apple-mobile-web-app-title": "V-Office",
   },
 };
 
@@ -74,7 +74,7 @@ export default async function RootLayout({
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "WebApplication",
-    name: "ZIZIYI Office",
+    name: "V-Office",
     url: "https://office.ziziyi.com",
     description:
       "Open, view, and edit Word, Excel, and PowerPoint documents directly in your browser. No upload, no server — your files stay private.",

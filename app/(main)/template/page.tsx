@@ -4,7 +4,7 @@ import { getTemplates } from "@/utils/templates";
 
 export const metadata: Metadata = {
   title:
-    "Free Office Templates — Word, Excel & PowerPoint | ZIZIYI Office",
+    "Free Office Templates — Word, Excel & PowerPoint | V-Office",
   description:
     "Download free professional templates for Word documents, Excel spreadsheets, and PowerPoint presentations. No login required — open and edit directly in your browser.",
   keywords: [
@@ -16,13 +16,13 @@ export const metadata: Metadata = {
     "spreadsheet template free",
     "presentation template free",
     "document template online",
-    "ZIZIYI Office",
+    "V-Office",
   ],
   alternates: {
     canonical: "https://office.ziziyi.com/template",
   },
   openGraph: {
-    title: "Free Office Templates — Word, Excel & PowerPoint | ZIZIYI Office",
+    title: "Free Office Templates — Word, Excel & PowerPoint | V-Office",
     description:
       "Free professional templates for Word, Excel, and PowerPoint. Edit directly in your browser — no login needed.",
     url: "https://office.ziziyi.com/template",
@@ -30,7 +30,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Free Office Templates — Word, Excel & PowerPoint | ZIZIYI Office",
+    title: "Free Office Templates — Word, Excel & PowerPoint | V-Office",
     description:
       "Free professional templates for Word, Excel, and PowerPoint. Edit directly in your browser.",
   },

@@ -1,4 +1,4 @@
-# ZIZIYI Office
+# V-Office
 
 Local-first browser office suite for viewing and editing Word (.docx), Excel (.xlsx) and PowerPoint (.pptx) documents entirely in the browser. After installation it signs in via VOS automatically and uses private app storage assigned by VOS.
 
@@ -13,7 +13,7 @@ Local-first browser office suite for viewing and editing Word (.docx), Excel (.x
 
 ## Usage
 
-After installation, open **ZIZIYI Office** from the VOS sidebar:
+After installation, open **V-Office** from the VOS sidebar:
 
 1. The "Cloud documents" section lists files in the current user's private directory, with explicit Open and Download actions
 2. Create a new document or open a local file to edit

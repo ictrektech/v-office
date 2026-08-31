@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * 云端文档客户端：对接 VOS 部署里的 ziziyi-office-storage 服务。
+ * 云端文档客户端：对接 VOS 部署里的 v-office-storage 服务。
  *
- * 通过同域相对路径 `/api/com.ictrek.ziziyi-office` 访问（VOS 网关剥前缀后
+ * 通过同域相对路径 `/api/com.ictrek.v-office` 访问（VOS 网关剥前缀后
  * 转发到存储服务），自动附带 VOS OIDC Fastpath Bearer 令牌。独立部署（非
  * VOS iframe）下所有函数抛出 CloudUnavailableError，UI 据此隐藏云端入口。
  */
@@ -12,7 +12,7 @@ import { getVOSAccessToken, clearVOSAuthCache, isVOSMode } from "./fastpath";
 
 const API_BASE =
   process.env.NEXT_PUBLIC_STORAGE_API ||
-  "/api/com.ictrek.ziziyi-office/api/v1";
+  "/api/com.ictrek.v-office/api/v1";
 
 export interface CloudFile {
   name: string;

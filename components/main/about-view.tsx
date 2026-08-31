@@ -14,11 +14,11 @@ declare global {
   }
 }
 
-const ORIGIN_REPO_URL = "https://github.com/ictrektech/ziziyi-office";
+const ORIGIN_REPO_URL = "https://github.com/ictrektech/v-office";
 
 export function AboutView() {
   const t = useExtracted();
-  usePageTitle(t("About — ZIZIYI Office"));
+  usePageTitle(t("About — V-Office"));
   const { theme } = useAppStore();
   const isDark = isDarkTheme(theme);
   // Version injected by the VOS container entrypoint (runtime-config.js);
@@ -36,7 +36,7 @@ export function AboutView() {
           <Logo className="w-12 h-12" />
         </div>
         <h1 className="text-4xl font-extrabold tracking-tight">
-          {"ZIZIYI OFFICE"}
+          {"V-OFFICE"}
         </h1>
         <p className="text-xl text-text-secondary max-w-2xl mx-auto">
           {t(
@@ -60,7 +60,7 @@ export function AboutView() {
             rel="noopener noreferrer"
           >
             <img
-              alt="Serverless Web Office by ZIZIYI - Serverless Web Office: Private, In-Browser editing via WASM. | Product Hunt"
+              alt="Serverless Web Office by V-Office - Serverless Web Office: Private, In-Browser editing via WASM. | Product Hunt"
               width="250"
               height="54"
               src={`https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1067951&theme=${

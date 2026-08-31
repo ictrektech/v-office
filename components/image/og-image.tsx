@@ -97,7 +97,7 @@ export const OgImage = async ({
             tw="ml-4 text-3xl font-bold text-white"
             style={{ letterSpacing: "-0.02em" }}
           >
-            ZIZIYI Office
+            V-Office
           </span>
         </div>
 

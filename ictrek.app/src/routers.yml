@@ -1,19 +1,19 @@
 routers:
-  - id: com-ictrek-ziziyi-office
+  - id: com-ictrek-v-office
     kind: group
     title:
-      zh-CN: ZIZIYI Office
-      en: ZIZIYI Office
+      zh-CN: V-Office
+      en: V-Office
     icon: lucide:file-text
     order: 200
     children:
-      - id: ziziyi-office
+      - id: v-office
         kind: page
         title:
           zh-CN: 文档办公
           en: Office Documents
         icon: lucide:file-text
-        iframe-src: /app/com.ictrek.ziziyi-office/?v=__APP_VERSION__
+        iframe-src: /app/com.ictrek.v-office/?v=__APP_VERSION__
         order: 10
         keep-alive: true
         entry-point: true

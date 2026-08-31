@@ -25,7 +25,7 @@ export function TemplateView({
   initialTemplates: Template[];
 }) {
   const t = useExtracted();
-  usePageTitle(t("Free Office Templates — Word, Excel & PowerPoint | ZIZIYI Office"));
+  usePageTitle(t("Free Office Templates — Word, Excel & PowerPoint | V-Office"));
   const [searchQuery, setSearchQuery] = useState("");
   const [activeType, setActiveType] = useState("All");
   const [activeCategory, setActiveCategory] = useState("All");

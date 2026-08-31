@@ -1,4 +1,4 @@
-# ZIZIYI Office
+# V-Office
 
 本地优先的浏览器 Office 套件，直接在浏览器中查看和编辑 Word（.docx）、Excel（.xlsx）、PowerPoint（.pptx）文档。安装后自动完成 VOS 免登录，并使用 VOS 自动分配的应用私有存储。
 
@@ -13,7 +13,7 @@
 
 ## 使用
 
-安装后在 VOS 平台侧边栏找到 **ZIZIYI Office**，打开即可：
+安装后在 VOS 平台侧边栏找到 **V-Office**，打开即可：
 
 1. 首页"云端文档"列出当前用户专属目录中的文件，可直接打开或下载
 2. 从首页新建文档或打开本地文件进行编辑

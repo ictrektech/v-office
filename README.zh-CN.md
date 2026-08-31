@@ -2,7 +2,7 @@
   <img src="./public/logo.svg" width="120" height="120" alt="Office App Logo">
 </p>
 
-<h1 align="center">ZIZIYI Office</h1>
+<h1 align="center">V-Office</h1>
 
 <p align="center">
   <strong>一款现代化、本地优先的 Office 文档预览与编辑解决方案。</strong>
@@ -32,7 +32,7 @@
 
 ## 🚀 概览
 
-**ZIZIYI Office** 是一款强大的 Web 应用程序，旨在为您提供在浏览器中直接查看和编辑 Office 文档（Word、Excel、PowerPoint）的无缝体验。它基于“本地优先”的设计理念，在提供桌面级编辑体验的同时，确保您的文档隐私和安全。
+**V-Office** 是一款强大的 Web 应用程序，旨在为您提供在浏览器中直接查看和编辑 Office 文档（Word、Excel、PowerPoint）的无缝体验。它基于“本地优先”的设计理念，在提供桌面级编辑体验的同时，确保您的文档隐私和安全。
 
 ### 🌍 访问选项
 

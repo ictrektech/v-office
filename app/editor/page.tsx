@@ -353,7 +353,7 @@ export default function Page() {
           ? "关闭当前文档"
           : "Close document"
       }
-      className="fixed right-3 top-3 z-50 flex h-9 w-9 items-center justify-center rounded-lg bg-background/90 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted"
+      className="fixed right-40 top-3 z-50 flex h-9 w-9 items-center justify-center rounded-lg bg-background/90 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted"
     >
       <X className="h-5 w-5" />
     </button>
