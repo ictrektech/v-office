@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./public/logo.svg" width="120" height="120" alt="Office App Logo">
+  <img src="./public/logo.svg" width="120" height="120" alt="V-Office Logo">
 </p>
 
 <h1 align="center">V-Office</h1>
@@ -9,35 +9,25 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.0-blue.svg" alt="Version">
-  <img src="https://img.shields.io/badge/framework-Next.js%2015-black.svg" alt="Framework">
+  <a href="https://github.com/ictrektech/v-office/releases/latest"><img src="https://img.shields.io/github/v/release/ictrektech/v-office" alt="Latest Release"></a>
+  <img src="https://img.shields.io/badge/framework-Next.js%2016-black.svg" alt="Framework">
   <img src="https://img.shields.io/badge/license-AGPL%20v3-orange.svg" alt="License">
-  <a href="https://office.ziziyi.com/">
-    <img src="https://img.shields.io/badge/website-office.ziziyi.com-blue.svg" alt="Website">
-  </a>
 </p>
 
 <p align="center">
-  <a href="https://office.ziziyi.com/"><strong>🚀 Live Demo</strong></a> | <a href="README.zh-CN.md">中文版</a> | <span>English</span>
-</p>
-
-<p align="center">
-  <strong>Quick Create:</strong>
-  <a href="https://office.ziziyi.com/editor?new=docx">📄 Word</a> | 
-  <a href="https://office.ziziyi.com/editor?new=xlsx">📊 Excel</a> | 
-  <a href="https://office.ziziyi.com/editor?new=pptx">📽️ PowerPoint</a>
+  <a href="https://github.com/ictrektech/v-office"><strong>Source Code</strong></a> | <a href="README.zh-CN.md">中文版</a> | <span>English</span>
 </p>
 
 ---
 
 ## 🚀 Overview
 
-**V-Office** is a powerful web application designed to provide a seamless experience for viewing and editing Office documents (Word, Excel, PowerPoint) directly in your browser. Built with a "local-first" philosophy, it ensures your documents remain private and secure while providing a desktop-class editing experience.
+**V-Office** is a browser-based suite for viewing and editing Word, Excel and PowerPoint documents. Standalone deployments keep documents local to the browser. VOS deployments add automatic sign-in, per-user private app storage, 10-second auto-save, cloud document management and an Agent API.
 
-### 🌍 Access Options
+### Deployment Modes
 
-- **Global ([office.ziziyi.com](https://office.ziziyi.com/))**: Hosted on Cloudflare Pages. Recommended for users outside the Asia-Pacific region.
-- **Asia-Pacific Optimized ([o.ziziyi.com](https://o.ziziyi.com/))**: Hosted on EdgeOne. Features a shorter, easier-to-remember domain and offers faster access for users in the Asia-Pacific region (e.g., China, Japan, Singapore).
+- **VOS App**: install `com.ictrek.v-office` from the VOS App Store for private storage and Agent API support.
+- **Standalone**: run the Next.js static export without a storage service for browser-local document editing.
 
 ## ✨ Key Features
 
@@ -56,7 +46,7 @@
 - **State Management**: [Zustand](https://github.com/pmndrs/zustand)
 - **UI Components**: [Radix UI](https://www.radix-ui.com/) & [Lucide Icons](https://lucide.dev/)
 - **Database**: [IndexedDB](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API) (via `idb`)
-- **Deployment**: [Cloudflare Pages](https://pages.cloudflare.com/)
+- **Deployment**: Docker images and a pull-mode VOS package for AMD64 and ARM64
 
 ## 🛠️ Getting Started
 
@@ -70,8 +60,8 @@
 1. Clone the repository:
 
    ```bash
-   git clone <repository-url>
-   cd website
+   git clone git@github.com:ictrektech/v-office.git
+   cd v-office
    ```
 
 2. Install dependencies:
@@ -90,11 +80,8 @@
 
 ## 🚢 Deployment
 
-The project is configured for Cloudflare Pages.
-
-- **Production Build**: `pnpm build`
-- **Deploy to Production**: `pnpm deploy`
-- **Deploy Preview**: `pnpm deploy:preview`
+- **Production build**: `pnpm build`
+- **VOS images and package**: see [`ictrek.app/README.md`](ictrek.app/README.md)
 
 ## 🤝 Contributing
 

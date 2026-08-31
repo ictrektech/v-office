@@ -1,6 +1,6 @@
 # 上游仓库记录
 #
-# origin   git@github.com:ictrektech/ziziyi-office.git   ictrek 维护 fork（本仓库）
+# origin   git@github.com:ictrektech/v-office.git        ictrek 维护 fork（本仓库）
 # 上游     git@github.com:baotlake/office-website.git    原始仓库，用于定期同步功能更新
 #
 # 同步上游功能更新：

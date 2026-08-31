@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./public/logo.svg" width="120" height="120" alt="Office App Logo">
+  <img src="./public/logo.svg" width="120" height="120" alt="V-Office Logo">
 </p>
 
 <h1 align="center">V-Office</h1>
@@ -9,35 +9,25 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-0.1.0-blue.svg" alt="Version">
-  <img src="https://img.shields.io/badge/%E6%A1%86%E6%9E%B6-Next.js%2015-black.svg" alt="Framework">
+  <a href="https://github.com/ictrektech/v-office/releases/latest"><img src="https://img.shields.io/github/v/release/ictrektech/v-office" alt="最新版本"></a>
+  <img src="https://img.shields.io/badge/%E6%A1%86%E6%9E%B6-Next.js%2016-black.svg" alt="Framework">
   <img src="https://img.shields.io/badge/%E8%AE%B8%E5%8F%AF%E8%AF%81-AGPL%20v3-orange.svg" alt="License">
-  <a href="https://o.ziziyi.com/">
-    <img src="https://img.shields.io/badge/%E7%BD%91%E7%AB%99-o.ziziyi.com-blue.svg" alt="Website">
-  </a>
 </p>
 
 <p align="center">
-  <a href="https://o.ziziyi.com/"><strong>🚀 在线演示</strong></a> | <span>中文版</span> | <a href="README.md">English</a>
-</p>
-
-<p align="center">
-  <strong>快速创建:</strong>
-  <a href="https://o.ziziyi.com/editor?new=docx">📄 Word 文档</a> | 
-  <a href="https://o.ziziyi.com/editor?new=xlsx">📊 Excel 表格</a> | 
-  <a href="https://o.ziziyi.com/editor?new=pptx">📽️ PowerPoint 幻灯片</a>
+  <a href="https://github.com/ictrektech/v-office"><strong>源代码</strong></a> | <span>中文版</span> | <a href="README.md">English</a>
 </p>
 
 ---
 
 ## 🚀 概览
 
-**V-Office** 是一款强大的 Web 应用程序，旨在为您提供在浏览器中直接查看和编辑 Office 文档（Word、Excel、PowerPoint）的无缝体验。它基于“本地优先”的设计理念，在提供桌面级编辑体验的同时，确保您的文档隐私和安全。
+**V-Office** 是一款在浏览器中查看和编辑 Word、Excel、PowerPoint 文档的办公套件。独立部署时文档保留在浏览器本地；VOS 部署额外提供免登录、按用户隔离的应用私有存储、每 10 秒自动保存、云端文档管理和 Agent API。
 
-### 🌍 访问选项
+### 部署模式
 
-- **亚太地区优化访问 ([o.ziziyi.com](https://o.ziziyi.com/))**：部署于 EdgeOne 平台。域名更简短易记，且在亚太地区（如中国、日本、新加坡等）网络连接速度更快。
-- **全球通用访问 ([office.ziziyi.com](https://office.ziziyi.com/))**：部署于 Cloudflare Pages 平台。建议亚太地区以外的用户使用。
+- **VOS 应用**：从 VOS 应用商店安装 `com.ictrek.v-office`，使用私有存储和 Agent API。
+- **独立部署**：运行 Next.js 静态导出，不依赖存储服务，文档在浏览器本地编辑。
 
 ## ✨ 核心特性
 
@@ -56,7 +46,7 @@
 - **状态管理**: [Zustand](https://github.com/pmndrs/zustand)
 - **UI 组件**: [Radix UI](https://www.radix-ui.com/) & [Lucide Icons](https://lucide.dev/)
 - **数据库**: [IndexedDB](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API) (通过 `idb`)
-- **部署**: [Cloudflare Pages](https://pages.cloudflare.com/)
+- **部署**: AMD64、ARM64 Docker 镜像和 pull-mode VOS 应用包
 
 ## 🛠️ 快速开始
 
@@ -70,8 +60,8 @@
 1. 克隆仓库:
 
    ```bash
-   git clone <repository-url>
-   cd website
+   git clone git@github.com:ictrektech/v-office.git
+   cd v-office
    ```
 
 2. 安装依赖:
@@ -90,11 +80,8 @@
 
 ## 🚢 部署
 
-本项目已预配置 Cloudflare Pages。
-
-- **生产环境构建**: `pnpm build`
-- **部署到生产环境**: `pnpm deploy`
-- **预览部署**: `pnpm deploy:preview`
+- **生产环境构建**：`pnpm build`
+- **VOS 镜像与应用包**：参见 [`ictrek.app/README.md`](ictrek.app/README.md)
 
 ## 🤝 贡献
 
