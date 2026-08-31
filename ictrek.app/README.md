@@ -1,6 +1,6 @@
 # V-Office VOS 应用说明
 
-> `com.ictrek.v-office` 是新的 VOS 应用标识。它会作为独立应用安装，不会覆盖旧的 `com.ictrek.ziziyi-office`，旧应用私有存储中的文档也不会自动迁移。
+> VOS 应用标识为 `com.ictrek.v-office`。如果设备上安装过使用其他应用标识的旧版本，两者会作为独立应用存在，旧应用私有存储中的文档不会自动迁移。
 
 本目录是 ictrek 维护 V-Office VOS 交付的唯一入口，把上游 Next.js 静态导出应用打包为 VOS app `com.ictrek.v-office`。
 
