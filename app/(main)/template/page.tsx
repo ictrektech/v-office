@@ -2,6 +2,9 @@ import type { Metadata } from "next";
 import { TemplateView } from "@/components/main/template-view";
 import { getTemplates } from "@/utils/templates";
 
+const publicSiteUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "");
+const templateUrl = publicSiteUrl ? `${publicSiteUrl}/template` : undefined;
+
 export const metadata: Metadata = {
   title:
     "Free Office Templates — Word, Excel & PowerPoint | V-Office",
@@ -18,14 +21,12 @@ export const metadata: Metadata = {
     "document template online",
     "V-Office",
   ],
-  alternates: {
-    canonical: "https://office.ziziyi.com/template",
-  },
+  ...(templateUrl ? { alternates: { canonical: templateUrl } } : {}),
   openGraph: {
     title: "Free Office Templates — Word, Excel & PowerPoint | V-Office",
     description:
       "Free professional templates for Word, Excel, and PowerPoint. Edit directly in your browser — no login needed.",
-    url: "https://office.ziziyi.com/template",
+    ...(templateUrl ? { url: templateUrl } : {}),
     type: "website",
   },
   twitter: {

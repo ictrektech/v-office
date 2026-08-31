@@ -81,6 +81,7 @@
 ## 🚢 Deployment
 
 - **Production build**: `pnpm build`
+- **Public SEO URL (optional)**: set `NEXT_PUBLIC_SITE_URL=https://your-domain.example` at build time
 - **VOS images and package**: see [`ictrek.app/README.md`](ictrek.app/README.md)
 
 ## 🤝 Contributing

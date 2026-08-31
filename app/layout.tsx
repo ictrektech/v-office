@@ -6,8 +6,10 @@ import { ProgressProvider } from "@/components/progress-provider";
 import "./globals.css";
 import { sitePath } from "@/utils/site-path";
 
+const publicSiteUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "");
+
 export const metadata: Metadata = {
-  metadataBase: new URL("https://office.ziziyi.com"),
+  ...(publicSiteUrl ? { metadataBase: new URL(publicSiteUrl) } : {}),
   title: {
     default: "V-Office — Free Online Word, Excel & PowerPoint Editor",
     template: "%s",
@@ -75,7 +77,7 @@ export default async function RootLayout({
     "@context": "https://schema.org",
     "@type": "WebApplication",
     name: "V-Office",
-    url: "https://office.ziziyi.com",
+    ...(publicSiteUrl ? { url: publicSiteUrl } : {}),
     description:
       "Open, view, and edit Word, Excel, and PowerPoint documents directly in your browser. No upload, no server — your files stay private.",
     applicationCategory: "BusinessApplication",

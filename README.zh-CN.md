@@ -81,6 +81,7 @@
 ## 🚢 部署
 
 - **生产环境构建**：`pnpm build`
+- **公开站点 SEO 地址（可选）**：构建时设置 `NEXT_PUBLIC_SITE_URL=https://your-domain.example`
 - **VOS 镜像与应用包**：参见 [`ictrek.app/README.md`](ictrek.app/README.md)
 
 ## 🤝 贡献

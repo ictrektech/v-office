@@ -3,6 +3,7 @@ import { MetadataRoute } from "next";
 export const dynamic = "force-static";
 
 export default function robots(): MetadataRoute.Robots {
+  const base = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "");
   return {
     rules: [
       {
@@ -11,6 +12,6 @@ export default function robots(): MetadataRoute.Robots {
         disallow: ["/settings", "/api/"],
       },
     ],
-    sitemap: "https://office.ziziyi.com/sitemap.xml",
+    ...(base ? { sitemap: `${base}/sitemap.xml` } : {}),
   };
 }

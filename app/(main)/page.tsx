@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { OpenView } from "@/components/main/open-view";
 import { getRecommendedTemplates } from "@/utils/templates";
 
+const publicSiteUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "");
+
 export const metadata: Metadata = {
   title:
     "Free Online Office Editor — Open & Edit Word, Excel, PowerPoint | V-Office",
@@ -19,14 +21,12 @@ export const metadata: Metadata = {
     "privacy first office",
     "V-Office",
   ],
-  alternates: {
-    canonical: "https://office.ziziyi.com",
-  },
+  ...(publicSiteUrl ? { alternates: { canonical: publicSiteUrl } } : {}),
   openGraph: {
     title: "Free Online Office Editor — Word, Excel, PowerPoint | V-Office",
     description:
       "Edit Office documents in your browser for free. No upload, no login — fully private.",
-    url: "https://office.ziziyi.com",
+    ...(publicSiteUrl ? { url: publicSiteUrl } : {}),
     type: "website",
   },
   twitter: {
