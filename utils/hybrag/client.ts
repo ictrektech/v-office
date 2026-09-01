@@ -236,12 +236,28 @@ export async function listDocumentKnowledgeBases(): Promise<KnowledgeBase[]> {
   return list.filter((kb) => kb.type === "document" && !kb.is_temporary);
 }
 
-/** 创建 document 类型知识库，返回知识库 ID */
+/** 默认 embedding 模型：Model Hub Ollama Embedding（列表异常时的兜底，优先精确匹配） */
+const DEFAULT_EMBEDDING_MODEL_ID = "model-hub-ollama-embedding";
+
+/**
+ * 创建 document 类型知识库，返回知识库 ID。
+ *
+ * embedding_model_id 必须传：服务端不传时不会补默认值，库会创建成功但成为
+ * 废库——文件解析在向量化阶段报 "model ID cannot be empty"，检索也不可用
+ * （已在线上日志实锤）。这里优先取空间里的 Model Hub Ollama Embedding，
+ * 否则取列表里第一个 embedding 模型；列表拉不到时兜底用默认 ID。
+ */
 export async function createKnowledgeBase(name: string): Promise<string> {
+  const [embeddingModelId, summaryModelId] = await pickDefaultModels();
   const response = await hybragRequest("/knowledge-bases", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, type: "document" }),
+    body: JSON.stringify({
+      name,
+      type: "document",
+      embedding_model_id: embeddingModelId,
+      ...(summaryModelId ? { summary_model_id: summaryModelId } : {}),
+    }),
   });
   if (!response.ok) {
     throw new Error(`Create knowledge base failed: ${response.status}`);
@@ -252,6 +268,36 @@ export async function createKnowledgeBase(name: string): Promise<string> {
     throw new Error("Create knowledge base returned no id");
   }
   return id;
+}
+
+/** 从空间模型列表选默认 embedding / chat 模型；找不到时用约定默认值兜底 */
+async function pickDefaultModels(): Promise<[string, string | null]> {
+  let models: Array<{ id?: string; name?: string; type?: string }> = [];
+  try {
+    const response = await hybragRequest("/models");
+    if (response.ok) {
+      const body = await response.json();
+      models = (body?.data ?? []) as typeof models;
+    }
+  } catch {
+    // 列表不可用时走默认值兜底
+  }
+  const norm = (t?: string) => (t ?? "").toLowerCase();
+  const embeddingModels = models.filter(
+    (m) => (m.id || m.name) && norm(m.type) === "embedding",
+  );
+  const preferred = embeddingModels.find(
+    (m) => m.id === DEFAULT_EMBEDDING_MODEL_ID,
+  );
+  const embedding = preferred ?? embeddingModels[0];
+  if (!embedding?.id) {
+    // 模型列表拿不到/为空：退到约定的默认 embedding 模型
+    return [DEFAULT_EMBEDDING_MODEL_ID, null];
+  }
+  const chat =
+    models.find((m) => m.id && norm(m.type) === "knowledgeqa") ??
+    models.find((m) => m.id && norm(m.type) === "chat");
+  return [embedding.id, chat?.id ?? null];
 }
 
 /** 上传文件到指定知识库（multipart）；文件重复时抛 409 错误 */
