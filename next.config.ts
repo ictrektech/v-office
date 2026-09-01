@@ -22,6 +22,18 @@ const nextConfig: NextConfig = {
   // /app/<app-id>/ after stripping that prefix) inject this at build time so
   // /_next/* asset URLs resolve; unset it and behavior stays upstream-default.
   basePath: process.env.NEXT_PUBLIC_BASE_PATH || "",
+  // 本地 dev：AI 助手插件（编辑器内 iframe）与 v-office 同源请求 agentic-search，
+  // 经此转发到本地 agentic-search dev server，避免跨源 CORS。
+  // VOS 部署不走这里（output: export 且由平台网关路由 /api/<app-id>）。
+  async rewrites() {
+    if (process.env.NEXT_PUBLIC_BASE_PATH) return [];
+    return [
+      {
+        source: "/api/com.ictrek.agentic-search/:path*",
+        destination: "http://localhost:5173/api/com.ictrek.agentic-search/:path*",
+      },
+    ];
+  },
   images: {
     unoptimized: true,
   },

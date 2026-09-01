@@ -7,7 +7,7 @@ import {
   useEffect,
   useState,
 } from "react";
-import { X, Upload } from "lucide-react";
+import { Sparkles, X, Upload } from "lucide-react";
 import { Toaster } from "sonner";
 import { useAppStore, useResolvedLanguage, useHasHydrated } from "@/store";
 import {
@@ -26,7 +26,10 @@ import DocumentNameDialog from "@/components/document-name-dialog";
 import KnowledgeBaseUploadDialog from "@/components/knowledge-base-upload-dialog";
 import { uploadKnowledgeFile } from "@/utils/hybrag/client";
 import { sitePath } from "@/utils/site-path";
-import { isVOSMode } from "@/utils/vos/fastpath";
+import {
+  getVOSAccessToken,
+  isVOSMode,
+} from "@/utils/vos/fastpath";
 
 const AUTO_SAVE_INTERVAL_MS = 10_000;
 
@@ -195,6 +198,13 @@ export default function Page() {
     const uiTheme = paramTheme || theme;
 
     let editor: DocEditor | null = null;
+
+    // AI 助手等 OnlyOffice 插件运行在编辑器 iframe 内，沿 parent 链查找该桥
+    // 获取宿主能力（VOS 访问令牌、当前文档名）。
+    window.__voffice = {
+      getVOSAccessToken,
+      getDocumentTitle: () => server.getDocument().title,
+    };
 
     MockSocket.on("connect", server.handleConnect);
     MockSocket.on("disconnect", server.handleDisconnect);

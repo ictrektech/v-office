@@ -9,9 +9,21 @@ import {
 } from "./types";
 import { emptyDocx, emptyPdf, emptyPptx, emptyXlsx } from "./empty";
 import { getDocumentType, getFileExt } from "./utils";
-import { allPlugins, featuredPlugins, getPluginsData } from "./plugins";
+import { allPlugins, featuredPlugins, getPluginConfigUrl } from "./plugins";
 import { isVOSMode } from "@/utils/vos/fastpath";
 import { saveCloudFile, clientLog } from "@/utils/vos/storage";
+
+// AI 助手插件资源由 agentic-search 应用静态托管（web/public/plugins 随构建进
+// 入 dist），VOS 部署下与编辑器同源。
+// 本地开发默认使用 v-office public/ai-assistant 镜像副本（与 agentic-search
+// 插件目录符号链接同步），也可用 NEXT_PUBLIC_AGENTIC_SEARCH_PLUGIN_URL 覆盖。
+// 注意：该路径必须以 config.json 结尾——sdkjs 用「来源目录 + url」拼接插件地址。
+export const AGENTIC_SEARCH_PLUGIN_URL = process.env.NEXT_PUBLIC_AGENTIC_SEARCH_PLUGIN_URL;
+export const AGENTIC_SEARCH_PLUGIN_CONFIG =
+  AGENTIC_SEARCH_PLUGIN_URL ||
+  (process.env.NEXT_PUBLIC_BASE_PATH
+    ? "/app/com.ictrek.agentic-search/plugins/agentic-search/config.json"
+    : "/ai-assistant/config.json");
 
 function mergeBuffers(buffers: Uint8Array[]) {
   const totalLength = buffers.reduce((acc, buffer) => acc + buffer.length, 0);
@@ -650,10 +662,25 @@ export class EditorServer {
       if (state?.plugins == "none") {
         return Response.json({ url: "", pluginsData: [], autostart: [] });
       }
-      if (state?.plugins == "all") {
-        return Response.json(getPluginsData(allPlugins));
-      }
-      return Response.json(getPluginsData(featuredPlugins));
+      const names = state?.plugins == "all" ? allPlugins : featuredPlugins;
+      // 本地 dev（非 VOS）：ziziyi 的远程 AI 插件与我们自己的「AI 助手」同名，
+      // 其后端不在本地、点开必然空白，从列表去掉避免误点；VOS 模式保持原样。
+      const localNames = (await isVOSMode())
+        ? names
+        : names.filter((name) => name !== "ai");
+      const configs = localNames.map(getPluginConfigUrl);
+      // AI 助手插件：sdkjs 用「元素字符串截到 config.json」当插件目录，
+      // 再以该目录 + config.url 拼 iframe src。元素若是相对路径，目录也
+      // 是相对的，最终会被编辑器文档的 <base>（指向 ziziyi CDN）解析，
+      // 导致插件白屏——所以这里必须 push 带 origin 的绝对 URL。
+      // config 里的 url 保持相对（见 agentic-search 插件 config.json），
+      // api 网关由插件 index.js 自动嗅探，不在 url 上传参。
+      configs.push(
+        AGENTIC_SEARCH_PLUGIN_CONFIG.startsWith("http")
+          ? AGENTIC_SEARCH_PLUGIN_CONFIG
+          : u.origin + AGENTIC_SEARCH_PLUGIN_CONFIG,
+      );
+      return Response.json({ url: "", pluginsData: configs, autostart: [] });
     }
 
     return null;
