@@ -32,6 +32,12 @@ const nextConfig: NextConfig = {
         source: "/api/com.ictrek.agentic-search/:path*",
         destination: "http://localhost:5173/api/com.ictrek.agentic-search/:path*",
       },
+      {
+        // AI 助手插件统一走 VOS 形态路径（见 utils/editor/server.ts），
+        // 本地 dev 映射到 public/ai-assistant 镜像副本。
+        source: "/app/com.ictrek.agentic-search/plugins/agentic-search/:path*",
+        destination: "/ai-assistant/:path*",
+      },
     ];
   },
   images: {

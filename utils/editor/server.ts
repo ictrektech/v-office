@@ -13,18 +13,13 @@ import { allPlugins, featuredPlugins, getPluginConfigUrl } from "./plugins";
 import { isVOSMode } from "@/utils/vos/fastpath";
 import { saveCloudFile, clientLog } from "@/utils/vos/storage";
 
-// AI 助手插件资源由 agentic-search 应用静态托管（web/public/plugins 随构建进
-// 入 dist），VOS 部署下与编辑器同源。
-// 本地开发默认使用 v-office public/ai-assistant 本地副本（用
-// scripts/sync-ai-assistant.sh 从 agentic-search 仓库复制，不进 git），
-// 也可用 NEXT_PUBLIC_AGENTIC_SEARCH_PLUGIN_URL 覆盖。
-// 注意：该路径必须以 config.json 结尾——sdkjs 用「来源目录 + url」拼接插件地址。
-export const AGENTIC_SEARCH_PLUGIN_URL = process.env.NEXT_PUBLIC_AGENTIC_SEARCH_PLUGIN_URL;
+// AI 助手插件统一走 VOS 网关形态路径（本地 dev 由 next.config.ts rewrite 映射到
+// public/ai-assistant 镜像副本，VOS 由平台网关路由到 agentic-search 应用）。
+// 注意：不要用 process.env.NEXT_PUBLIC_BASE_PATH 在此分支——worker 编译时该
+// 常量不可靠（会被折叠成本地分支，VOS 分支字符串不进 bundle）。
+// 该路径必须以 config.json 结尾——sdkjs 用「来源目录 + url」拼接插件地址。
 export const AGENTIC_SEARCH_PLUGIN_CONFIG =
-  AGENTIC_SEARCH_PLUGIN_URL ||
-  (process.env.NEXT_PUBLIC_BASE_PATH
-    ? "/app/com.ictrek.agentic-search/plugins/agentic-search/config.json"
-    : "/ai-assistant/config.json");
+  "/app/com.ictrek.agentic-search/plugins/agentic-search/config.json";
 
 function mergeBuffers(buffers: Uint8Array[]) {
   const totalLength = buffers.reduce((acc, buffer) => acc + buffer.length, 0);
