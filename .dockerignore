@@ -32,6 +32,11 @@ examples
 # so including them in the build context just wastes time and bandwidth.
 public/v9.3*
 
+# 本地 dev 用的 AI 插件符号链接（指向仓库外 agentic-search 的插件目录），
+# 构建上下文里目标不存在，悬空链接会让 next build 扫 public/ 时 stat 失败。
+# 生产镜像不需要它：VOS 下插件由 agentic-search 应用托管。
+public/ai-assistant
+
 # Misc
 .DS_Store
 *.pem
