@@ -61,7 +61,9 @@ ENV NEXT_PUBLIC_APP_ROOT=${NEXT_PUBLIC_BASE_PATH}/v${DS_VERSION}-${HASH}
 WORKDIR /app
 
 # Install pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# 钉死 pnpm 版本（与本地一致）：pnpm@latest 会随上游漂移，11.x 起未批准的
+# 依赖构建脚本从警告变为硬错误，曾导致 2026-09-01 起镜像构建突然失败
+RUN corepack enable && corepack prepare pnpm@11.24.0 --activate
 
 # Copy dependency manifests first for better layer caching.
 COPY package.json pnpm-lock.yaml ./
