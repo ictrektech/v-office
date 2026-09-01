@@ -15,8 +15,9 @@ import { saveCloudFile, clientLog } from "@/utils/vos/storage";
 
 // AI 助手插件资源由 agentic-search 应用静态托管（web/public/plugins 随构建进
 // 入 dist），VOS 部署下与编辑器同源。
-// 本地开发默认使用 v-office public/ai-assistant 镜像副本（与 agentic-search
-// 插件目录符号链接同步），也可用 NEXT_PUBLIC_AGENTIC_SEARCH_PLUGIN_URL 覆盖。
+// 本地开发默认使用 v-office public/ai-assistant 本地副本（用
+// scripts/sync-ai-assistant.sh 从 agentic-search 仓库复制，不进 git），
+// 也可用 NEXT_PUBLIC_AGENTIC_SEARCH_PLUGIN_URL 覆盖。
 // 注意：该路径必须以 config.json 结尾——sdkjs 用「来源目录 + url」拼接插件地址。
 export const AGENTIC_SEARCH_PLUGIN_URL = process.env.NEXT_PUBLIC_AGENTIC_SEARCH_PLUGIN_URL;
 export const AGENTIC_SEARCH_PLUGIN_CONFIG =

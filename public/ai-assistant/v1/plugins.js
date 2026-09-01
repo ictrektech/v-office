@@ -1,1 +1,0 @@
-/home/wr/agentic-search/web/public/plugins/agentic-search/v1/plugins.js

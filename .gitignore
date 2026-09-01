@@ -47,4 +47,8 @@ next-env.d.ts
 .env
 .edgeone/*
 .tef_dist/*
+
+# AI 助手插件本地镜像（用 scripts/sync-ai-assistant.sh 从 agentic-search 仓库
+# 生成，不进 git；生产由 agentic-search 应用经网关托管）
+/public/ai-assistant
   
