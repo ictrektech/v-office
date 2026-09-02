@@ -219,8 +219,13 @@ export default function Page() {
         throw new Error("Iframe not loaded");
       }
 
-      const xhr = createXHRProxy(win.XMLHttpRequest);
-      const fetchProxy = createFetchProxy(win);
+      // iframe 文档的 baseURI（preload.html 所在目录）是编辑器相对请求
+      // 的正确解析基准；代理在父页面上下文构造 Request 时若以父页面为
+      // 基准，VOS basePath 下所有相对路径都会错位（404 → 弹"使用文档
+      // 时出错"警告 → 点确定后崩溃）。
+      const iframeBaseURI = win.document.baseURI;
+      const xhr = createXHRProxy(win.XMLHttpRequest, iframeBaseURI);
+      const fetchProxy = createFetchProxy(win, iframeBaseURI);
       const _Worker = win.Worker;
 
       xhr.use((request: Request) => {
@@ -234,7 +239,7 @@ export default function Page() {
         XMLHttpRequest: xhr,
         fetch: fetchProxy,
         Worker: function (url: string, options?: WorkerOptions) {
-          const u = new URL(url, location.origin);
+          const u = new URL(url, iframeBaseURI);
           return new _Worker(
             u.href.replace(u.origin, location.origin),
             options,

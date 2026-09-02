@@ -7,10 +7,17 @@ export interface XHRMiddleware {
  * @param BaseXHR The original XMLHttpRequest class
  * @returns The enhanced XMLHttpRequest class
  */
-export function createXHRProxy(BaseXHR = globalThis.XMLHttpRequest) {
+export function createXHRProxy(
+  BaseXHR = globalThis.XMLHttpRequest,
+  // 相对 URL 的解析基准。编辑器运行在 iframe 中，其发出的相对路径必须
+  // 基于 iframe 文档（preload.html 所在目录）解析；但中间件里的 Request
+  // 构造在父页面上下文执行，会错误地以父页面为基准（VOS 带 basePath 时
+  // 全部解析错 → 资源 404 → 编辑器报"使用文档时出错"）。因此必须显式
+  // 传入 iframe 的 document.baseURI。
+  baseURI?: string,
+) {
   return class ProxyXMLHttpRequest extends BaseXHR {
     private static _middlewares: XHRMiddleware[] = [];
-
     private _isMocked: boolean = false;
     private _requestMethod: string = "GET";
     private _requestUrl: string = "";
@@ -39,7 +46,12 @@ export function createXHRProxy(BaseXHR = globalThis.XMLHttpRequest) {
       password?: string | null,
     ): void {
       this._requestMethod = method;
-      this._requestUrl = url.toString();
+      // 先用 iframe 的 baseURI 解析成绝对 URL，保证中间件拿到的 Request
+      // 与浏览器原生相对解析（super.open 基于 iframe 文档）一致。
+      this._requestUrl =
+        baseURI && !/^[a-z][a-z0-9+.-]*:/i.test(url.toString())
+          ? new URL(url.toString(), baseURI).href
+          : url.toString();
       this._requestHeaders = new Headers();
       this._isMocked = false;
 
