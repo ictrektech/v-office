@@ -224,6 +224,26 @@ async function hybragRequest(
   return response;
 }
 
+/**
+ * 探测当前空间是否安装了 HybRAG。
+ *
+ * 对网关发一个无副作用的 GET 请求：应用已安装时，无论是否带认证，
+ * 请求都会落到 HybRAG 服务（200/401 等都算已安装）；未安装时 VOS
+ * 网关找不到 com.ictrek.hybrag 的路由，返回 404。网络异常一律视为
+ * 未安装，避免 UI 在异常态下误显示上传入口。
+ */
+export async function isHybragInstalled(): Promise<boolean> {
+  if (!(await isVOSMode())) return false;
+  try {
+    const response = await fetch(`${API_BASE}/knowledge-bases`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    return response.status !== 404;
+  } catch {
+    return false;
+  }
+}
+
 /** 列出当前空间可用（document 类型、非临时）的知识库 */
 export async function listDocumentKnowledgeBases(): Promise<KnowledgeBase[]> {
   const response = await hybragRequest("/knowledge-bases");

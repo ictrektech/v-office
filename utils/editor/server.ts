@@ -63,6 +63,8 @@ export class EditorServer {
   private fileType: string = "docx";
   private title: string = "";
   private isNewDocument = false;
+  /** 新建文档在编辑期间静默保存用的默认文件名（退出时 UI 据此弹框改名） */
+  private untitledSavedAs: string | null = null;
   private requestFileName:
     | ((suggestedName: string, extension: string) => Promise<string | null>)
     | null = null;
@@ -252,6 +254,21 @@ export class EditorServer {
       | null,
   ) {
     this.requestFileName = requester;
+  }
+
+  /**
+   * 新建文档已用默认名静默保存的文件名（如 "New Document.docx"）。
+   * 非新建文档、或尚未保存过时返回 null —— UI 在退出文档时据此弹框
+   * 让用户确认正式命名。
+   */
+  getUntitledSaveName(): string | null {
+    return this.isNewDocument ? this.untitledSavedAs : null;
+  }
+
+  /** 退出弹框命名（或用户确认保留默认名）后清除标记，避免再次弹出 */
+  markUntitledNamed(): void {
+    this.isNewDocument = false;
+    this.untitledSavedAs = null;
   }
 
   requestSave(editor: DocEditor): Promise<boolean> {
@@ -521,23 +538,13 @@ export class EditorServer {
           ? this.exportFileName!
           : this.title || cmd.title || `document.${this.fileType}`;
         if (vosMode && this.isNewDocument && !exporting) {
-          if (!this.requestFileName) {
-            console.error("File-name prompt is unavailable");
-            return { status: "error" };
-          }
-          const requestedName = await this.requestFileName(
-            saveName.replace(/\.[a-z0-9]{2,5}$/i, ""),
-            this.fileType,
-          );
-          if (!requestedName) {
-            return { status: "error" };
-          }
-          saveName = requestedName;
+          // 新建文档在编辑期间（自动/手动保存）一律用默认名静默保存，
+          // 不打断用户；退出文档时才由 UI 弹框确认命名（对齐 WPS 等
+          // 主流办公软件习惯），见 page.tsx 的 closeDocument。
           if (!/\.[a-z0-9]{2,5}$/i.test(saveName)) {
             saveName += `.${this.fileType}`;
           }
-          this.title = saveName;
-          this.isNewDocument = false;
+          this.untitledSavedAs = saveName;
         }
 
         const input = mergeBuffers(this.downloadParts);
@@ -653,7 +660,9 @@ export class EditorServer {
       return Response.json({ [pathname]: url });
     }
 
-    if (u.pathname == "/plugins.json") {
+    // 代理已将相对 URL 按 iframe base 解析为绝对路径（见 xhr/fetch），
+    // 所以这里必须按后缀匹配，不能假定 pathname 恰为 /plugins.json。
+    if (u.pathname.endsWith("/plugins.json")) {
       const state = this.options.getState?.();
       if (state?.plugins == "none") {
         return Response.json({ url: "", pluginsData: [], autostart: [] });

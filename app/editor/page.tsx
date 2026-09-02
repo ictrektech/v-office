@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { Sparkles, X, Upload } from "lucide-react";
+import { toast } from "sonner";
 import { Toaster } from "sonner";
 import { useAppStore, useResolvedLanguage, useHasHydrated } from "@/store";
 import {
@@ -24,7 +25,11 @@ import { createExtensionLoader } from "@/utils/extension";
 import InstallExtensionDialog from "@/components/install-extension-dialog";
 import DocumentNameDialog from "@/components/document-name-dialog";
 import KnowledgeBaseUploadDialog from "@/components/knowledge-base-upload-dialog";
-import { uploadKnowledgeFile } from "@/utils/hybrag/client";
+import {
+  isHybragInstalled,
+  uploadKnowledgeFile,
+} from "@/utils/hybrag/client";
+import { renameCloudFile } from "@/utils/vos/storage";
 import { sitePath } from "@/utils/site-path";
 import {
   getVOSAccessToken,
@@ -52,6 +57,8 @@ export default function Page() {
   const [nameRequest, setNameRequest] = useState<NameRequest | null>(null);
   const [showKbUpload, setShowKbUpload] = useState(false);
   const [vosMode, setVosMode] = useState(false);
+  /** HybRAG 是否已安装（未安装时隐藏"上传到知识库"入口） */
+  const [kbAvailable, setKbAvailable] = useState(false);
   const tryDirectRef = useRef<(() => Promise<void>) | null>(null);
   const nameResolverRef = useRef<((name: string | null) => void) | null>(null);
   const nameRequestIdRef = useRef(0);
@@ -78,8 +85,36 @@ export default function Page() {
     resolve?.(name);
   }, []);
 
-  const closeDocument = useCallback(() => {
+  const closeDocument = useCallback(async () => {
     const zh = language.toLowerCase().startsWith("zh");
+    // 新建文档在退出时才弹框确认命名（对齐 WPS 等习惯）：编辑期间已用
+    // 默认名静默保存，这里确认后把云端文件重命名为正式名称。
+    const untitledName = server.getUntitledSaveName();
+    if (untitledName) {
+      const extension =
+        untitledName.match(/\.([a-z0-9]{2,5})$/i)?.[1] ?? "docx";
+      const name = await requestFileName(
+        untitledName.replace(/\.[a-z0-9]{2,5}$/i, ""),
+        extension,
+      );
+      if (name) {
+        const target = /\.[a-z0-9]{2,5}$/i.test(name)
+          ? name
+          : `${name}.${extension}`;
+        if (target !== untitledName) {
+          try {
+            await renameCloudFile(untitledName, target);
+          } catch {
+            toast.error(
+              zh ? "重命名失败，请重试" : "Rename failed. Try again.",
+            );
+            return; // 改名失败留在编辑器，用户可重试
+          }
+        }
+        server.markUntitledNamed();
+      }
+      // 用户取消：保留默认名文件，直接退出，文档不会丢失
+    }
     if (
       isDirty.current &&
       !window.confirm(
@@ -92,7 +127,7 @@ export default function Page() {
     }
     isDirty.current = false;
     window.location.href = sitePath("/");
-  }, [language]);
+  }, [language, server, requestFileName]);
 
   /** 上传到知识库：导出当前文档字节 → hybrag 上传 */
   const handleKbUpload = useCallback(
@@ -433,7 +468,7 @@ export default function Page() {
       onClose={() => setShowInstallHint(false)}
       onTryDirect={tryDirectRef.current || undefined}
     />
-    {vosMode && (
+    {vosMode && kbAvailable && (
       <button
         type="button"
         onClick={() => setShowKbUpload(true)}
