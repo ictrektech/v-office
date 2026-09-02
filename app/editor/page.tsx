@@ -258,7 +258,20 @@ export default function Page() {
       // 的正确解析基准；代理在父页面上下文构造 Request 时若以父页面为
       // 基准，VOS basePath 下所有相对路径都会错位（404 → 弹"使用文档
       // 时出错"警告 → 点确定后崩溃）。
-      const iframeBaseURI = win.document.baseURI;
+      // 但本地 dev 的编辑器文档 <base> 指向 ziziyi CDN（编辑器框架从
+      // CDN 加载），baseURI 与主应用跨域——此时保持修复前的本地行为
+      // （不传基准，由本地路径解析），避免请求被改道打到 CDN 上缺失
+      // 的资源（同样 404 → 弹"使用文档时出错"）。VOS 网关下两者同源，
+      // 始终走 baseURI 解析。
+      const iframeOrigin = (() => {
+        try {
+          return new URL(win.document.baseURI).origin;
+        } catch {
+          return null;
+        }
+      })();
+      const iframeBaseURI =
+        iframeOrigin === location.origin ? win.document.baseURI : undefined;
       const xhr = createXHRProxy(win.XMLHttpRequest, iframeBaseURI);
       const fetchProxy = createFetchProxy(win, iframeBaseURI);
       const _Worker = win.Worker;
@@ -274,6 +287,11 @@ export default function Page() {
         XMLHttpRequest: xhr,
         fetch: fetchProxy,
         Worker: function (url: string, options?: WorkerOptions) {
+          // 本地跨域场景（iframeBaseURI 为 undefined）直接用原生 Worker，
+          // 由编辑器 iframe 自己按 <base> 解析，维持修复前行为。
+          if (!iframeBaseURI) {
+            return new _Worker(url, options);
+          }
           const u = new URL(url, iframeBaseURI);
           return new _Worker(
             u.href.replace(u.origin, location.origin),

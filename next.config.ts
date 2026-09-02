@@ -38,6 +38,12 @@ const nextConfig: NextConfig = {
         source: "/app/com.ictrek.agentic-search/plugins/agentic-search/:path*",
         destination: "/ai-assistant/:path*",
       },
+      {
+        // HybRAG（知识库）本地 dev 转发到本地 VOS 网关，由网关按应用路由；
+        // 知识库安装探测（isHybragInstalled）与业务请求共用此路径。
+        source: "/app/com.ictrek.hybrag/:path*",
+        destination: "http://localhost:3002/app/com.ictrek.hybrag/:path*",
+      },
     ];
   },
   images: {

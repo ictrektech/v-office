@@ -231,13 +231,15 @@ async function hybragRequest(
  * 请求都会落到 HybRAG 服务（200/401 等都算已安装）；未安装时 VOS
  * 网关找不到 com.ictrek.hybrag 的路由，返回 404。网络异常一律视为
  * 未安装，避免 UI 在异常态下误显示上传入口。
+ *
+ * 注意不要给这个请求加墙钟超时：它常在编辑器初始化阶段发起，而
+ * OnlyOffice 初始化会长时间阻塞主线程（见 fastpath.ts 的同类坑），
+ * 超时会在请求完成前被 abort，误判成"未安装"导致按钮消失。
  */
 export async function isHybragInstalled(): Promise<boolean> {
   if (!(await isVOSMode())) return false;
   try {
-    const response = await fetch(`${API_BASE}/knowledge-bases`, {
-      signal: AbortSignal.timeout(5000),
-    });
+    const response = await fetch(`${API_BASE}/knowledge-bases`);
     return response.status !== 404;
   } catch {
     return false;
