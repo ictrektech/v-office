@@ -30,7 +30,7 @@ const nextConfig: NextConfig = {
     return [
       {
         source: "/api/com.ictrek.agentic-search/:path*",
-        destination: "http://localhost:5173/api/com.ictrek.agentic-search/:path*",
+        destination: "http://localhost:5273/api/com.ictrek.agentic-search/:path*",
       },
       {
         // AI 助手插件统一走 VOS 形态路径（见 utils/editor/server.ts），
