@@ -186,6 +186,11 @@ export default function Page() {
     void isVOSMode().then((vosMode) => {
       setVosMode(vosMode);
       if (!active || !vosMode) return;
+      // HybRAG 安装探测（GET 非 404 即已安装）。编辑器初始化会阻塞主线程，
+      // 探测请求可能明显变慢，不能加墙钟超时（会误杀已安装环境）。
+      void isHybragInstalled().then((installed) => {
+        if (active) setKbAvailable(installed);
+      });
       interval = setInterval(async () => {
         const currentEditor = editorRef.current;
         if (
