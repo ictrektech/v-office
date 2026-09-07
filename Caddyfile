@@ -46,4 +46,10 @@
     }
     header @x2t_suffix Content-Encoding br
     header @x2t_suffix Cache-Control "public, max-age=31556952, immutable"
+
+    # 兼容层：极早期前端缓存仍请求 /v9.3.0.24-1，转发到当前内核目录，
+    # 老用户无需清浏览器缓存即可继续使用（配合上方 no-cache 策略过渡）
+    handle_path /v9.3.0.24-1/* {
+        rewrite * /v9.3.1-1{http.request.uri.path}
+    }
 }
