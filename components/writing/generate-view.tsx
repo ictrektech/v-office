@@ -7,8 +7,15 @@
  * 流式内容按阶段分卡片：审查意见红卡、推稿复写白卡、思考过程可折叠。
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, ScrollText, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  ChevronRight,
+  Loader2,
+  ScrollText,
+  Sparkles,
+  Wrench,
+  X,
+} from "lucide-react";
 import { X2tConverter } from "@/utils/editor/x2t";
 import { AvsFileType } from "@/utils/editor/types";
 import { API_BASE, authHeaders } from "@/utils/writing/client";
@@ -321,95 +328,353 @@ function stageState(items: StreamItem[], key: StreamKind): "active" | "done" | "
   return "pending";
 }
 
-// ── 单张流式卡片 ───────────────────────────────────────────────────────────
+// ── 单张流式卡片（仿网页版大模型消息：角色头像 + 思考折叠 + markdown 正文）──
+
+/** 阶段 → 头像（渐变底 + 单字）与点缀色 */
+const KIND_META: Record<StreamKind, { char: string; grad: string }> = {
+  parse: { char: "析", grad: "from-[#A6ADB8] to-[#7C838E]" },
+  draft: { char: "写", grad: "from-[#5CA1FA] to-[#2E6FE5]" },
+  review: { char: "审", grad: "from-[#FF6A61] to-[#E5452F]" },
+  rewrite: { char: "推", grad: "from-[#FF8F4D] to-[#EC5B22]" },
+  audit: { char: "核", grad: "from-[#F2B33D] to-[#D98E0B]" },
+  finalize: { char: "定", grad: "from-[#4A4A4E] to-[#1D1D1F]" },
+  revise: { char: "调", grad: "from-[#38C6B9] to-[#0FA396]" },
+};
 
 function StreamCard({ item }: { item: StreamItem }) {
-  const [thinkingOpen, setThinkingOpen] = useState(false);
-  useEffect(() => {
-    if (item.status === "active" && item.thinking) setThinkingOpen(true);
-  }, [item.status, item.thinking]);
+  const meta = KIND_META[item.kind] ?? KIND_META.parse;
+  /** 只有最终输出（审批定稿 / 局部微调的正文）才作为正文展示，其余阶段产出一律算思考过程 */
+  const isFinalOutput = item.kind === "finalize" || item.kind === "revise";
 
-  const isReview = item.kind === "review";
-  const isAudit = item.kind === "audit";
-  const cardCls = isReview
-    ? "bg-[#FFF5F3] border-[#FFD5CC]"
-    : isAudit
-      ? "bg-[#FFFBEB] border-[#FDE9B8]"
-      : "bg-white border-black/5";
-  const titleCls = isReview ? "text-[#D93025]" : isAudit ? "text-[#B45309]" : "text-gray-900";
+  // DeepSeek 逻辑：中间阶段的全部产出（思考 + 文本 + 工具）都是「思考过程」
+  const thinkingAll =
+    isFinalOutput || !item.text
+      ? item.thinking
+      : item.thinking + (item.thinking ? "\n\n" : "") + item.text;
+  /** 思考是否结束：整卡完成，或定稿/微调卡已开始流出正文 */
+  const thinkingDone = item.status === "done" || (isFinalOutput && !!item.text);
+
+  // 折叠：思考中自动展开、结束自动折叠；用户手动切换后不再自动
+  const [open, setOpen] = useState(false);
+  const touchedRef = useRef(false);
+  const startRef = useRef<number | null>(null);
+  const [elapsed, setElapsed] = useState<number | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!thinkingDone && thinkingAll && startRef.current === null) {
+      startRef.current = Date.now();
+    }
+    if (thinkingDone && startRef.current !== null) {
+      const sec = Math.max(1, Math.round((Date.now() - startRef.current) / 1000));
+      setElapsed((prev) => prev ?? sec);
+    }
+    if (!touchedRef.current) {
+      if (!thinkingDone && (thinkingAll || item.status === "active")) setOpen(true);
+      else if (thinkingDone) setOpen(false);
+    }
+  }, [thinkingDone, thinkingAll, item.status]);
+
+  // 思考流式输出：面板打开时始终滚到底部，像正在逐字思考
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (el && open) el.scrollTop = el.scrollHeight;
+  }, [thinkingAll, open]);
+
+  const toggle = () => {
+    touchedRef.current = true;
+    setOpen((v) => !v);
+  };
+
+  const hasBody = isFinalOutput && !!item.text;
 
   return (
-    <div className={"rounded-2xl border shadow-sm p-5 " + cardCls}>
-      <div className="flex items-center justify-between">
-        <h3 className={"text-[14px] font-semibold " + titleCls}>
-          {kindIcon(item.kind)} {item.title}
-          {item.status === "active" && (
-            <span className="ml-2 text-[12px] font-normal text-gray-400">进行中…</span>
-          )}
-        </h3>
-        {item.status === "done" && <span className="text-[12px] text-gray-400">已完成</span>}
+    <div className="bg-white rounded-2xl border border-black/5 shadow-sm px-5 py-4">
+      {/* 角色头部 */}
+      <div className="flex items-center gap-2.5">
+        <span
+          className={
+            "flex w-7 h-7 shrink-0 items-center justify-center rounded-[8px] bg-gradient-to-b text-white text-[12px] font-medium shadow-sm " +
+            meta.grad
+          }
+        >
+          {meta.char}
+        </span>
+        <span className="text-[14px] font-semibold text-gray-900">{item.title}</span>
+        {item.status === "active" ? (
+          <span className="flex items-center gap-1.5 text-[12px] text-gray-400">
+            <Loader2 className="w-3 h-3 animate-spin" />
+            工作中…
+          </span>
+        ) : (
+          <span className="text-[12px] text-gray-300">已完成</span>
+        )}
       </div>
 
-      {item.tools.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-2">
-          {item.tools.slice(-6).map((t, i) => (
-            <span
-              key={i}
-              className="rounded-md bg-gray-100 text-gray-500 text-[12px] px-2 py-0.5"
-            >
-              🔧 {t}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {item.thinking && (
-        <div className="mt-3">
+      {/* 思考过程：DeepSeek 式折叠面板 */}
+      {(!thinkingDone || thinkingAll) && (
+        <div
+          className={
+            "mt-3 " + (hasBody && !open ? "border-b border-black/5 pb-2.5" : "")
+          }
+        >
           <button
-            onClick={() => setThinkingOpen((v) => !v)}
-            className="text-[12px] text-gray-400 hover:text-gray-600 transition-colors"
+            onClick={toggle}
+            className={
+              "flex items-center gap-1.5 text-[13px] transition-colors " +
+              (thinkingDone ? "text-gray-400 hover:text-gray-600" : "text-[#007AFF]")
+            }
           >
-            💭 思考过程 {thinkingOpen ? "收起" : "展开"}
+            {thinkingDone ? (
+              <ChevronRight
+                className={"w-3.5 h-3.5 transition-transform " + (open ? "rotate-90" : "")}
+              />
+            ) : (
+              <Sparkles className="w-3.5 h-3.5 animate-pulse" />
+            )}
+            {thinkingDone
+              ? `已深度思考${elapsed ? `（用时 ${elapsed} 秒）` : ""}`
+              : "思考中…"}
           </button>
-          {thinkingOpen && (
-            <div className="mt-1.5 rounded-xl bg-gray-50 px-4 py-3 text-[13px] leading-6 text-gray-500 italic whitespace-pre-wrap break-words">
-              {item.thinking}
+          {open && (thinkingAll || item.tools.length > 0) && (
+            <div
+              ref={bodyRef}
+              className="mt-2 max-h-64 overflow-y-auto rounded-xl bg-[#F7F8FA] px-4 py-3"
+            >
+              {thinkingAll && (
+                <div className="text-[13px] leading-6 text-gray-500 whitespace-pre-wrap break-words">
+                  {thinkingAll}
+                </div>
+              )}
+              {item.tools.length > 0 && (
+                <div className={"flex flex-wrap gap-x-4 gap-y-1 " + (thinkingAll ? "mt-2.5" : "")}>
+                  {item.tools.slice(-8).map((t, i) => (
+                    <span
+                      key={i}
+                      className="inline-flex items-center gap-1.5 text-[12px] text-gray-400"
+                    >
+                      <Wrench className="w-3 h-3" strokeWidth={1.75} />
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
       )}
 
-      {item.text && (
-        <div
-          className={
-            "mt-3 text-[15px] leading-7 whitespace-pre-wrap break-words " +
-            (isReview ? "text-[#7A2B20]" : isAudit ? "text-[#6B4A0E]" : "text-gray-800")
-          }
-        >
-          {item.text}
+      {/* 最终输出：markdown 正文（仅审批定稿 / 局部微调） */}
+      {hasBody && (
+        <div className="mt-3">
+          <Md text={item.text} />
         </div>
       )}
     </div>
   );
 }
 
-function kindIcon(kind: StreamKind): string {
-  switch (kind) {
-    case "draft":
-      return "✍️";
-    case "review":
-      return "🔍";
-    case "rewrite":
-      return "✏️";
-    case "audit":
-      return "📋";
-    case "finalize":
-      return "🏛️";
-    case "revise":
-      return "🪄";
-    default:
-      return "📄";
+// ── 轻量 Markdown 渲染（标题 / 列表 / 表格 / 引用 / 代码块 / 粗体 / 行内码）──
+
+function Md({ text }: { text: string }) {
+  return (
+    <div className="text-[14.5px] leading-7 text-gray-800 space-y-2 break-words">
+      {renderBlocks(text)}
+    </div>
+  );
+}
+
+function renderInline(s: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const re = /(\*\*[^*]+\*\*|`[^`]+`)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let k = 0;
+  while ((m = re.exec(s))) {
+    if (m.index > last) parts.push(s.slice(last, m.index));
+    const tok = m[0];
+    if (tok.startsWith("**")) {
+      parts.push(
+        <strong key={k++} className="font-semibold text-gray-900">
+          {tok.slice(2, -2)}
+        </strong>,
+      );
+    } else {
+      parts.push(
+        <code key={k++} className="rounded bg-gray-100 px-1 py-0.5 text-[12.5px] text-gray-700">
+          {tok.slice(1, -1)}
+        </code>,
+      );
+    }
+    last = m.index + tok.length;
   }
+  if (last < s.length) parts.push(s.slice(last));
+  return parts;
+}
+
+const BLOCK_START = /^(#{1,4}\s|[-*]\s|\d+[.、)]\s|>|\||```)/;
+
+function renderBlocks(text: string): ReactNode[] {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  const out: ReactNode[] = [];
+  let i = 0;
+  let key = 0;
+  while (i < lines.length) {
+    const line = lines[i] ?? "";
+    const t = line.trim();
+    if (!t) {
+      i++;
+      continue;
+    }
+    // 代码块
+    if (t.startsWith("```")) {
+      const buf: string[] = [];
+      i++;
+      while (i < lines.length && !lines[i]!.trim().startsWith("```")) {
+        buf.push(lines[i] ?? "");
+        i++;
+      }
+      i++;
+      out.push(
+        <pre
+          key={key++}
+          className="overflow-x-auto rounded-xl bg-[#161618] px-4 py-3 text-[12.5px] leading-6 text-gray-100"
+        >
+          <code>{buf.join("\n")}</code>
+        </pre>,
+      );
+      continue;
+    }
+    // 表格
+    if (t.startsWith("|")) {
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i]!.trim().startsWith("|")) {
+        const cells = lines[i]!
+          .trim()
+          .replace(/^\||\|$/g, "")
+          .split("|")
+          .map((c) => c.trim());
+        if (!cells.every((c) => /^:?-+:?$/.test(c))) rows.push(cells);
+        i++;
+      }
+      const [head, ...body] = rows;
+      out.push(
+        <div key={key++} className="overflow-x-auto rounded-xl border border-black/8">
+          <table className="w-full border-collapse text-[13px]">
+            {head && (
+              <thead>
+                <tr>
+                  {head.map((c, j) => (
+                    <th
+                      key={j}
+                      className="border-b border-black/8 bg-gray-50 px-3 py-2 text-left font-medium text-gray-600"
+                    >
+                      {renderInline(c)}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+            )}
+            <tbody>
+              {body.map((row, r) => (
+                <tr key={r} className={r % 2 === 1 ? "bg-gray-50/60" : ""}>
+                  {row.map((c, j) => (
+                    <td key={j} className="border-b border-black/5 px-3 py-2 text-gray-700">
+                      {renderInline(c)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      );
+      continue;
+    }
+    // 标题
+    const h = t.match(/^(#{1,4})\s+(.*)/);
+    if (h) {
+      const big = (h[1]?.length ?? 3) <= 2;
+      out.push(
+        <div
+          key={key++}
+          className={
+            (big
+              ? "mt-4 mb-1 text-[16px] font-semibold text-gray-900 "
+              : "mt-3 mb-1 text-[14.5px] font-semibold text-gray-900 ") + "first:mt-0"
+          }
+        >
+          {renderInline(h[2] ?? "")}
+        </div>,
+      );
+      i++;
+      continue;
+    }
+    // 引用
+    if (t.startsWith(">")) {
+      const buf: string[] = [];
+      while (i < lines.length && lines[i]!.trim().startsWith(">")) {
+        buf.push(lines[i]!.trim().replace(/^>\s?/, ""));
+        i++;
+      }
+      out.push(
+        <blockquote
+          key={key++}
+          className="border-l-2 border-gray-200 pl-3 text-[13.5px] leading-6 text-gray-500"
+        >
+          {renderInline(buf.join("\n"))}
+        </blockquote>,
+      );
+      continue;
+    }
+    // 无序列表
+    if (/^[-*]\s+/.test(t)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i] ?? "")) {
+        items.push((lines[i] ?? "").trim().replace(/^[-*]\s+/, ""));
+        i++;
+      }
+      out.push(
+        <ul key={key++} className="list-disc space-y-1 pl-5">
+          {items.map((it, j) => (
+            <li key={j}>{renderInline(it)}</li>
+          ))}
+        </ul>,
+      );
+      continue;
+    }
+    // 有序列表
+    if (/^\d+[.、)]\s*/.test(t)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*\d+[.、)]\s*/.test(lines[i] ?? "")) {
+        items.push((lines[i] ?? "").trim().replace(/^\d+[.、)]\s*/, ""));
+        i++;
+      }
+      out.push(
+        <ol key={key++} className="list-decimal space-y-1 pl-5">
+          {items.map((it, j) => (
+            <li key={j}>{renderInline(it)}</li>
+          ))}
+        </ol>,
+      );
+      continue;
+    }
+    // 段落（连续普通行合并）
+    const buf: string[] = [t];
+    i++;
+    while (i < lines.length) {
+      const nt = (lines[i] ?? "").trim();
+      if (!nt || BLOCK_START.test(nt)) break;
+      buf.push(nt);
+      i++;
+    }
+    out.push(
+      <p key={key++} className="whitespace-pre-wrap">
+        {renderInline(buf.join("\n"))}
+      </p>,
+    );
+  }
+  return out;
 }
 
 // ── 导出按钮 ───────────────────────────────────────────────────────────────

@@ -754,7 +754,6 @@ export function WritingView() {
                 ) : (
                   <div className="flex flex-col gap-1.5">
                     {localFiles.map((rec) => {
-                      const { Icon, cls } = materialVisual(rec.name);
                       const isActive = rec.name === activeName;
                       const sess = sessions[rec.name];
                       const running =
@@ -783,14 +782,7 @@ export function WritingView() {
                             }}
                             className="flex flex-1 items-center gap-2.5 min-w-0 text-left"
                           >
-                            <span
-                              className={
-                                "flex w-7 h-7 shrink-0 rounded-lg items-center justify-center " +
-                                cls
-                              }
-                            >
-                              <Icon className="w-4 h-4" strokeWidth={1.75} />
-                            </span>
+                            <FileBadge name={rec.name} size={28} />
                             <span
                               className={
                                 "flex-1 text-[13px] truncate " +
@@ -1069,17 +1061,57 @@ function Segmented({
   );
 }
 
-/** 文件类型 → 图标 + 彩色（Word 蓝 / 表格 绿 / PPT 橙 / PDF 红，与主页文档色一致） */
+/**
+ * 文件类型 → 渐变彩块图标（参照飞书/WPS 文件图标：渐变圆角方块 + 白色图形）。
+ * Word 蓝 / 表格 绿 / PPT 橙 / PDF 红，其余灰色。
+ */
 function materialVisual(name: string): { Icon: LucideIcon; cls: string } {
   if (/\.(xlsx|csv)$/i.test(name))
-    return { Icon: FileSpreadsheet, cls: "text-emerald-500 bg-emerald-50" };
+    return {
+      Icon: FileSpreadsheet,
+      cls: "bg-gradient-to-b from-[#43C666] to-[#1FA564] shadow-[0_1px_3px_rgba(31,165,100,0.35)]",
+    };
   if (/\.pptx?$/i.test(name))
-    return { Icon: Presentation, cls: "text-orange-500 bg-orange-50" };
+    return {
+      Icon: Presentation,
+      cls: "bg-gradient-to-b from-[#FF8F4D] to-[#EC5B22] shadow-[0_1px_3px_rgba(236,91,34,0.35)]",
+    };
   if (/\.pdf$/i.test(name))
-    return { Icon: FileText, cls: "text-red-500 bg-red-50" };
+    return {
+      Icon: FileText,
+      cls: "bg-gradient-to-b from-[#FF6A61] to-[#E5452F] shadow-[0_1px_3px_rgba(229,69,47,0.35)]",
+    };
   if (/\.(docx?|txt|md)$/i.test(name))
-    return { Icon: FileText, cls: "text-blue-500 bg-blue-50" };
-  return { Icon: FileStack, cls: "text-gray-400 bg-gray-100" };
+    return {
+      Icon: FileText,
+      cls: "bg-gradient-to-b from-[#5CA1FA] to-[#2E6FE5] shadow-[0_1px_3px_rgba(46,111,229,0.35)]",
+    };
+  return {
+    Icon: FileStack,
+    cls: "bg-gradient-to-b from-[#B9BDC4] to-[#8E939B]",
+  };
+}
+
+/** 统一的文件彩块图标（左栏列表 / 材料条通用） */
+function FileBadge({
+  name,
+  size = 28,
+}: {
+  name: string;
+  size?: number;
+}) {
+  const { Icon, cls } = materialVisual(name);
+  const icon = size >= 28 ? "w-4 h-4" : "w-3.5 h-3.5";
+  return (
+    <span
+      className={
+        "flex shrink-0 items-center justify-center rounded-[7px] text-white " + cls
+      }
+      style={{ width: size, height: size }}
+    >
+      <Icon className={icon} strokeWidth={2} />
+    </span>
+  );
 }
 
 function fmtTime(ts: number): string {
@@ -1123,13 +1155,7 @@ function CloudList({
               : "hover:bg-gray-50")
           }
         >
-          <FileStack
-            className={
-              "w-4 h-4 shrink-0 " +
-              (selected === f.name ? "text-primary" : "text-gray-300")
-            }
-            strokeWidth={1.5}
-          />
+          <FileBadge name={f.name} size={24} />
           <span
             className={
               "flex-1 text-[13px] truncate " +
@@ -1248,12 +1274,7 @@ function MaterialInline({
         (warn ? "bg-[#FFF5F3] border-[#FFD5CC]" : "bg-gray-50 border-gray-200")
       }
     >
-      <FileStack
-        className={
-          "w-4 h-4 shrink-0 " + (warn ? "text-[#D93025]" : "text-gray-400")
-        }
-        strokeWidth={1.5}
-      />
+      <FileBadge name={material.name} size={24} />
       <span className="text-[13px] text-[#1D1D1F] truncate">
         参考材料：{material.name}
       </span>
