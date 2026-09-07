@@ -466,6 +466,7 @@ export function WritingView() {
           stageLabel: "",
           exporting: false,
           revising: false,
+          reviseError: null,
         });
         // 记录文件 → 写作会话映射（刷新后恢复成稿用）
         const sid = clientsRef.current.get(name)?.sessionId;
@@ -481,6 +482,8 @@ export function WritingView() {
       case "writing_error": {
         patchSession(name, {
           error: String(data.message ?? "生成失败，请重试"),
+          // 微调/撤销失败时 result 已存在，error 卡不渲染——在微调区直接显示
+          reviseError: String(data.message ?? "操作失败，请重试"),
           stageLabel: "",
           exporting: false,
           revising: false,
@@ -494,6 +497,8 @@ export function WritingView() {
   const restoreFromServer = useCallback(
     async (name: string, sessionId: string, config: WritingConfig) => {
       try {
+        // 关键：同步写作配置，否则微调/撤销因 configRef 为空而静默失效
+        configRef.current = config;
         const res = await restoreWriting(sessionId, config);
         if (!res?.restored || !res.content) return;
         patchSession(name, {
@@ -586,34 +591,93 @@ export function WritingView() {
     }
   }, [activeName, docType, title, publisher, docNumber, audience, style, requirements, lengthWords, rounds, selectedKBs, agent, handleEvent, patchSession]);
 
-  // 成稿后局部微调（写入当前查看文件的会话）
+  // 确保该文件的写作客户端可用：没有则用记录的 sessionId 自动重连
+  const ensureClient = useCallback(
+    async (name: string): Promise<WritingClient | null> => {
+      const existing = clientsRef.current.get(name);
+      if (existing) return existing;
+      const sid = sessionsRef.current[name]?.sessionId;
+      if (!sid) return null;
+      const client = new WritingClient();
+      client.onClose(() => {
+        if (!sessionsRef.current[name]?.error) {
+          patchSession(name, { error: "连接已断开，请检查 AI 服务后重试" });
+        }
+      });
+      client.onEvent((d) => handleEvent(d, name));
+      try {
+        await client.resume(sid);
+        clientsRef.current.set(name, client);
+        patchSession(name, { sessionId: sid });
+        return client;
+      } catch {
+        client.disconnect();
+        return null;
+      }
+    },
+    [handleEvent, patchSession],
+  );
+
+  // 成稿后局部微调（写入当前查看文件的会话；连接断了自动重连）
   const handleRevise = useCallback(
-    (instruction: string) => {
+    async (instruction: string) => {
       const name = activeName;
-      if (!name || !configRef.current) return;
-      const client = clientsRef.current.get(name);
-      if (!client || sessionsRef.current[name]?.revising) return;
+      if (!name) return;
+      if (sessionsRef.current[name]?.revising) return;
+      if (!configRef.current) {
+        patchSession(name, { reviseError: "写作配置缺失，请重新打开该文件或重新生成" });
+        return;
+      }
+      // 立即反馈：输入框变「修订中…」，即使重连也要让用户看到点了有效
+      patchSession(name, { revising: true, reviseError: null });
+      const client = await ensureClient(name);
+      if (!client) {
+        patchSession(name, {
+          revising: false,
+          reviseError: "连接已断开且自动重连失败，请检查 AI 服务后重试",
+        });
+        return;
+      }
       try {
         client.revise(instruction, configRef.current);
       } catch (err) {
-        patchSession(name, { error: err instanceof Error ? err.message : String(err) });
+        patchSession(name, {
+          revising: false,
+          reviseError: err instanceof Error ? err.message : String(err),
+        });
       }
     },
-    [activeName, patchSession],
+    [activeName, ensureClient, patchSession],
   );
 
-  // 撤销最近一次修改（回退上一版成稿，无 LLM 调用）
-  const handleUndo = useCallback(() => {
-    const name = activeName;
-    if (!name || !configRef.current) return;
-    const client = clientsRef.current.get(name);
-    if (!client || sessionsRef.current[name]?.revising) return;
-    try {
-      client.undo(configRef.current);
-    } catch (err) {
-      patchSession(name, { error: err instanceof Error ? err.message : String(err) });
-    }
-  }, [activeName, patchSession]);
+  // 撤销最近一次修改（回退上一版成稿，无 LLM 调用；连接断了自动重连）
+  const handleUndo = useCallback(
+    async () => {
+      const name = activeName;
+      if (!name) return;
+      if (sessionsRef.current[name]?.revising) return;
+      if (!configRef.current) {
+        patchSession(name, { reviseError: "写作配置缺失，请重新打开该文件或重新生成" });
+        return;
+      }
+      patchSession(name, { reviseError: null });
+      const client = await ensureClient(name);
+      if (!client) {
+        patchSession(name, {
+          reviseError: "连接已断开且自动重连失败，请检查 AI 服务后重试",
+        });
+        return;
+      }
+      try {
+        client.undo(configRef.current);
+      } catch (err) {
+        patchSession(name, {
+          reviseError: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+    [activeName, ensureClient, patchSession],
+  );
 
   const stopWriting = useCallback(() => {
     if (!activeName) return;
@@ -929,6 +993,7 @@ export function WritingView() {
                 error={active.error}
                 result={active.result}
                 revising={active.revising}
+                reviseError={active.reviseError}
                 historySessionId={active.sessionId}
                 onStop={stopWriting}
                 onBackToConfig={backToConfig}
@@ -957,6 +1022,8 @@ interface FileSession {
   materialChars: number | null;
   /** 写作会话 id（成稿后可回放修订过程 / 恢复微调） */
   sessionId?: string;
+  /** 微调/撤销失败提示（成稿后 error 卡不渲染，错误在微调区显示） */
+  reviseError?: string | null;
 }
 
 function emptySession(): FileSession {
@@ -971,6 +1038,7 @@ function emptySession(): FileSession {
     starting: false,
     materialChars: null,
     sessionId: undefined,
+    reviseError: null,
   };
 }
 

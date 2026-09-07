@@ -77,6 +77,8 @@ interface GenerateViewProps {
   result: ResultData | null;
   /** 局部微调是否进行中（输入框禁用） */
   revising: boolean;
+  /** 微调/撤销失败提示（成稿后主错误卡不渲染，在微调区直接显示） */
+  reviseError?: string | null;
   /** 写作会话 id（有则可回放修订过程） */
   historySessionId?: string;
   onStop: () => void;
@@ -95,6 +97,7 @@ export function GenerateView({
   error,
   result,
   revising,
+  reviseError,
   historySessionId,
   onStop,
   onBackToConfig,
@@ -277,6 +280,11 @@ export function GenerateView({
                 </button>
               </div>
               <div className="mt-2.5 flex items-center gap-3">
+                {reviseError && !revising && !exporting && (
+                  <span className="text-[12.5px] text-[#D93025] break-all">
+                    ⚠ {reviseError}
+                  </span>
+                )}
                 {(revising || exporting) && (
                   <span className="flex items-center gap-2 text-[12.5px] text-gray-400">
                     <span className="inline-block w-3 h-3 rounded-full border-2 border-gray-200 border-t-primary animate-spin" />
