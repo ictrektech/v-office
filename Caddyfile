@@ -17,11 +17,22 @@
         respond "{err.status_code} {err.status_text}" {err.status_code}
     }
 
-    # Cache immutable versioned OnlyOffice assets (1 year)
+    # 缓存策略：默认协商缓存（no-cache = 每次发版浏览器都会校验拿到新页面，
+    # 避免旧 HTML 引用已不存在的资源路径导致编辑器报「使用文档时出错」）；
+    # 仅内容寻址/版本化产物放行一年 immutable。
+    header Cache-Control "no-cache"
+
+    # Immutable versioned OnlyOffice assets (1 year)
     @onlyoffice_versioned {
         path /v*-*/*
     }
     header @onlyoffice_versioned Cache-Control "public, max-age=31556952, immutable"
+
+    # Next.js content-hashed chunks (1 year)
+    @next_static {
+        path /_next/static/*
+    }
+    header @next_static Cache-Control "public, max-age=31556952, immutable"
 
     # Brotli-encoded x2t wasm
     @x2t_wasm {
