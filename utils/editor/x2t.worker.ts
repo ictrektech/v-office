@@ -147,7 +147,7 @@ function writeInputs({
   };
 
   const content = Object.entries(params)
-    .filter(([k, v]) => v)
+    .filter(([, v]) => v)
     .reduce((a, [k, v]) => a + `<${k}>${v}</${k}>\n`, "");
 
   const xml = `<?xml version="1.0" encoding="utf-8"?>
@@ -185,8 +185,6 @@ async function convert({
   formatFrom,
   formatTo,
   media,
-  fonts,
-  themes,
 }: X2tConvertParams): Promise<X2tConvertResult> {
   const fromPath = "/working/" + fileFrom;
   const toPath = "/working/" + fileTo;

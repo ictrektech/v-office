@@ -59,7 +59,6 @@ export class EditorServer {
   private syncChangesIndex = 0;
   private loadPromise: Promise<void> | null = null;
 
-  private file: File | null = null;
   private fileType: string = "docx";
   private title: string = "";
   private isNewDocument = false;
@@ -103,7 +102,6 @@ export class EditorServer {
     this.fileType = fileType || getFileExt(file.name) || "docx";
     const documentType = getDocumentType(this.fileType);
     this.id = randomId();
-    this.file = file;
     this.title = title;
     this.isNewDocument = false;
     const buffer = await file.arrayBuffer();

@@ -53,6 +53,22 @@ export async function authHeaders(): Promise<Record<string, string>> {
   return jwt ? { Authorization: `Bearer ${jwt}` } : {};
 }
 
+// ── 服务可用性 ────────────────────────────────────────────────────────────
+
+/** agentic-search 写作服务探测：200 = 可用；失败提示用户安装/启动应用 */
+export async function checkWritingService(): Promise<boolean> {
+  try {
+    const resp = await fetch(`${API_BASE}/writing/health`, {
+      headers: await authHeaders(),
+      cache: "no-store",
+      signal: AbortSignal.timeout(6_000),
+    });
+    return resp.ok;
+  } catch {
+    return false;
+  }
+}
+
 // ── 材料上传 ───────────────────────────────────────────────────────────────
 
 export interface UploadedSource {

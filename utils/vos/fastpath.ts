@@ -99,7 +99,6 @@ export function getVOSFastpathPlatform(): VOSPlatform | null {
   return platform;
 }
 
-let platformPromise: Promise<VOSPlatform | null> | null = null;
 // A failed probe is cached only briefly: OnlyOffice initialization blocks
 // the main thread for long stretches on the editor page, so a wall-clock
 // probe can expire while the injection callback is still queued.
@@ -130,11 +129,9 @@ export async function waitForVOSFastpathPlatform(
       }
     }, 50);
   });
-  platformPromise = probe;
   const result = await probe;
   if (!result) {
     negativeProbedAt = Date.now();
-    platformPromise = null;
   }
   return result;
 }

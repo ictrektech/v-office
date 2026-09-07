@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Github, Info, ShieldCheck, Heart } from "lucide-react";
+import { Github, ShieldCheck, Heart } from "lucide-react";
 import { useExtracted } from "next-intl";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { useAppStore } from "@/store";

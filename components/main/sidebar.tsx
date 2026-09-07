@@ -7,7 +7,6 @@ import {
   FolderOpen,
   Info,
   Settings,
-  Puzzle,
   Code2,
 } from "lucide-react";
 import { useExtracted } from "next-intl";

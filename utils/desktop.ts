@@ -10,7 +10,7 @@ export const desktop = {
     LocalFileGetImageUrl: (file: string) => {
         console.log("LocalFileGetImageUrl: ", file);
     },
-    loadLocalFile: (file: string, callback: (data: string) => void) => {
+    loadLocalFile: (file: string, _callback: (data: string) => void) => {
         console.log("loadLocalFile: ", file);
     },
     convertFile: (...args: unknown[]) => {

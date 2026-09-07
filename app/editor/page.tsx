@@ -7,7 +7,7 @@ import {
   useEffect,
   useState,
 } from "react";
-import { Sparkles, X, Upload } from "lucide-react";
+import { X, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { Toaster } from "sonner";
 import { useAppStore, useResolvedLanguage, useHasHydrated } from "@/store";

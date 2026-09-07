@@ -2,7 +2,6 @@
 
 import { useEffect, useRef } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { useExtracted } from "next-intl";
 import { Header } from "@/components/main/header";
 import { Sidebar } from "@/components/main/sidebar";
 import { DragDropOverlay } from "@/components/drag-drop-overlay";
@@ -21,7 +20,6 @@ export default function MainLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const t = useExtracted();
   const { server, theme } = useAppStore();
   const preloadRef = useRef<HTMLDivElement>(null);
 

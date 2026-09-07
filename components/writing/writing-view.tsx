@@ -73,6 +73,7 @@ import {
   uploadSourceFile,
   WritingClient,
   restoreWriting,
+  checkWritingService,
   type WritingConfig,
   type WritingEvent,
 } from "@/utils/writing/client";
@@ -174,6 +175,8 @@ export function WritingView() {
   const [dragOver, setDragOver] = useState(false);
   const [tab, setTab] = useState<"local" | "kb">("local");
   const [localFiles, setLocalFiles] = useState<LocalMaterialRecord[]>([]);
+  /** agentic-search 写作服务可用性：null 检测中 / false 不可用（提示安装） */
+  const [serviceOk, setServiceOk] = useState<boolean | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ── 按文件隔离的「材料会话」：每个文件独立保留解析态 / 生成流 / 成稿，点击左栏即切换 ──
@@ -211,6 +214,8 @@ export function WritingView() {
     listLocalMaterials()
       .then(setLocalFiles)
       .catch(() => setLocalFiles([]));
+    // 服务可用性探测：agentic-search 不在则提示用户安装/启动（200 = 可用）
+    void checkWritingService().then(setServiceOk);
   }, []);
 
   // ── 材料选中即上传解析（本地文件 / 云文档统一走这里）──
@@ -368,12 +373,21 @@ export function WritingView() {
     sessionsRef.current = sessions;
   }, [sessions]);
 
-  const patchSession = useCallback((name: string, patch: Partial<FileSession>) => {
-    setSessions((prev) => ({
-      ...prev,
-      [name]: { ...(prev[name] ?? emptySession()), ...patch },
-    }));
-  }, []);
+  const patchSession = useCallback(
+    (
+      name: string,
+      patch: Partial<FileSession> | ((prev: FileSession) => Partial<FileSession>),
+    ) => {
+      // 函数式更新：WS 事件在同一 React 批处理周期内连发时，
+      // 每个 patch 都基于最新 prev 计算，避免旧快照互相覆盖
+      setSessions((prev) => {
+        const cur = prev[name] ?? emptySession();
+        const resolved = typeof patch === "function" ? patch(cur) : patch;
+        return { ...prev, [name]: { ...cur, ...resolved } };
+      });
+    },
+    [],
+  );
 
   // ── 事件处理（写入指定文件的会话）──
   const handleEvent = useCallback((data: WritingEvent, name: string) => {
@@ -393,7 +407,6 @@ export function WritingView() {
           return;
         }
         const key = stage === "rewrite" ? `rewrite-${round ?? 1}` : stage === "revise" ? `revise-${Date.now()}` : stage;
-        const cur = sessionsRef.current[name] ?? emptySession();
         if (status === "start") {
           const labels: Record<string, string> = {
             draft: "写手起草（写手 agent）",
@@ -407,7 +420,7 @@ export function WritingView() {
             stage === "revise"
               ? `局部微调（${instr.slice(0, 24)}${instr.length > 24 ? "…" : ""}）`
               : (labels[stage] ?? stage);
-          patchSession(name, {
+          patchSession(name, (cur) => ({
             items: [
               ...cur.items,
               {
@@ -423,12 +436,18 @@ export function WritingView() {
             ],
             ...(stage === "revise" ? { revising: true } : {}),
             stageLabel: `【${labelOf(stage, round)}】进行中…`,
-          });
+          }));
         } else {
-          patchSession(name, {
-            items: cur.items.map((it) => (it.key === key ? { ...it, status: "done" } : it)),
+          // revise 卡 key 含创建时间戳，done 事件无法按 key 回配——按 kind + active 匹配
+          patchSession(name, (cur) => ({
+            items: cur.items.map((it) =>
+              it.key === key ||
+              (stage === "revise" && it.kind === "revise" && it.status === "active")
+                ? { ...it, status: "done" }
+                : it,
+            ),
             ...(stage === "revise" ? { revising: false } : {}),
-          });
+          }));
         }
         return;
       }
@@ -436,38 +455,42 @@ export function WritingView() {
         const msg = ((data.message as StreamBlock | undefined) ?? (data as StreamBlock));
         const blocks = (msg.content as StreamBlock[] | undefined) ?? [];
         if (!blocks.length) return;
-        const cur = sessionsRef.current[name] ?? emptySession();
-        const idx = [...cur.items].reverse().findIndex((it) => it.status === "active");
-        if (idx === -1) return;
-        const real = cur.items.length - 1 - idx;
-        const item = { ...cur.items[real] };
-        for (const b of blocks) {
-          if (b?.type === "text" && b.text?.trim()) item.text += b.text;
-          else if (b?.type === "thinking" && b.thinking) item.thinking += b.thinking;
-          else if (b?.type === "tool_use" && b.name) {
-            if (!item.tools.includes(b.name)) item.tools = [...item.tools, b.name];
+        patchSession(name, (cur) => {
+          const idx = [...cur.items].reverse().findIndex((it) => it.status === "active");
+          if (idx === -1) return {};
+          const real = cur.items.length - 1 - idx;
+          const item = { ...cur.items[real] };
+          for (const b of blocks) {
+            if (b?.type === "text" && b.text?.trim()) item.text += b.text;
+            else if (b?.type === "thinking" && b.thinking) item.thinking += b.thinking;
+            else if (b?.type === "tool_use" && b.name) {
+              if (!item.tools.includes(b.name)) item.tools = [...item.tools, b.name];
+            }
           }
-        }
-        const next = [...cur.items];
-        next[real] = item;
-        patchSession(name, { items: next });
+          const next = [...cur.items];
+          next[real] = item;
+          return { items: next };
+        });
         return;
       }
       case "writing_done": {
         const files = (data.files as ResultData["files"] | undefined) ?? [];
-        const cur = sessionsRef.current[name];
-        patchSession(name, {
+        patchSession(name, (cur) => ({
           result: {
             title: String(data.title ?? cur?.result?.title ?? configRef.current?.title ?? name),
             content: String(data.content ?? ""),
             files,
             revisions: Number(data.revisions ?? 0),
           },
+          // 兜底：正常完成时所有阶段卡置 done（左栏 spinner 依赖「无 active 卡」）
+          items: cur.items.map((it) =>
+            it.status === "active" ? { ...it, status: "done" } : it,
+          ),
           stageLabel: "",
           exporting: false,
           revising: false,
           reviseError: null,
-        });
+        }));
         // 记录文件 → 写作会话映射（刷新后恢复成稿用）
         const sid = clientsRef.current.get(name)?.sessionId;
         if (sid && configRef.current) {
@@ -484,6 +507,10 @@ export function WritingView() {
           error: String(data.message ?? "生成失败，请重试"),
           // 微调/撤销失败时 result 已存在，error 卡不渲染——在微调区直接显示
           reviseError: String(data.message ?? "操作失败，请重试"),
+          // 兜底置 done，避免卡片永久 active 导致左栏一直转圈
+          items: (sessionsRef.current[name]?.items ?? []).map((it) =>
+            it.status === "active" ? { ...it, status: "done" } : it,
+          ),
           stageLabel: "",
           exporting: false,
           revising: false,
@@ -703,6 +730,7 @@ export function WritingView() {
   }, [activeName]);
 
   const canStart =
+    serviceOk !== false &&
     Boolean(docType && title.trim()) &&
     !(active?.starting ?? false) &&
     material?.status !== "uploading";
@@ -947,6 +975,26 @@ export function WritingView() {
               智能 · 高效 · 专业
             </span>
           </div>
+          {/* 服务不可用提示：agentic-search 探测失败（与 HybRAG 未安装同款式） */}
+          {serviceOk === false && (
+            <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-[#F0C6C6] bg-[#FDF3F3] px-4 py-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span className="w-2 h-2 shrink-0 rounded-full bg-[#D93025]" />
+                <span className="text-[13px] text-[#8A2A22] truncate">
+                  AI 写作服务不可用——请先安装并启动 agentic-search 应用
+                </span>
+              </div>
+              <button
+                onClick={() => {
+                  setServiceOk(null);
+                  void checkWritingService().then(setServiceOk);
+                }}
+                className="shrink-0 rounded-lg border border-[#E5B9B9] bg-white px-3 py-1.5 text-[12.5px] text-[#8A2A22] hover:bg-[#FBEBEB] active:scale-[0.97] transition"
+              >
+                重试
+              </button>
+            </div>
+          )}
           <ConfigStep
             agent={agent}
             onAgent={setAgent}

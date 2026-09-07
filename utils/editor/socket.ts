@@ -216,7 +216,7 @@ export class MockSocket<
  * Factory function compatible with socket.io-client API.
  * Usage: const socket = io() or io(url, options)
  */
-export function io(url?: string, options?: MockSocketOptions): MockSocket {
+export function io(_url?: string, options?: MockSocketOptions): MockSocket {
   return new MockSocket(options);
 }
 
