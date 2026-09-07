@@ -8,8 +8,10 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Loader2, ScrollText, X } from "lucide-react";
 import { X2tConverter } from "@/utils/editor/x2t";
 import { AvsFileType } from "@/utils/editor/types";
+import { API_BASE, authHeaders } from "@/utils/writing/client";
 
 export type StreamKind =
   | "parse"
@@ -68,10 +70,14 @@ interface GenerateViewProps {
   result: ResultData | null;
   /** 局部微调是否进行中（输入框禁用） */
   revising: boolean;
+  /** 写作会话 id（有则可回放修订过程） */
+  historySessionId?: string;
   onStop: () => void;
   onBackToConfig: () => void;
   onRevise: (instruction: string) => void;
   onUndo: () => void;
+  /** 重置：从 0 开始（清空生成流与成稿，保留材料与配置） */
+  onReset: () => void;
 }
 
 export function GenerateView({
@@ -82,11 +88,14 @@ export function GenerateView({
   error,
   result,
   revising,
+  historySessionId,
   onStop,
   onBackToConfig,
   onRevise,
   onUndo,
+  onReset,
 }: GenerateViewProps) {
+  const [historyOpen, setHistoryOpen] = useState(false);
   const streamRef = useRef<HTMLDivElement>(null);
   const [reviseDraft, setReviseDraft] = useState("");
 
@@ -200,6 +209,16 @@ export function GenerateView({
                 >
                   🖼️ 下载 PPT
                 </button>
+                {historySessionId && (
+                  <button
+                    onClick={() => setHistoryOpen(true)}
+                    className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-[14px] font-medium text-gray-600 hover:border-gray-300 hover:text-gray-900 active:scale-[0.98] transition"
+                    title="回放五阶段修订过程（草稿 / 审查 / 推稿 / 审核 / 定稿）"
+                  >
+                    <ScrollText className="w-4 h-4" strokeWidth={1.75} />
+                    修订过程
+                  </button>
+                )}
                 <span className="text-[12px] text-gray-400">
                   Word / PDF 按文种版式排版（红头文件含 GB/T 9704-2012 红头）
                 </span>
@@ -266,8 +285,26 @@ export function GenerateView({
                     ↩ 撤销本次修改
                   </button>
                 )}
+                <button
+                  onClick={() => {
+                    if (confirm("重置后将从 0 开始重新生成（材料与写作设置保留）。确定重置？")) {
+                      onReset();
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[12.5px] text-gray-400 hover:text-gray-700 hover:border-gray-300 active:scale-[0.97] transition"
+                  title="从 0 开始：清空生成过程与成稿（材料与写作设置保留）"
+                >
+                  ⟲ 重置
+                </button>
               </div>
             </div>
+
+            {historyOpen && historySessionId && (
+              <HistorySheet
+                sessionId={historySessionId}
+                onClose={() => setHistoryOpen(false)}
+              />
+            )}
           </>
         )}
       </div>
@@ -600,4 +637,220 @@ function parsePreview(content: string): PreviewBlock[] {
     i++;
   }
   return blocks;
+}
+
+// ── 修订过程回放（历史会话消息 → 按阶段分组） ─────────────────────────────
+
+interface HistoryGroup {
+  stage: string;
+  prompt: string;
+  answer: string;
+  thinking: string;
+  tools: string[];
+}
+
+function HistorySheet({
+  sessionId,
+  onClose,
+}: {
+  sessionId: string;
+  onClose: () => void;
+}) {
+  const [groups, setGroups] = useState<HistoryGroup[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [openIdx, setOpenIdx] = useState<number | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const headers = await authHeaders();
+        const res = await fetch(
+          `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/messages`,
+          { headers, signal: AbortSignal.timeout(20_000) },
+        );
+        if (!res.ok) throw new Error(`加载失败 (${res.status})`);
+        const data = (await res.json()) as {
+          messages?: { role: string; content: string; blocks?: string }[];
+        };
+        setGroups(
+          buildHistoryGroups(
+            (data.messages ?? []).map((m) => ({
+              role: m.role,
+              content: m.content ?? "",
+              blocks: safeParseBlocks(m.blocks),
+            })),
+          ),
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    })();
+  }, [sessionId]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <button
+        className="absolute inset-0 bg-black/25"
+        onClick={onClose}
+        aria-label="关闭"
+      />
+      <div className="relative h-full w-full max-w-2xl bg-[#F6F6F7] shadow-2xl flex flex-col animate-in slide-in-from-right">
+        <div className="h-14 shrink-0 flex items-center px-5 border-b border-black/5 bg-white">
+          <ScrollText className="w-4.5 h-4.5 text-gray-400 mr-2.5" strokeWidth={1.75} />
+          <div className="text-[15px] font-semibold text-gray-900">修订过程</div>
+          <div className="ml-2 text-[12px] text-gray-400">
+            五阶段协作的完整记录（草稿 / 审查 / 推稿 / 审核 / 定稿 / 微调）
+          </div>
+          <button
+            onClick={onClose}
+            className="ml-auto w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+          >
+            <X className="w-4.5 h-4.5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5 space-y-3">
+          {error && (
+            <div className="rounded-xl bg-[#FFF5F3] border border-[#FFD5CC] px-4 py-3 text-[13px] text-[#D93025]">
+              {error}
+            </div>
+          )}
+          {!error && groups === null && (
+            <div className="flex items-center justify-center gap-2 py-16 text-[13px] text-gray-400">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              正在加载修订记录…
+            </div>
+          )}
+          {groups?.length === 0 && (
+            <div className="text-center py-16 text-[13px] text-gray-400">
+              该会话暂无修订记录
+            </div>
+          )}
+          {groups?.map((g, i) => (
+            <div
+              key={i}
+              className="bg-white rounded-2xl border border-black/5 shadow-sm overflow-hidden"
+            >
+              <button
+                onClick={() => setOpenIdx(openIdx === i ? null : i)}
+                className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors"
+              >
+                <span className="w-6 h-6 rounded-full bg-gray-100 text-gray-500 text-[11px] flex items-center justify-center font-medium shrink-0">
+                  {i + 1}
+                </span>
+                <span className="text-[13.5px] font-medium text-gray-900 flex-1 truncate">
+                  {g.stage}
+                </span>
+                <span className="text-[11.5px] text-gray-300 shrink-0">
+                  {g.answer ? `${g.answer.length} 字` : "无输出"}
+                </span>
+                <span
+                  className={
+                    "text-gray-300 text-[12px] transition-transform " +
+                    (openIdx === i ? "rotate-90" : "")
+                  }
+                >
+                  ›
+                </span>
+              </button>
+              {openIdx === i && (
+                <div className="px-4 pb-4 space-y-3 border-t border-black/5 pt-3">
+                  {g.thinking && (
+                    <details className="group">
+                      <summary className="cursor-pointer select-none text-[12px] text-gray-400 hover:text-gray-600 transition-colors">
+                        思考过程（{g.thinking.length} 字）
+                      </summary>
+                      <div className="mt-2 rounded-xl bg-gray-50 px-3.5 py-3 text-[12.5px] leading-6 text-gray-500 whitespace-pre-wrap">
+                        {g.thinking}
+                      </div>
+                    </details>
+                  )}
+                  {g.tools.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {g.tools.map((t) => (
+                        <span
+                          key={t}
+                          className="rounded-md bg-gray-100 px-2 py-0.5 text-[11px] text-gray-500"
+                        >
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {g.prompt && (
+                    <details>
+                      <summary className="cursor-pointer select-none text-[12px] text-gray-400 hover:text-gray-600 transition-colors">
+                        阶段指令
+                      </summary>
+                      <div className="mt-2 rounded-xl bg-gray-50 px-3.5 py-3 text-[12.5px] leading-6 text-gray-500 whitespace-pre-wrap max-h-60 overflow-y-auto">
+                        {g.prompt}
+                      </div>
+                    </details>
+                  )}
+                  {g.answer ? (
+                    <div className="rounded-xl border border-black/5 px-4 py-3 text-[13px] leading-7 text-gray-700 whitespace-pre-wrap max-h-96 overflow-y-auto">
+                      {g.answer}
+                    </div>
+                  ) : (
+                    <div className="text-[12px] text-gray-300">（该阶段无文本输出）</div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function safeParseBlocks(raw: unknown): { type?: string; text?: string; thinking?: string; name?: string }[] {
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
+  return Array.isArray(raw) ? raw : [];
+}
+
+/** 消息序列 → 阶段分组：user 消息以【阶段名】开头，其后 assistant 即该阶段产物 */
+function buildHistoryGroups(
+  messages: { role: string; content: string; blocks: { type?: string; text?: string; thinking?: string; name?: string }[] }[],
+): HistoryGroup[] {
+  const groups: HistoryGroup[] = [];
+  let cur: HistoryGroup | null = null;
+  for (const m of messages) {
+    if (m.role === "user") {
+      const match = m.content.match(/^【(.+?)】\s*/);
+      if (match) {
+        cur = {
+          stage: match[1] ?? "",
+          prompt: m.content.slice(match[0].length),
+          answer: "",
+          thinking: "",
+          tools: [],
+        };
+        groups.push(cur);
+        continue;
+      }
+      // 无阶段标记的 user 消息（如【撤销】以外的普通输入）不单独成组
+      cur = null;
+      continue;
+    }
+    if (m.role !== "assistant") continue;
+    if (!cur) {
+      cur = { stage: "其他输出", prompt: "", answer: "", thinking: "", tools: [] };
+      groups.push(cur);
+    }
+    for (const b of m.blocks) {
+      if (b.type === "thinking" && b.thinking) cur.thinking += b.thinking;
+      else if (b.type === "tool_use" && b.name && !cur.tools.includes(b.name)) {
+        cur.tools = [...cur.tools, b.name];
+      }
+    }
+    cur.answer += (cur.answer ? "\n\n" : "") + m.content;
+  }
+  return groups;
 }

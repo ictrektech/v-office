@@ -129,6 +129,18 @@ export async function removeLocalMaterial(name: string): Promise<void> {
   await db.delete(STORE, name);
 }
 
+/** 重置：清除该文件的写作会话映射（保留材料本体），从 0 开始 */
+export async function clearLocalMaterialSession(name: string): Promise<void> {
+  const db = await getDB();
+  const prev = await db.get(STORE, name);
+  if (!prev) return;
+  await db.put(
+    STORE,
+    { file: prev.file, updatedAt: prev.updatedAt },
+    name,
+  );
+}
+
 async function trimToLimit(
   db: IDBPDatabase<MaterialsDB>,
 ): Promise<void> {

@@ -63,6 +63,7 @@ import {
 import {
   saveLocalMaterial,
   removeLocalMaterial,
+  clearLocalMaterialSession,
   updateLocalMaterialSession,
   loadLocalMaterial,
   listLocalMaterials,
@@ -299,6 +300,35 @@ export function WritingView() {
     [],
   );
 
+  /** 重置：从 0 开始——断开会话、清空生成流与成稿（保留材料与配置） */
+  const handleReset = useCallback(
+    (name: string) => {
+      const client = clientsRef.current.get(name);
+      if (client) {
+        client.disconnect();
+        clientsRef.current.delete(name);
+      }
+      const cur = sessionsRef.current[name];
+      sessionsRef.current = {
+        ...sessionsRef.current,
+        [name]: {
+          ...emptySession(),
+          material: cur?.material ?? null,
+          materialChars: cur?.materialChars ?? null,
+        },
+      };
+      setSessions({ ...sessionsRef.current });
+      void clearLocalMaterialSession(name)
+        .then(() => listLocalMaterials())
+        .then(setLocalFiles)
+        .catch(() => {});
+      requestAnimationFrame(() =>
+        streamAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
+      );
+    },
+    [],
+  );
+
   /** 解析失败重试：用记住的加载方式重走一遍 */
   const retryMaterial = useCallback(
     (name: string) => {
@@ -440,6 +470,7 @@ export function WritingView() {
         // 记录文件 → 写作会话映射（刷新后恢复成稿用）
         const sid = clientsRef.current.get(name)?.sessionId;
         if (sid && configRef.current) {
+          patchSession(name, { sessionId: sid });
           void updateLocalMaterialSession(name, sid, configRef.current)
             .then(() => listLocalMaterials())
             .then(setLocalFiles)
@@ -466,12 +497,15 @@ export function WritingView() {
         const res = await restoreWriting(sessionId, config);
         if (!res?.restored || !res.content) return;
         patchSession(name, {
+          // 完整恢复现场：五阶段过程卡片 + 成稿，如刚生成完
+          items: (res.items ?? []) as FileSession["items"],
           result: {
             title: res.title ?? config.title,
             content: res.content,
             files: (res.files ?? []) as ResultData["files"],
             revisions: res.revisions ?? 0,
           },
+          sessionId,
         });
         // 静默重连会话：恢复后微调/撤销立即可用
         if (!clientsRef.current.has(name)) {
@@ -485,6 +519,7 @@ export function WritingView() {
           try {
             await client.resume(sessionId);
             clientsRef.current.set(name, client);
+            patchSession(name, { sessionId });
           } catch (err) {
             console.warn("[writing] 会话重连失败（微调/撤销需重新生成）:", err);
             client.disconnect();
@@ -539,6 +574,7 @@ export function WritingView() {
       });
       client.onEvent((d) => handleEvent(d, name));
       await client.start(config, uploadId, agent);
+      if (client.sessionId) patchSession(name, { sessionId: client.sessionId });
       // 同页向下进行：滚动到生成流区
       requestAnimationFrame(() =>
         streamAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
@@ -892,7 +928,7 @@ export function WritingView() {
           />
           {/* 生成流（同页向下展开；随左侧文件切换） */}
           <div ref={streamAnchorRef}>
-            {streamVisible && active && (
+            {streamVisible && active && activeName && (
               <GenerateView
                 items={active.items}
                 stageLabel={active.stageLabel}
@@ -901,10 +937,12 @@ export function WritingView() {
                 error={active.error}
                 result={active.result}
                 revising={active.revising}
+                historySessionId={active.sessionId}
                 onStop={stopWriting}
                 onBackToConfig={backToConfig}
                 onRevise={handleRevise}
                 onUndo={handleUndo}
+                onReset={() => handleReset(activeName)}
               />
             )}
           </div>
@@ -925,6 +963,8 @@ interface FileSession {
   revising: boolean;
   starting: boolean;
   materialChars: number | null;
+  /** 写作会话 id（成稿后可回放修订过程 / 恢复微调） */
+  sessionId?: string;
 }
 
 function emptySession(): FileSession {
@@ -938,6 +978,7 @@ function emptySession(): FileSession {
     revising: false,
     starting: false,
     materialChars: null,
+    sessionId: undefined,
   };
 }
 

@@ -48,7 +48,7 @@ export async function getWritingJwt(): Promise<string | null> {
   }
 }
 
-async function authHeaders(): Promise<Record<string, string>> {
+export async function authHeaders(): Promise<Record<string, string>> {
   const jwt = await getWritingJwt();
   return jwt ? { Authorization: `Bearer ${jwt}` } : {};
 }
@@ -348,6 +348,17 @@ export interface RestoredWriting {
   content?: string;
   files?: { name: string; url: string }[];
   revisions?: number;
+  /** 完整现场：五阶段流卡片（draft/review/rewrite/audit/finalize/revise），与前端 StreamItem 对齐 */
+  items?: {
+    key: string;
+    kind: string;
+    title: string;
+    status: "done";
+    round?: number;
+    text: string;
+    thinking: string;
+    tools: string[];
+  }[];
 }
 
 /** 刷新后恢复成稿：按会话 id 取最新版本栈成稿并重新导出（无 LLM 调用） */
