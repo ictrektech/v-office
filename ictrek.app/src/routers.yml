@@ -1,20 +1,17 @@
+# =============================================================================
+# V-Office — 前端导航路由
+# 平铺 page：与其他应用（HybRAG/Model-Hub）一致的门户导航形态
+# =============================================================================
+
 routers:
-  - id: com-ictrek-v-office
-    kind: group
+  - id: v-office
+    kind: page
     title:
-      zh-CN: V-Office
+      zh-CN: 文档办公
       en: V-Office
     icon: lucide:file-text
     order: 200
-    children:
-      - id: v-office
-        kind: page
-        title:
-          zh-CN: 文档办公
-          en: Office Documents
-        icon: lucide:file-text
-        iframe-src: /app/com.ictrek.v-office/?v=__APP_VERSION__
-        order: 10
-        keep-alive: true
-        entry-point: true
-        embed: true
+    iframe-src: /app/com.ictrek.v-office/?v=__APP_VERSION__
+    keep-alive: true
+    entry-point: true
+    embed: true
