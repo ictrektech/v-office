@@ -1,0 +1,1539 @@
+"use client";
+
+/**
+ * 公文写作子页面主视图：左侧文档栏（云文档 + 本地上传）、
+ * 选择文种、写作设置、生成过程与成稿导出（GenerateView）。
+ *
+ * 高冷风格：#F6F6F7 固定浅色背景、黑白灰主色（#1D1D1F 主操作）、
+ * 单色线性图标、细边框轻阴影，克制的 Apple Pro 质感。
+ */
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import {
+  ArrowLeft,
+  Award,
+  BarChart3,
+  Bell,
+  BookOpen,
+  Calendar,
+  CalendarDays,
+  Check,
+  CheckCircle2,
+  ClipboardList,
+  FileCheck,
+  FileInput,
+  FileSpreadsheet,
+  FileStack,
+  FileText,
+  FolderOpen,
+  History,
+  Layers,
+  Lightbulb,
+  LineChart,
+  ListChecks,
+  Loader2,
+  Mail,
+  Megaphone,
+  Mic,
+  Newspaper,
+  PenLine,
+  PieChart,
+  Presentation,
+  Search,
+  Settings2,
+  Shield,
+  Stamp,
+  Upload,
+  Users,
+  X,
+  type LucideIcon,
+} from "lucide-react";
+import {
+  listCloudFiles,
+  openCloudFile,
+  saveCloudFile,
+  type CloudFile,
+} from "@/utils/vos/storage";
+import { isVOSMode } from "@/utils/vos/fastpath";
+import {
+  listDocumentKnowledgeBases,
+  type KnowledgeBase,
+} from "@/utils/hybrag/client";
+import {
+  saveLocalMaterial,
+  removeLocalMaterial,
+  updateLocalMaterialSession,
+  loadLocalMaterial,
+  listLocalMaterials,
+  type LocalMaterialRecord,
+} from "@/utils/writing/local-materials";
+import {
+  uploadSourceFile,
+  WritingClient,
+  restoreWriting,
+  type WritingConfig,
+  type WritingEvent,
+} from "@/utils/writing/client";
+import {
+  GenerateView,
+  type ResultData,
+  type StreamItem,
+  type StreamKind,
+} from "./generate-view";
+
+const DOC_TYPES = [
+  "红头文件", "通知", "请示", "批复", "工作报告", "调研报告", "领导讲话稿",
+  "会议纪要", "可行性研究报告", "项目立项建议书", "工作/实施方案", "工作总结",
+  "述职报告", "汇报材料", "管理制度/办法", "工作简报", "政策解读材料",
+  "新闻宣传稿", "大事记", "倡议书/公开信", "数据统计报表", "会议方案",
+  "经验交流材料",
+];
+
+/** 文种 → 单色线性图标 */
+const DOC_TYPE_ICONS: Record<string, LucideIcon> = {
+  红头文件: Stamp,
+  通知: Bell,
+  请示: FileInput,
+  批复: FileCheck,
+  工作报告: BarChart3,
+  调研报告: Search,
+  领导讲话稿: Mic,
+  会议纪要: ClipboardList,
+  可行性研究报告: LineChart,
+  项目立项建议书: Lightbulb,
+  "工作/实施方案": ListChecks,
+  工作总结: CheckCircle2,
+  述职报告: Award,
+  汇报材料: Presentation,
+  "管理制度/办法": Shield,
+  工作简报: Newspaper,
+  政策解读材料: BookOpen,
+  新闻宣传稿: Megaphone,
+  大事记: CalendarDays,
+  "倡议书/公开信": Mail,
+  数据统计报表: PieChart,
+  会议方案: Calendar,
+  经验交流材料: Users,
+};
+
+/** 红头版式文种：显示发文字号输入，导出时按 GB/T 9704-2012 加红头 */
+const REDHEAD_DOC_TYPES = new Set([
+  "红头文件", "通知", "请示", "批复", "工作报告", "调研报告", "会议纪要",
+]);
+
+/** 文种 → 版式说明（与后端 resolveLayout 对应） */
+function layoutHint(docType: string): string {
+  if (/述职/.test(docType)) return "Word / PDF（报告版式，文末署名落款）";
+  if (/演讲|讲话|发言/.test(docType)) return "Word / PDF（演讲版式，加宽行距）";
+  if (REDHEAD_DOC_TYPES.has(docType))
+    return "Word / PDF（GB/T 9704-2012 红头版式）";
+  return "Word / PDF（GB/T 9704-2012 版式）";
+}
+
+const ACCEPT = ".docx,.pdf,.xlsx,.csv,.txt,.md";
+
+/** 左栏材料状态：选中即上传解析，实时反馈可不可用 */
+type Material =
+  | { status: "uploading"; name: string }
+  | {
+      status: "ready";
+      name: string;
+      uploadId: string;
+      chars: number;
+      parseError?: string;
+    }
+  | { status: "error"; name: string; error: string };
+
+interface StreamBlock {
+  type?: string;
+  text?: string;
+  thinking?: string;
+  name?: string;
+  content?: StreamBlock[];
+}
+
+export function WritingView() {
+  // ── 配置态 ──
+  const [docType, setDocType] = useState("政策解读材料");
+  const [title, setTitle] = useState("");
+  const [publisher, setPublisher] = useState("");
+  const [docNumber, setDocNumber] = useState("");
+  const [audience, setAudience] = useState("");
+  const [style, setStyle] = useState("");
+  const [requirements, setRequirements] = useState("");
+  const [lengthWords, setLengthWords] = useState("0");
+  const [rounds, setRounds] = useState(2);
+  const [selectedKBs, setSelectedKBs] = useState<string[]>([]);
+
+  // ── 左栏 ──
+  const [vosMode, setVosMode] = useState(false);
+  const [cloudFiles, setCloudFiles] = useState<CloudFile[] | null>(null);
+  const [kbList, setKbList] = useState<KnowledgeBase[] | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [tab, setTab] = useState<"local" | "kb">("local");
+  const [localFiles, setLocalFiles] = useState<LocalMaterialRecord[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // ── 按文件隔离的「材料会话」：每个文件独立保留解析态 / 生成流 / 成稿，点击左栏即切换 ──
+  const [sessions, setSessions] = useState<Record<string, FileSession>>({});
+  const [activeName, setActiveName] = useState<string | null>(null);
+  const [agent, setAgent] = useState<"claude" | "opencode">("claude");
+  const clientsRef = useRef<Map<string, WritingClient>>(new Map());
+  const loadersRef = useRef<Map<string, () => Promise<File>>>(new Map()); // 重试用
+  const configRef = useRef<WritingConfig | null>(null);
+  const parsedRef = useRef<Map<string, { uploadId: string; chars: number; parseError?: string }>>(new Map());
+  const streamAnchorRef = useRef<HTMLDivElement>(null);
+  const configAnchorRef = useRef<HTMLDivElement>(null);
+
+  const active = activeName ? sessions[activeName] : undefined;
+  const material = active?.material ?? null;
+  const streamVisible =
+    !!active && (active.items.length > 0 || active.error !== null || active.result !== null);
+
+  // ── 环境探测 + 最近使用加载 ──
+  useEffect(() => {
+    void (async () => {
+      const vos = await isVOSMode().catch(() => false);
+      setVosMode(vos);
+      if (vos) {
+        listCloudFiles()
+          .then((files) => setCloudFiles(files))
+          .catch(() => setCloudFiles([]));
+      } else {
+        setCloudFiles([]);
+      }
+      listDocumentKnowledgeBases()
+        .then((kbs) => setKbList(kbs))
+        .catch(() => setKbList([]));
+    })();
+    listLocalMaterials()
+      .then(setLocalFiles)
+      .catch(() => setLocalFiles([]));
+  }, []);
+
+  // ── 材料选中即上传解析（本地文件 / 云文档统一走这里）──
+  const selectMaterial = useCallback(
+    async (name: string, getFile: () => Promise<File>) => {
+      loadersRef.current.set(name, getFile); // 记住加载方式，失败重试用
+      setActiveName(name);
+      setSessions((prev) => {
+        const base = prev[name] ?? emptySession();
+        return {
+          ...prev,
+          [name]: {
+            ...base,
+            material:
+              base.material?.status === "ready"
+                ? base.material
+                : ({ status: "uploading", name } as const),
+          },
+        };
+      });
+      // 已解析过（内存缓存）：切换即达，不重复上传
+      const cached = parsedRef.current.get(name);
+      if (cached) {
+        setSessions((prev) => {
+          const base = prev[name] ?? emptySession();
+          return {
+            ...prev,
+            [name]: {
+              ...base,
+              material: {
+                status: "ready" as const,
+                name,
+                uploadId: cached.uploadId,
+                chars: cached.chars,
+                parseError: cached.parseError,
+              },
+            },
+          };
+        });
+        return;
+      }
+      try {
+        const f = await getFile();
+        const up = await uploadSourceFile(f);
+        parsedRef.current.set(name, { uploadId: up.uploadId, chars: up.chars, parseError: up.parseError });
+        setSessions((prev) => ({
+          ...prev,
+          [name]: {
+            ...(prev[name] ?? emptySession()),
+            material: {
+              status: "ready",
+              name,
+              uploadId: up.uploadId,
+              chars: up.chars,
+              parseError: up.parseError,
+            },
+          },
+        }));
+        // 本地上传的文件进「最近使用」（IndexedDB，可点击重新加载）
+        void saveLocalMaterial(f)
+          .then(() => listLocalMaterials())
+          .then(setLocalFiles)
+          .catch(() => {});
+        // VOS 线上模式：材料同步保存到云端，跨端可见
+        if (await isVOSMode().catch(() => false)) {
+          void f
+            .arrayBuffer()
+            .then((buf) => saveCloudFile(f.name, buf))
+            .then(() => listCloudFiles())
+            .then(setCloudFiles)
+            .catch((err) => console.warn("[writing] 云端备份失败:", err));
+        }
+      } catch (err) {
+        setSessions((prev) => ({
+          ...prev,
+          [name]: {
+            ...(prev[name] ?? emptySession()),
+            material: {
+              status: "error",
+              name,
+              error: err instanceof Error ? err.message : String(err),
+            },
+          },
+        }));
+      }
+    },
+    [],
+  );
+
+  /** 解析失败重试：用记住的加载方式重走一遍 */
+  const retryMaterial = useCallback(
+    (name: string) => {
+      const loader = loadersRef.current.get(name);
+      if (loader) void selectMaterial(name, loader);
+    },
+    [selectMaterial],
+  );
+
+  /** 删除最近使用记录：移除 IndexedDB 记录；若为当前会话则一并关闭 */
+  const removeSession = useCallback(
+    (name: string) => {
+      void removeLocalMaterial(name)
+        .then(() => listLocalMaterials())
+        .then(setLocalFiles)
+        .catch(() => {});
+      const client = clientsRef.current.get(name);
+      if (client) {
+        client.disconnect();
+        clientsRef.current.delete(name);
+      }
+      loadersRef.current.delete(name);
+      parsedRef.current.delete(name);
+      setSessions((prev) => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+      setActiveName((cur) => (cur === name ? null : cur));
+    },
+    [],
+  );
+
+  // ── 会话状态定点更新 ──
+  const sessionsRef = useRef<Record<string, FileSession>>({});
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
+
+  const patchSession = useCallback((name: string, patch: Partial<FileSession>) => {
+    setSessions((prev) => ({
+      ...prev,
+      [name]: { ...(prev[name] ?? emptySession()), ...patch },
+    }));
+  }, []);
+
+  // ── 事件处理（写入指定文件的会话）──
+  const handleEvent = useCallback((data: WritingEvent, name: string) => {
+    const evt = data._event ?? (data.type as string);
+    switch (evt) {
+      case "writing_stage": {
+        const stage = data.stage as string;
+        const status = data.status as "start" | "done";
+        const round = data.round as number | undefined;
+        if (stage === "export") {
+          patchSession(name, { exporting: status === "start" });
+          return;
+        }
+        if (stage === "parse") {
+          if (status === "done")
+            patchSession(name, { materialChars: Number(data.chars ?? 0) });
+          return;
+        }
+        const key = stage === "rewrite" ? `rewrite-${round ?? 1}` : stage === "revise" ? `revise-${Date.now()}` : stage;
+        const cur = sessionsRef.current[name] ?? emptySession();
+        if (status === "start") {
+          const labels: Record<string, string> = {
+            draft: "写手起草（写手 agent）",
+            review: "审查意见（审查 agent）",
+            rewrite: `推稿复写（第 ${round ?? 1} 轮 · 推稿团队）`,
+            audit: "审核复核（审核 agent）",
+            finalize: "审批定稿（定稿签发人）",
+          };
+          const instr = typeof data.instruction === "string" ? data.instruction : "";
+          const title =
+            stage === "revise"
+              ? `局部微调（${instr.slice(0, 24)}${instr.length > 24 ? "…" : ""}）`
+              : (labels[stage] ?? stage);
+          patchSession(name, {
+            items: [
+              ...cur.items,
+              {
+                key,
+                kind: stage as StreamKind,
+                title,
+                status: "active",
+                round,
+                text: "",
+                thinking: "",
+                tools: [],
+              },
+            ],
+            ...(stage === "revise" ? { revising: true } : {}),
+            stageLabel: `【${labelOf(stage, round)}】进行中…`,
+          });
+        } else {
+          patchSession(name, {
+            items: cur.items.map((it) => (it.key === key ? { ...it, status: "done" } : it)),
+            ...(stage === "revise" ? { revising: false } : {}),
+          });
+        }
+        return;
+      }
+      case "assistant": {
+        const msg = ((data.message as StreamBlock | undefined) ?? (data as StreamBlock));
+        const blocks = (msg.content as StreamBlock[] | undefined) ?? [];
+        if (!blocks.length) return;
+        const cur = sessionsRef.current[name] ?? emptySession();
+        const idx = [...cur.items].reverse().findIndex((it) => it.status === "active");
+        if (idx === -1) return;
+        const real = cur.items.length - 1 - idx;
+        const item = { ...cur.items[real] };
+        for (const b of blocks) {
+          if (b?.type === "text" && b.text?.trim()) item.text += b.text;
+          else if (b?.type === "thinking" && b.thinking) item.thinking += b.thinking;
+          else if (b?.type === "tool_use" && b.name) {
+            if (!item.tools.includes(b.name)) item.tools = [...item.tools, b.name];
+          }
+        }
+        const next = [...cur.items];
+        next[real] = item;
+        patchSession(name, { items: next });
+        return;
+      }
+      case "writing_done": {
+        const files = (data.files as ResultData["files"] | undefined) ?? [];
+        const cur = sessionsRef.current[name];
+        patchSession(name, {
+          result: {
+            title: String(data.title ?? cur?.result?.title ?? configRef.current?.title ?? name),
+            content: String(data.content ?? ""),
+            files,
+            revisions: Number(data.revisions ?? 0),
+          },
+          stageLabel: "",
+          exporting: false,
+          revising: false,
+        });
+        // 记录文件 → 写作会话映射（刷新后恢复成稿用）
+        const sid = clientsRef.current.get(name)?.sessionId;
+        if (sid && configRef.current) {
+          void updateLocalMaterialSession(name, sid, configRef.current)
+            .then(() => listLocalMaterials())
+            .then(setLocalFiles)
+            .catch(() => {});
+        }
+        return;
+      }
+      case "writing_error": {
+        patchSession(name, {
+          error: String(data.message ?? "生成失败，请重试"),
+          stageLabel: "",
+          exporting: false,
+          revising: false,
+        });
+        return;
+      }
+    }
+  }, [patchSession]);
+
+  /** 刷新恢复：从服务端版本栈拉回成稿 + 重连会话（微调/撤销可用） */
+  const restoreFromServer = useCallback(
+    async (name: string, sessionId: string, config: WritingConfig) => {
+      try {
+        const res = await restoreWriting(sessionId, config);
+        if (!res?.restored || !res.content) return;
+        patchSession(name, {
+          result: {
+            title: res.title ?? config.title,
+            content: res.content,
+            files: (res.files ?? []) as ResultData["files"],
+            revisions: res.revisions ?? 0,
+          },
+        });
+        // 静默重连会话：恢复后微调/撤销立即可用
+        if (!clientsRef.current.has(name)) {
+          const client = new WritingClient();
+          client.onClose(() => {
+            if (!sessionsRef.current[name]?.error) {
+              patchSession(name, { error: "连接已断开，请检查 AI 服务后重试" });
+            }
+          });
+          client.onEvent((d) => handleEvent(d, name));
+          try {
+            await client.resume(sessionId);
+            clientsRef.current.set(name, client);
+          } catch (err) {
+            console.warn("[writing] 会话重连失败（微调/撤销需重新生成）:", err);
+            client.disconnect();
+          }
+        }
+      } catch (err) {
+        console.warn("[writing] 成稿恢复失败:", err);
+      }
+    },
+    [patchSession, handleEvent],
+  );
+
+  const startWriting = useCallback(async () => {
+    const name = activeName;
+    const sess = name ? sessionsRef.current[name] : undefined;
+    if (!name || !docType || !title.trim() || !sess || sess.starting) return;
+    patchSession(name, {
+      starting: true,
+      error: null,
+      result: null,
+      items: [],
+      materialChars: null,
+    });
+    try {
+      let uploadId: string | undefined;
+      if (sess.material?.status === "ready") {
+        uploadId = sess.material.uploadId;
+      }
+
+      const config: WritingConfig = {
+        docType,
+        title: title.trim(),
+        ...(publisher.trim() ? { publisher: publisher.trim() } : {}),
+        ...(docNumber.trim() && REDHEAD_DOC_TYPES.has(docType)
+          ? { docNumber: docNumber.trim() }
+          : {}),
+        ...(audience.trim() ? { audience: audience.trim() } : {}),
+        ...(style.trim() ? { style: style.trim() } : {}),
+        ...(requirements.trim() ? { requirements: requirements.trim() } : {}),
+        lengthWords: Math.max(0, parseInt(lengthWords, 10) || 0),
+        rewriteRounds: rounds,
+        ...(selectedKBs.length ? { knowledgeBaseNames: selectedKBs } : {}),
+      };
+      configRef.current = config;
+
+      const client = new WritingClient();
+      clientsRef.current.set(name, client);
+      client.onClose(() => {
+        if (!sessionsRef.current[name]?.error) {
+          patchSession(name, { error: "连接已断开，请检查 AI 服务后重试" });
+        }
+      });
+      client.onEvent((d) => handleEvent(d, name));
+      await client.start(config, uploadId, agent);
+      // 同页向下进行：滚动到生成流区
+      requestAnimationFrame(() =>
+        streamAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
+      );
+    } catch (err) {
+      patchSession(name, { error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      patchSession(name, { starting: false });
+    }
+  }, [activeName, docType, title, publisher, docNumber, audience, style, requirements, lengthWords, rounds, selectedKBs, agent, handleEvent, patchSession]);
+
+  // 成稿后局部微调（写入当前查看文件的会话）
+  const handleRevise = useCallback(
+    (instruction: string) => {
+      const name = activeName;
+      if (!name || !configRef.current) return;
+      const client = clientsRef.current.get(name);
+      if (!client || sessionsRef.current[name]?.revising) return;
+      try {
+        client.revise(instruction, configRef.current);
+      } catch (err) {
+        patchSession(name, { error: err instanceof Error ? err.message : String(err) });
+      }
+    },
+    [activeName, patchSession],
+  );
+
+  // 撤销最近一次修改（回退上一版成稿，无 LLM 调用）
+  const handleUndo = useCallback(() => {
+    const name = activeName;
+    if (!name || !configRef.current) return;
+    const client = clientsRef.current.get(name);
+    if (!client || sessionsRef.current[name]?.revising) return;
+    try {
+      client.undo(configRef.current);
+    } catch (err) {
+      patchSession(name, { error: err instanceof Error ? err.message : String(err) });
+    }
+  }, [activeName, patchSession]);
+
+  const stopWriting = useCallback(() => {
+    if (!activeName) return;
+    clientsRef.current.get(activeName)?.stop();
+  }, [activeName]);
+
+  const backToConfig = useCallback(() => {
+    const name = activeName;
+    if (name) {
+      clientsRef.current.get(name)?.disconnect();
+      clientsRef.current.delete(name);
+      parsedRef.current.delete(name);
+      setSessions((prev) => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+      setActiveName(null);
+    }
+    requestAnimationFrame(() =>
+      configAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    );
+  }, [activeName]);
+
+  const canStart =
+    Boolean(docType && title.trim()) &&
+    !(active?.starting ?? false) &&
+    material?.status !== "uploading";
+
+  return (
+    <div className="h-screen flex flex-col" style={{ background: "#F6F6F7" }}>
+      {/* 顶栏：极简返回 */}
+      <header className="h-12 shrink-0 flex items-center px-5">
+        <Link
+          href="/"
+          className="inline-flex items-center gap-1.5 text-[13px] text-gray-400 hover:text-gray-900 transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          返回
+        </Link>
+      </header>
+
+      <div className="flex-1 flex gap-4 px-5 pb-5 min-h-0">
+        {/* ── 左侧文档栏 ── */}
+        <aside className="hidden md:flex w-72 shrink-0 flex-col bg-white rounded-2xl border border-black/6 shadow-sm p-4 min-h-0">
+          {/* 品牌区 */}
+          <div className="flex items-center gap-3 px-1 pt-1 pb-4">
+            <span className="flex w-10 h-10 rounded-xl items-center justify-center bg-primary shrink-0">
+              <PenLine className="w-5 h-5 text-white" strokeWidth={1.75} />
+            </span>
+            <div className="min-w-0">
+              <div className="text-[15px] font-semibold text-[#1D1D1F] leading-tight">
+                AI 公文写作
+              </div>
+              <div className="text-[11px] text-gray-400 mt-0.5">
+                让公文写作更简单
+              </div>
+            </div>
+          </div>
+
+          {/* 参考材料导航 */}
+          <div className="flex items-center gap-2 rounded-lg bg-gray-100/80 px-3 py-2 mb-3">
+            <Layers className="w-4 h-4 text-gray-700" strokeWidth={1.75} />
+            <span className="text-[13px] font-medium text-[#1D1D1F]">参考材料</span>
+          </div>
+
+          <Segmented
+            options={vosMode ? ["本地", "知识库"] : ["本地"]}
+            value={tab === "local" ? 0 : 1}
+            onChange={(i) => setTab(i === 0 ? "local" : "kb")}
+          />
+
+          {/* 本地 tab：上传区 + 最近使用 */}
+          {tab === "local" && (
+            <>
+              <div className="mt-3">
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragOver(true);
+                  }}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragOver(false);
+                    const f = e.dataTransfer.files?.[0];
+                    if (f) void selectMaterial(f.name, () => Promise.resolve(f));
+                  }}
+                  className={
+                    "rounded-xl border border-dashed px-4 py-6 text-center cursor-pointer transition-colors " +
+                    (dragOver
+                      ? "border-primary bg-gray-50"
+                      : "border-gray-200 hover:border-gray-400")
+                  }
+                >
+                  <Upload
+                    className={
+                      "w-5 h-5 mx-auto mb-2 transition-colors " +
+                      (dragOver ? "text-primary" : "text-gray-300")
+                    }
+                    strokeWidth={1.5}
+                  />
+                  <div className="text-[12.5px] text-gray-500">
+                    点击选择或拖拽文件到此处
+                  </div>
+                  <div className="mt-1 text-[11px] text-gray-300">
+                    支持 Word / PDF / 表格 / 文本
+                  </div>
+                </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept={ACCEPT}
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void selectMaterial(f.name, () => Promise.resolve(f));
+                    e.target.value = "";
+                  }}
+                />
+              </div>
+
+              {/* 最近使用（本地上传历史，点击重新加载） */}
+              <div className="mt-4 flex-1 overflow-y-auto min-h-0">
+                <div className="flex items-center gap-1.5 text-[12px] text-gray-400 mb-1.5 px-1">
+                  <History className="w-3.5 h-3.5" strokeWidth={1.5} />
+                  最近使用
+                </div>
+                {localFiles.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-10 text-center">
+                    <FolderOpen className="w-9 h-9 text-gray-200" strokeWidth={1.25} />
+                    <div className="mt-3 text-[13px] text-gray-400">无最近文件</div>
+                    <div className="mt-1 text-[11.5px] text-gray-300 leading-4">
+                      上传过的材料将显示在此处，以便快速访问
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-1.5">
+                    {localFiles.map((rec) => {
+                      const { Icon, cls } = materialVisual(rec.name);
+                      const isActive = rec.name === activeName;
+                      const sess = sessions[rec.name];
+                      const running =
+                        (sess?.starting || sess?.items.some((it) => it.status === "active")) ??
+                        false;
+                      return (
+                        <div
+                          key={rec.name}
+                          className={
+                            "group relative flex items-center gap-2.5 rounded-xl px-3 py-2.5 border transition-all " +
+                            (isActive
+                              ? "bg-white border-primary/40 shadow-[0_1px_6px_rgba(0,0,0,0.07)]"
+                              : "bg-white/60 border-gray-200/70 hover:bg-white hover:shadow-sm")
+                          }
+                        >
+                          <button
+                            onClick={() => {
+                              void selectMaterial(rec.name, () =>
+                                loadLocalMaterial(rec.name),
+                              ).then(() => {
+                                // 有历史成稿：从服务端恢复（秒级，无 LLM）
+                                if (rec.sessionId && rec.config) {
+                                  void restoreFromServer(rec.name, rec.sessionId, rec.config);
+                                }
+                              });
+                            }}
+                            className="flex flex-1 items-center gap-2.5 min-w-0 text-left"
+                          >
+                            <span
+                              className={
+                                "flex w-7 h-7 shrink-0 rounded-lg items-center justify-center " +
+                                cls
+                              }
+                            >
+                              <Icon className="w-4 h-4" strokeWidth={1.75} />
+                            </span>
+                            <span
+                              className={
+                                "flex-1 text-[13px] truncate " +
+                                (isActive
+                                  ? "text-primary font-medium"
+                                  : "text-gray-600")
+                              }
+                            >
+                              {rec.name}
+                            </span>
+                          </button>
+                          {running ? (
+                            <Loader2 className="w-3.5 h-3.5 text-primary animate-spin shrink-0" />
+                          ) : (
+                            <span className="text-[11px] text-gray-300 shrink-0 group-hover:hidden">
+                              {fmtTime(rec.updatedAt)}
+                            </span>
+                          )}
+                          <button
+                            onClick={() => void removeSession(rec.name)}
+                            title="从最近使用中删除"
+                            className="hidden group-hover:flex w-5 h-5 items-center justify-center rounded-md text-gray-300 hover:text-white hover:bg-[#D93025] transition-colors shrink-0"
+                          >
+                            <X className="w-3 h-3" strokeWidth={2.5} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* 知识库 tab：VOS 云端文档（与主页「最近」一致的空态与列表样式） */}
+          {tab === "kb" && vosMode && (
+            <div className="mt-4 flex-1 overflow-y-auto min-h-0">
+              {cloudFiles === null && (
+                <div className="text-[13px] text-gray-300 py-4 text-center">
+                  加载中…
+                </div>
+              )}
+              {cloudFiles !== null && cloudFiles.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-14 text-center">
+                  <FolderOpen className="w-10 h-10 text-gray-200" strokeWidth={1.25} />
+                  <div className="mt-3 text-[13.5px] text-gray-500">无最近文件</div>
+                  <div className="mt-1 text-[12px] text-gray-300 leading-4">
+                    您打开的文件将显示在此处，以便快速访问
+                  </div>
+                </div>
+              )}
+              {cloudFiles !== null && cloudFiles.length > 0 && (
+                <CloudList
+                  files={cloudFiles}
+                  selected={
+                    material &&
+                    material.status !== "error" &&
+                    cloudFiles.some((f) => f.name === material.name)
+                      ? material.name
+                      : null
+                  }
+                  onSelect={(name) =>
+                    void selectMaterial(name, () => openCloudFile(name))
+                  }
+                />
+              )}
+            </div>
+          )}
+
+          {/* 已选材料（含解析状态） */}
+          {material && (
+            <MaterialCard
+              material={material}
+              onRemove={backToConfig}
+              onRetry={retryMaterial}
+            />
+          )}
+        </aside>
+
+        {/* ── 主列：配置区 + 生成流同页向下进行 ── */}
+        <main className="flex-1 min-w-0 overflow-y-auto">
+          {/* 页头 */}
+          <div ref={configAnchorRef} className="flex items-start justify-between px-1 pb-4">
+            <div className="flex items-center gap-3">
+              <span className="flex w-11 h-11 rounded-xl items-center justify-center bg-primary">
+                <PenLine className="w-5 h-5 text-white" strokeWidth={1.5} />
+              </span>
+              <div>
+                <h1 className="text-[22px] font-semibold text-[#1D1D1F] leading-tight">
+                  AI 公文写作
+                </h1>
+                <p className="text-[12.5px] text-gray-400 mt-0.5">
+                  多 agent 五阶段协作 · 流式打磨交稿
+                </p>
+              </div>
+            </div>
+            <span className="inline-flex items-center rounded-full border border-primary/20 bg-primary/5 px-3.5 py-1.5 text-[12px] text-primary tracking-wide">
+              智能 · 高效 · 专业
+            </span>
+          </div>
+          <ConfigStep
+            agent={agent}
+            onAgent={setAgent}
+            docType={docType}
+            onDocType={setDocType}
+            title={title}
+            onTitle={setTitle}
+            publisher={publisher}
+            onPublisher={setPublisher}
+            docNumber={docNumber}
+            onDocNumber={setDocNumber}
+            audience={audience}
+            onAudience={setAudience}
+            style={style}
+            onStyle={setStyle}
+            requirements={requirements}
+            onRequirements={setRequirements}
+            lengthWords={lengthWords}
+            onLengthWords={setLengthWords}
+            rounds={rounds}
+            onRounds={setRounds}
+            kbList={kbList}
+            selectedKBs={selectedKBs}
+            onToggleKB={(name) =>
+              setSelectedKBs((prev) =>
+                prev.includes(name) ? prev.filter((k) => k !== name) : [...prev, name],
+              )
+            }
+            canStart={canStart}
+            starting={active?.starting ?? false}
+            onStart={startWriting}
+            material={material}
+            onRemoveMaterial={backToConfig}
+            onRetryMaterial={retryMaterial}
+          />
+          {/* 生成流（同页向下展开；随左侧文件切换） */}
+          <div ref={streamAnchorRef}>
+            {streamVisible && active && (
+              <GenerateView
+                items={active.items}
+                stageLabel={active.stageLabel}
+                exporting={active.exporting}
+                materialChars={active.materialChars}
+                error={active.error}
+                result={active.result}
+                revising={active.revising}
+                onStop={stopWriting}
+                onBackToConfig={backToConfig}
+                onRevise={handleRevise}
+                onUndo={handleUndo}
+              />
+            )}
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+/** 按文件隔离的写作会话状态：材料解析 + 生成流 + 成稿 */
+interface FileSession {
+  material: Material | null;
+  items: StreamItem[];
+  result: ResultData | null;
+  error: string | null;
+  stageLabel: string;
+  exporting: boolean;
+  revising: boolean;
+  starting: boolean;
+  materialChars: number | null;
+}
+
+function emptySession(): FileSession {
+  return {
+    material: null,
+    items: [],
+    result: null,
+    error: null,
+    stageLabel: "",
+    exporting: false,
+    revising: false,
+    starting: false,
+    materialChars: null,
+  };
+}
+
+/** 文种 → 彩色图标配色（与主页彩色文档图标呼应） */
+const TYPE_TINTS: Record<string, string> = {
+  红头文件: "bg-red-50 text-red-500",
+  通知: "bg-orange-50 text-orange-500",
+  请示: "bg-amber-50 text-amber-500",
+  批复: "bg-rose-50 text-rose-500",
+  工作报告: "bg-blue-50 text-blue-500",
+  调研报告: "bg-cyan-50 text-cyan-600",
+  领导讲话稿: "bg-violet-50 text-violet-500",
+  会议纪要: "bg-indigo-50 text-indigo-500",
+  可行性研究报告: "bg-sky-50 text-sky-600",
+  项目立项建议书: "bg-fuchsia-50 text-fuchsia-500",
+  "工作/实施方案": "bg-blue-50 text-blue-500",
+  工作总结: "bg-emerald-50 text-emerald-600",
+  述职报告: "bg-teal-50 text-teal-600",
+  汇报材料: "bg-green-50 text-green-600",
+  "管理制度/办法": "bg-slate-100 text-slate-500",
+  工作简报: "bg-yellow-50 text-yellow-600",
+  政策解读材料: "bg-orange-50 text-orange-500",
+  新闻宣传稿: "bg-pink-50 text-pink-500",
+  大事记: "bg-purple-50 text-purple-500",
+  "倡议书/公开信": "bg-red-50 text-red-400",
+  数据统计报表: "bg-blue-50 text-blue-400",
+  会议方案: "bg-indigo-50 text-indigo-400",
+  经验交流材料: "bg-green-50 text-green-500",
+};
+
+function typeTint(docType: string): string {
+  return TYPE_TINTS[docType] ?? "bg-primary/10 text-primary";
+}
+
+function labelOf(stage: string, round?: number): string {
+  switch (stage) {
+    case "draft":
+      return "写手起草";
+    case "review":
+      return "审查把关";
+    case "rewrite":
+      return `推稿复写${round ? ` 第${round}轮` : ""}`;
+    case "audit":
+      return "审核复核";
+    case "finalize":
+      return "审批定稿";
+    case "revise":
+      return "局部微调";
+    default:
+      return stage;
+  }
+}
+
+// ── 分段控件（iOS Segmented Control，高冷灰）───────────────────────────────
+
+function Segmented({
+  options,
+  value,
+  onChange,
+}: {
+  options: string[];
+  /** 受控索引；不传则组件内部自持 */
+  value?: number;
+  onChange?: (index: number) => void;
+}) {
+  const [inner, setActive] = useState(0);
+  const active = value ?? inner;
+  return (
+    <div className="rounded-lg bg-gray-100 p-0.5 flex text-[13px] font-medium">
+      {options.map((opt, i) => (
+        <button
+          key={opt}
+          onClick={() => {
+            setActive(i);
+            onChange?.(i);
+          }}
+          className={
+            "flex-1 rounded-md py-1.5 transition-all " +
+            (active === i
+              ? "bg-white shadow-sm text-[#1D1D1F]"
+              : "text-gray-400 hover:text-gray-600")
+          }
+        >
+          {opt}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** 文件类型 → 图标 + 彩色（Word 蓝 / 表格 绿 / PPT 橙 / PDF 红，与主页文档色一致） */
+function materialVisual(name: string): { Icon: LucideIcon; cls: string } {
+  if (/\.(xlsx|csv)$/i.test(name))
+    return { Icon: FileSpreadsheet, cls: "text-emerald-500 bg-emerald-50" };
+  if (/\.pptx?$/i.test(name))
+    return { Icon: Presentation, cls: "text-orange-500 bg-orange-50" };
+  if (/\.pdf$/i.test(name))
+    return { Icon: FileText, cls: "text-red-500 bg-red-50" };
+  if (/\.(docx?|txt|md)$/i.test(name))
+    return { Icon: FileText, cls: "text-blue-500 bg-blue-50" };
+  return { Icon: FileStack, cls: "text-gray-400 bg-gray-100" };
+}
+
+function fmtTime(ts: number): string {
+  const d = new Date(ts);
+  const today = new Date();
+  const sameDay =
+    d.getFullYear() === today.getFullYear() &&
+    d.getMonth() === today.getMonth() &&
+    d.getDate() === today.getDate();
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return sameDay ? `${hh}:${mm}` : `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+function CloudList({
+  files,
+  selected,
+  onSelect,
+}: {
+  files: CloudFile[];
+  selected: string | null;
+  onSelect: (name: string) => void;
+}) {
+  if (files.length === 0) {
+    return (
+      <div className="text-[13px] text-gray-300 py-4 text-center">
+        云端暂无文档
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-0.5">
+      {files.map((f) => (
+        <button
+          key={f.name}
+          onClick={() => onSelect(f.name)}
+          className={
+            "flex items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors " +
+            (selected === f.name
+              ? "bg-gray-100"
+              : "hover:bg-gray-50")
+          }
+        >
+          <FileStack
+            className={
+              "w-4 h-4 shrink-0 " +
+              (selected === f.name ? "text-primary" : "text-gray-300")
+            }
+            strokeWidth={1.5}
+          />
+          <span
+            className={
+              "flex-1 text-[13px] truncate " +
+              (selected === f.name ? "text-primary font-medium" : "text-gray-600")
+            }
+          >
+            {f.name}
+          </span>
+          <span className="text-[11px] text-gray-300">{fmtSize(f.size)}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function fmtSize(size: number): string {
+  if (!size) return "";
+  if (size < 1024) return `${size}B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(0)}KB`;
+  return `${(size / 1024 / 1024).toFixed(1)}MB`;
+}
+
+// ── 材料状态展示（左栏卡片 + 设置卡内联条）──────────────────────────────────
+
+function fmtChars(n: number): string {
+  if (n >= 10_000) return `${(n / 10_000).toFixed(1)} 万字`;
+  return `${n} 字`;
+}
+
+function MaterialStatusLine({
+  material,
+}: {
+  material: Material;
+}): { text: string; tone: "muted" | "warn" } {
+  if (material.status === "uploading")
+    return { text: "上传解析中…", tone: "muted" };
+  if (material.status === "error")
+    return { text: material.error, tone: "warn" };
+  if (material.parseError)
+    return { text: material.parseError, tone: "warn" };
+  return { text: `已解析 ${fmtChars(material.chars)}`, tone: "muted" };
+}
+
+function MaterialCard({
+  material,
+  onRemove,
+  onRetry,
+}: {
+  material: Material;
+  onRemove: () => void;
+  onRetry: (name: string) => void;
+}) {
+  const line = MaterialStatusLine({ material });
+  const warn = line.tone === "warn";
+  const canRetry =
+    material.status === "error" ||
+    (material.status === "ready" && !!material.parseError);
+  return (
+    <div
+      className={
+        "mt-3 rounded-lg border px-3 py-2 flex items-start gap-2 shrink-0 " +
+        (warn ? "bg-[#FFF5F3] border-[#FFD5CC]" : "bg-gray-50 border-gray-200")
+      }
+    >
+      <div className="flex-1 min-w-0">
+        <div className="text-[12.5px] text-[#1D1D1F] truncate">{material.name}</div>
+        <div
+          className={
+            "mt-0.5 text-[11px] leading-4 " +
+            (warn ? "text-[#D93025]" : "text-gray-400")
+          }
+        >
+          {material.status === "uploading" && (
+            <Loader2 className="w-3 h-3 inline-block mr-1 -mt-0.5 animate-spin text-gray-400" />
+          )}
+          {line.text}
+        </div>
+        {canRetry && (
+          <button
+            onClick={() => onRetry(material.name)}
+            className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-[#FFD5CC] bg-white px-2 py-0.5 text-[11px] text-[#D93025] hover:bg-[#FFF5F3] active:scale-[0.97] transition"
+          >
+            <Loader2 className="w-3 h-3" strokeWidth={2} />
+            重试解析
+          </button>
+        )}
+      </div>
+      <button
+        onClick={onRemove}
+        className="text-gray-300 hover:text-gray-600 transition-colors shrink-0"
+      >
+        <X className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  );
+}
+
+function MaterialInline({
+  material,
+  onRemove,
+  onRetry,
+}: {
+  material: Material;
+  onRemove: () => void;
+  onRetry: (name: string) => void;
+}) {
+  const line = MaterialStatusLine({ material });
+  const warn = line.tone === "warn";
+  const canRetry =
+    material.status === "error" ||
+    (material.status === "ready" && !!material.parseError);
+  return (
+    <div
+      className={
+        "mb-5 rounded-xl border px-3.5 py-2.5 flex items-center gap-2 " +
+        (warn ? "bg-[#FFF5F3] border-[#FFD5CC]" : "bg-gray-50 border-gray-200")
+      }
+    >
+      <FileStack
+        className={
+          "w-4 h-4 shrink-0 " + (warn ? "text-[#D93025]" : "text-gray-400")
+        }
+        strokeWidth={1.5}
+      />
+      <span className="text-[13px] text-[#1D1D1F] truncate">
+        参考材料：{material.name}
+      </span>
+      <span
+        className={
+          "text-[11.5px] shrink-0 " + (warn ? "text-[#D93025]" : "text-gray-400")
+        }
+      >
+        {material.status === "uploading" ? "解析中…" : line.text}
+      </span>
+      {canRetry && (
+        <button
+          onClick={() => onRetry(material.name)}
+          className="shrink-0 rounded-md border border-[#FFD5CC] bg-white px-2 py-0.5 text-[11px] text-[#D93025] hover:bg-[#FFF5F3] active:scale-[0.97] transition"
+        >
+          重试解析
+        </button>
+      )}
+      <button
+        onClick={onRemove}
+        className="text-gray-300 hover:text-gray-600 transition-colors shrink-0"
+      >
+        <X className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  );
+}
+
+// ── 配置步（文种 + 写作设置 + 开始）────────────────────────────────────────
+
+interface ConfigStepProps {
+  agent: "claude" | "opencode";
+  onAgent: (a: "claude" | "opencode") => void;
+  docType: string;
+  onDocType: (v: string) => void;
+  title: string;
+  onTitle: (v: string) => void;
+  publisher: string;
+  onPublisher: (v: string) => void;
+  docNumber: string;
+  onDocNumber: (v: string) => void;
+  audience: string;
+  onAudience: (v: string) => void;
+  style: string;
+  onStyle: (v: string) => void;
+  requirements: string;
+  onRequirements: (v: string) => void;
+  lengthWords: string;
+  onLengthWords: (v: string) => void;
+  rounds: number;
+  onRounds: (v: number) => void;
+  kbList: KnowledgeBase[] | null;
+  selectedKBs: string[];
+  onToggleKB: (name: string) => void;
+  canStart: boolean;
+  starting: boolean;
+  onStart: () => void;
+  material: Material | null;
+  onRemoveMaterial: () => void;
+  onRetryMaterial: (name: string) => void;
+}
+
+function ConfigStep(p: ConfigStepProps) {
+  return (
+    <div className="flex flex-col gap-4 pb-2">
+      {/* 一 选择文种 */}
+      <section className="bg-white rounded-2xl border border-black/6 shadow-sm p-6">
+        <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-2.5">
+            <span className="flex w-6 h-6 rounded-md bg-primary items-center justify-center">
+              <FileStack className="w-3.5 h-3.5 text-white" strokeWidth={1.75} />
+            </span>
+            <h2 className="text-[15px] font-semibold text-[#1D1D1F]">选择文种</h2>
+          </div>
+          <span className="text-[12px] text-gray-300">{layoutHint(p.docType)}</span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
+          {DOC_TYPES.map((t) => {
+            const Icon = DOC_TYPE_ICONS[t] ?? FileStack;
+            const active = p.docType === t;
+            return (
+              <button
+                key={t}
+                onClick={() => p.onDocType(t)}
+                className={
+                  "relative flex items-center gap-2 rounded-xl px-3 py-2.5 text-[13.5px] font-medium border transition-all active:scale-[0.98] " +
+                  (active
+                    ? "bg-white text-primary border-primary shadow-[0_1px_6px_rgba(0,0,0,0.08)]"
+                    : "bg-white text-gray-500 border-gray-200 hover:border-gray-300 hover:text-gray-700")
+                }
+              >
+                <span
+                  className={
+                    "flex w-7 h-7 shrink-0 rounded-lg items-center justify-center transition-colors " +
+                    typeTint(t)
+                  }
+                >
+                  <Icon className="w-4 h-4" strokeWidth={1.75} />
+                </span>
+                <span className="truncate">{t}</span>
+                {active && (
+                  <span className="absolute -top-1.5 -right-1.5 flex w-[18px] h-[18px] rounded-full bg-primary items-center justify-center">
+                    <Check className="w-3 h-3 text-white" strokeWidth={2.5} />
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* 二 写作设置 */}
+      <section className="bg-white rounded-2xl border border-black/6 shadow-sm p-6">
+        <div className="flex items-center justify-between mb-5">
+          <div className="flex items-center gap-2.5">
+            <span className="flex w-6 h-6 rounded-md bg-primary items-center justify-center">
+              <Settings2 className="w-3.5 h-3.5 text-white" strokeWidth={1.75} />
+            </span>
+            <h2 className="text-[15px] font-semibold text-[#1D1D1F]">写作设置</h2>
+          </div>
+          <span className="text-[12px] text-gray-300">
+            「{p.docType}」定制要素
+          </span>
+        </div>
+
+        {/* AI 引擎（默认 Claude Code） */}
+        <div className="mb-5">
+          <div className="text-[13px] text-gray-500 mb-2">
+            AI 引擎 <span className="text-gray-300">（执行写作与推稿的 agent）</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 max-w-md">
+            {([
+              { id: "claude", label: "Claude Code" },
+              { id: "opencode", label: "Opencode" },
+            ] as const).map((opt) => {
+              const active = p.agent === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  onClick={() => p.onAgent(opt.id)}
+                  className={
+                    "rounded-xl px-3.5 py-2.5 text-[13.5px] font-medium border transition-all active:scale-[0.98] " +
+                    (active
+                      ? "bg-white text-primary border-primary shadow-[0_1px_6px_rgba(0,0,0,0.08)]"
+                      : "bg-white text-gray-500 border-gray-200 hover:border-gray-300 hover:text-gray-700")
+                  }
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* 引用知识库 */}
+        {p.kbList !== null && (
+          <div className="mb-5">
+            <div className="text-[13px] text-gray-500 mb-2">
+              引用知识库 <span className="text-gray-300">（可多选，写作时作为参考资料）</span>
+            </div>
+            {p.kbList.length === 0 ? (
+              <div className="text-[13px] text-gray-300">当前空间暂无可用知识库</div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {p.kbList.map((kb) => {
+                  const active = p.selectedKBs.includes(kb.name);
+                  return (
+                    <button
+                      key={kb.id}
+                      onClick={() => p.onToggleKB(kb.name)}
+                      className={
+                        "rounded-full px-3.5 py-1.5 text-[13px] border transition-all " +
+                        (active
+                          ? "bg-primary text-white border-primary"
+                          : "bg-white text-gray-500 border-gray-200 hover:border-gray-400 hover:text-gray-700")
+                      }
+                    >
+                      {kb.name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 标题 */}
+        <div className="mb-5">
+          <label className="block text-[13px] text-gray-500 mb-1.5">标题 / 主题</label>
+          <input
+            value={p.title}
+            onChange={(e) => p.onTitle(e.target.value)}
+            placeholder="如：解读某市四年度政策"
+            className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-primary transition placeholder:text-gray-300"
+          />
+        </div>
+
+        {/* 材料提示 */}
+        {p.material && (
+          <MaterialInline
+            material={p.material}
+            onRemove={p.onRemoveMaterial}
+            onRetry={p.onRetryMaterial}
+          />
+        )}
+
+        {/* 三个可选要素 */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
+          <div>
+            <label className="block text-[13px] text-gray-500 mb-1.5">
+              发布机关{REDHEAD_DOC_TYPES.has(p.docType) ? "（红头标志）" : ""}
+            </label>
+            <input
+              value={p.publisher}
+              onChange={(e) => p.onPublisher(e.target.value)}
+              placeholder="可留空"
+              className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-primary transition placeholder:text-gray-300"
+            />
+          </div>
+          <div>
+            <label className="block text-[13px] text-gray-500 mb-1.5">
+              受文 / 解读对象
+            </label>
+            <input
+              value={p.audience}
+              onChange={(e) => p.onAudience(e.target.value)}
+              placeholder="自动 / 不指定"
+              className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-primary transition placeholder:text-gray-300"
+            />
+          </div>
+          <div>
+            <label className="block text-[13px] text-gray-500 mb-1.5">
+              行文口径 / 解读形式
+            </label>
+            <input
+              value={p.style}
+              onChange={(e) => p.onStyle(e.target.value)}
+              placeholder="自动 / 不指定"
+              className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-primary transition placeholder:text-gray-300"
+            />
+          </div>
+        </div>
+
+        {/* 红头文件：发文字号 */}
+        {REDHEAD_DOC_TYPES.has(p.docType) && (
+          <div className="mb-5">
+            <label className="block text-[13px] text-gray-500 mb-1.5">
+              发文字号 <span className="text-gray-300">（可留空，留空则不排字号行）</span>
+            </label>
+            <input
+              value={p.docNumber}
+              onChange={(e) => p.onDocNumber(e.target.value)}
+              placeholder="如：X政发〔2026〕5号"
+              className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-primary transition placeholder:text-gray-300"
+            />
+          </div>
+        )}
+
+        {/* 其他要求 */}
+        <div className="mb-5">
+          <label className="block text-[13px] text-gray-500 mb-1.5">
+            其他要求 <span className="text-gray-300">（可留空）</span>
+          </label>
+          <textarea
+            value={p.requirements}
+            onChange={(e) => p.onRequirements(e.target.value)}
+            rows={3}
+            placeholder="例如：结合本单位实际情况，重点写保障措施部分；文中数据以上年度报表为准…"
+            className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-primary transition resize-none placeholder:text-gray-300"
+          />
+        </div>
+
+        {/* 篇幅 + 轮数 + 开始 */}
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr_auto] gap-3 items-end">
+          <div>
+            <label className="block text-[13px] text-gray-500 mb-1.5">
+              篇幅（字，0 = 自动）
+            </label>
+            <input
+              type="number"
+              min={0}
+              value={p.lengthWords}
+              onChange={(e) => p.onLengthWords(e.target.value)}
+              className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-primary transition"
+            />
+          </div>
+          <div>
+            <label className="block text-[13px] text-gray-500 mb-1.5">
+              推稿复写轮数
+            </label>
+            <div className="flex gap-0 rounded-xl bg-gray-100 p-0.5">
+              {[1, 2, 3].map((n) => (
+                <button
+                  key={n}
+                  onClick={() => p.onRounds(n)}
+                  className={
+                    "flex-1 rounded-lg py-2 text-[13.5px] font-medium transition-all " +
+                    (p.rounds === n
+                      ? "bg-white text-[#1D1D1F] shadow-sm"
+                      : "text-gray-400 hover:text-gray-600")
+                  }
+                >
+                  {n} 轮
+                </button>
+              ))}
+            </div>
+          </div>
+          <button
+            onClick={p.onStart}
+            disabled={!p.canStart}
+            className={
+              "lg:w-44 rounded-xl py-3 text-[15px] font-semibold transition-all " +
+              (p.canStart
+                ? "bg-primary text-white hover:bg-primary/90 active:scale-[0.99] shadow-[0_2px_10px_rgba(206,75,50,0.35)]"
+                : "bg-gray-100 text-gray-300 cursor-not-allowed")
+            }
+          >
+            {p.starting ? "正在准备…" : "开始生成"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}

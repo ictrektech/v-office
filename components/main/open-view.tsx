@@ -12,6 +12,7 @@ import {
   X,
   Loader2,
   Pencil,
+  PenLine,
 } from "lucide-react";
 import { useExtracted } from "next-intl";
 import { cn } from "@/lib/utils";
@@ -301,6 +302,20 @@ export function OpenView({
               </Link>
             );
           })}
+          {/* AI 公文写作子页面入口（与新建文档卡片并列） */}
+          <Link
+            href="/writing"
+            className="flex flex-col items-center justify-center gap-2 p-4 bg-muted/40 dark:bg-white/5 border border-border rounded-2xl hover:shadow-lg hover:-translate-y-0.5 hover:border-violet-300 dark:hover:border-violet-500/40 transition-all group overflow-hidden md:flex-1 md:min-w-0"
+          >
+            <span className="flex w-10 h-10 rounded-xl items-center justify-center bg-violet-50 dark:bg-violet-950/50 transition-all duration-300 group-hover:bg-violet-500">
+              <PenLine className="w-5 h-5 text-violet-600 dark:text-violet-400 group-hover:text-white transition-colors" />
+            </span>
+            <span className="text-xs font-semibold text-muted-foreground group-hover:text-foreground transition-colors">
+              {language.toLowerCase().startsWith("zh")
+                ? "AI 公文写作"
+                : "AI Writing"}
+            </span>
+          </Link>
         </div>
       </section>
 
