@@ -102,6 +102,17 @@ COPY --from=documentserver /var/www/onlyoffice/documentserver/sdkjs         ./v$
 COPY --from=documentserver /var/www/onlyoffice/documentserver/web-apps      ./v${DS_VERSION}-${HASH}/web-apps
 COPY --from=documentserver /var/www/onlyoffice/documentserver/sdkjs-plugins ./v${DS_VERSION}-${HASH}/sdkjs-plugins
 
+# The editor shell (web-apps documenteditor/main/app.js) fetches
+# `../../../../themes.json` on startup, which resolves to the kernel root
+# (v${DS_VERSION}-${HASH}/themes.json). A full DocumentServer deployment
+# serves this file from its web root, but the source image does not ship
+# one — without it the shell fails with "failed to load/parse themes.json"
+# and the editor aborts with a generic error dialog. Fall back to the
+# theme manifest shipped inside web-apps itself (same source, always
+# version-matched), so every rebuild carries the file automatically.
+RUN cp "./v${DS_VERSION}-${HASH}/web-apps/apps/common/main/resources/themes/themes.json" \
+       "./v${DS_VERSION}-${HASH}/themes.json"
+
 # api.js is generated from a template at runtime in a full DocumentServer
 # deployment, but here we serve it statically — copy the template as-is.
 RUN cp "./v${DS_VERSION}-${HASH}/web-apps/apps/api/documents/api.js.tpl" \
