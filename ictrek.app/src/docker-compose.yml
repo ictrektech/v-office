@@ -28,7 +28,7 @@ x-v-office-web-base: &v-office-web-base
     - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-top-open.service=${COMPOSE_PROJECT_NAME:-v-office}-web"
     - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-top-open.middlewares=${COMPOSE_PROJECT_NAME:-v-office}-top-open-redirect"
     - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-v-office}-top-open-redirect.redirectregex.regex=^(https?://[^/]+)/app/com\\.ictrek\\.v-office/?(?:\\?.*)?$"
-    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-v-office}-top-open-redirect.redirectregex.replacement=$${1}/#/app/com.ictrek.v-office/com-ictrek-v-office/v-office"
+    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-v-office}-top-open-redirect.redirectregex.replacement=$${1}/#/app/com.ictrek.v-office/v-office"
     - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-v-office}-top-open-redirect.redirectregex.permanent=false"
     - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-web.rule=PathPrefix(`/app/com.ictrek.v-office`)"
     - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-web.service=${COMPOSE_PROJECT_NAME:-v-office}-web"
