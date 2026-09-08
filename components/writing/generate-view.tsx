@@ -698,7 +698,31 @@ function downloadBlob(blob: Blob, name: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
+/**
+ * 带鉴权下载：/writing/file 需要 Bearer JWT，普通 <a href> 带不了请求头
+ * （浏览器直接 401），必须 fetch 成 blob 再触发保存。
+ */
+async function authedDownload(file: ResultFile): Promise<void> {
+  const resp = await fetch(file.url, { headers: await authHeaders() });
+  if (!resp.ok) throw new Error(`下载失败（${resp.status}）`);
+  downloadBlob(new Blob([await resp.arrayBuffer()]), file.name);
+}
+
 function ExportWord({ file }: { file?: ResultFile }) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const onClick = useCallback(async () => {
+    if (!file || busy) return;
+    setBusy(true);
+    setFailed(false);
+    try {
+      await authedDownload(file);
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  }, [file, busy]);
   if (!file) {
     return (
       <button
@@ -710,17 +734,36 @@ function ExportWord({ file }: { file?: ResultFile }) {
     );
   }
   return (
-    <a
-      href={file.url}
-      download={file.name}
-      className="inline-flex items-center gap-2 rounded-xl bg-[#007AFF] px-4 py-2.5 text-[14px] font-medium text-white shadow-sm hover:bg-[#0071EB] active:scale-[0.98] transition"
+    <button
+      onClick={onClick}
+      disabled={busy}
+      className={
+        "inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-[14px] font-medium shadow-sm transition active:scale-[0.98] " +
+        (failed
+          ? "bg-[#FFF5F3] text-[#D93025]"
+          : "bg-[#007AFF] text-white hover:bg-[#0071EB]")
+      }
     >
-      📄 下载 Word
-    </a>
+      {busy ? "⏳ 下载中…" : failed ? "📄 下载失败，点击重试" : "📄 下载 Word"}
+    </button>
   );
 }
 
 function ExportExcel({ file }: { file?: ResultFile }) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const onClick = useCallback(async () => {
+    if (!file || busy) return;
+    setBusy(true);
+    setFailed(false);
+    try {
+      await authedDownload(file);
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  }, [file, busy]);
   if (!file) {
     return (
       <button
@@ -733,13 +776,18 @@ function ExportExcel({ file }: { file?: ResultFile }) {
     );
   }
   return (
-    <a
-      href={file.url}
-      download={file.name}
-      className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-[14px] font-medium text-gray-700 hover:border-gray-300 active:scale-[0.98] transition"
+    <button
+      onClick={onClick}
+      disabled={busy}
+      className={
+        "inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-[14px] font-medium transition active:scale-[0.98] " +
+        (failed
+          ? "border-[#FFD5CC] bg-[#FFF5F3] text-[#D93025]"
+          : "border-gray-200 bg-white text-gray-700 hover:border-gray-300")
+      }
     >
-      📊 下载 Excel
-    </a>
+      {busy ? "⏳ 下载中…" : failed ? "📊 下载失败，点击重试" : "📊 下载 Excel"}
+    </button>
   );
 }
 
@@ -752,7 +800,7 @@ function ExportPdf({ file }: { file?: ResultFile }) {
     setBusy(true);
     setFailed(false);
     try {
-      const resp = await fetch(file.url);
+      const resp = await fetch(file.url, { headers: await authHeaders() });
       if (!resp.ok) throw new Error(`获取文档失败（${resp.status}）`);
       const buf = await resp.arrayBuffer();
       const converter = new X2tConverter();
