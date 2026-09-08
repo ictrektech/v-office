@@ -74,6 +74,8 @@ import {
   WritingClient,
   restoreWriting,
   checkWritingService,
+  API_BASE,
+  authHeaders,
   type WritingConfig,
   type WritingEvent,
 } from "@/utils/writing/client";
@@ -711,6 +713,36 @@ export function WritingView() {
     clientsRef.current.get(activeName)?.stop();
   }, [activeName]);
 
+  // 上传到云端：把当前成稿（生成/微调后最新版）导出并上传 v-office 云存储
+  const handleUploadCloud = useCallback(
+    async (): Promise<{ ok: boolean; message: string }> => {
+      const name = activeName;
+      const sessionId = name ? sessionsRef.current[name]?.sessionId : undefined;
+      const config = configRef.current;
+      if (!sessionId || !config) {
+        return { ok: false, message: "缺少写作会话或配置，请重新生成后再试" };
+      }
+      try {
+        const resp = await fetch(`${API_BASE}/writing/deliver`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+          body: JSON.stringify({ session: sessionId, config }),
+        });
+        const data = (await resp.json().catch(() => null)) as
+          | { error?: string; files?: { name: string; url: string; kind: string }[] }
+          | null;
+        if (!resp.ok) {
+          return { ok: false, message: String(data?.error ?? `上传失败（HTTP ${resp.status}）`) };
+        }
+        const n = data?.files?.length ?? 0;
+        return { ok: true, message: `已上传 ${n} 个文件到云端` };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : "网络错误" };
+      }
+    },
+    [activeName],
+  );
+
   const backToConfig = useCallback(() => {
     const name = activeName;
     if (name) {
@@ -1047,6 +1079,7 @@ export function WritingView() {
                 onBackToConfig={backToConfig}
                 onRevise={handleRevise}
                 onUndo={handleUndo}
+                onUploadCloud={handleUploadCloud}
                 onReset={() => handleReset(activeName)}
               />
             )}
