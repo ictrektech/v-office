@@ -24,6 +24,9 @@ import { isVOSMode } from "@/utils/vos/fastpath";
 export type StreamKind =
   | "parse"
   | "draft"
+  | "reviewfix"
+  | "signoff"
+  // 旧五阶段（历史会话恢复）
   | "review"
   | "rewrite"
   | "audit"
@@ -347,6 +350,10 @@ function stageState(items: StreamItem[], key: StreamKind): "active" | "done" | "
 const KIND_META: Record<StreamKind, { char: string; grad: string }> = {
   parse: { char: "析", grad: "from-[#A6ADB8] to-[#7C838E]" },
   draft: { char: "写", grad: "from-[#5CA1FA] to-[#2E6FE5]" },
+  // 三阶段新管线
+  reviewfix: { char: "改", grad: "from-[#FF6A61] to-[#E5452F]" },
+  signoff: { char: "定", grad: "from-[#4A4A4E] to-[#1D1D1F]" },
+  // 旧五阶段（历史会话恢复）
   review: { char: "审", grad: "from-[#FF6A61] to-[#E5452F]" },
   rewrite: { char: "推", grad: "from-[#FF8F4D] to-[#EC5B22]" },
   audit: { char: "核", grad: "from-[#F2B33D] to-[#D98E0B]" },

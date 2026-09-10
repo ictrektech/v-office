@@ -167,7 +167,6 @@ export function WritingView() {
   const [style, setStyle] = useState("");
   const [requirements, setRequirements] = useState("");
   const [lengthWords, setLengthWords] = useState("0");
-  const [rounds, setRounds] = useState(2);
   const [selectedKBs, setSelectedKBs] = useState<string[]>([]);
 
   // ── 左栏 ──
@@ -411,7 +410,11 @@ export function WritingView() {
         const key = stage === "rewrite" ? `rewrite-${round ?? 1}` : stage === "revise" ? `revise-${Date.now()}` : stage;
         if (status === "start") {
           const labels: Record<string, string> = {
+            // 三阶段新管线
             draft: "写手起草（写手 agent）",
+            reviewfix: "审查改稿（审改团队）",
+            signoff: "审批定稿（定稿签发人）",
+            // 旧五阶段（历史会话恢复）
             review: "审查意见（审查 agent）",
             rewrite: `推稿复写（第 ${round ?? 1} 轮 · 推稿团队）`,
             audit: "审核复核（审核 agent）",
@@ -594,7 +597,6 @@ export function WritingView() {
         ...(style.trim() ? { style: style.trim() } : {}),
         ...(requirements.trim() ? { requirements: requirements.trim() } : {}),
         lengthWords: Math.max(0, parseInt(lengthWords, 10) || 0),
-        rewriteRounds: rounds,
         ...(selectedKBs.length ? { knowledgeBaseNames: selectedKBs } : {}),
       };
       configRef.current = config;
@@ -618,7 +620,7 @@ export function WritingView() {
     } finally {
       patchSession(name, { starting: false });
     }
-  }, [activeName, docType, title, publisher, docNumber, audience, style, requirements, lengthWords, rounds, selectedKBs, agent, handleEvent, patchSession]);
+  }, [activeName, docType, title, publisher, docNumber, audience, style, requirements, lengthWords, selectedKBs, agent, handleEvent, patchSession]);
 
   // 确保该文件的写作客户端可用：没有则用记录的 sessionId 自动重连
   const ensureClient = useCallback(
@@ -1046,8 +1048,6 @@ export function WritingView() {
             onRequirements={setRequirements}
             lengthWords={lengthWords}
             onLengthWords={setLengthWords}
-            rounds={rounds}
-            onRounds={setRounds}
             kbList={kbList}
             selectedKBs={selectedKBs}
             onToggleKB={(name) =>
@@ -1156,8 +1156,14 @@ function typeTint(docType: string): string {
 
 function labelOf(stage: string, round?: number): string {
   switch (stage) {
+    // 三阶段新管线
     case "draft":
       return "写手起草";
+    case "reviewfix":
+      return "审查改稿";
+    case "signoff":
+      return "审批定稿";
+    // 旧五阶段（历史会话恢复）
     case "review":
       return "审查把关";
     case "rewrite":
@@ -1473,8 +1479,6 @@ interface ConfigStepProps {
   onRequirements: (v: string) => void;
   lengthWords: string;
   onLengthWords: (v: string) => void;
-  rounds: number;
-  onRounds: (v: number) => void;
   kbList: KnowledgeBase[] | null;
   selectedKBs: string[];
   onToggleKB: (name: string) => void;
@@ -1709,27 +1713,6 @@ function ConfigStep(p: ConfigStepProps) {
               onChange={(e) => p.onLengthWords(e.target.value)}
               className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-primary transition"
             />
-          </div>
-          <div>
-            <label className="block text-[13px] text-gray-500 mb-1.5">
-              推稿复写轮数
-            </label>
-            <div className="flex gap-0 rounded-xl bg-gray-100 p-0.5">
-              {[1, 2, 3].map((n) => (
-                <button
-                  key={n}
-                  onClick={() => p.onRounds(n)}
-                  className={
-                    "flex-1 rounded-lg py-2 text-[13.5px] font-medium transition-all " +
-                    (p.rounds === n
-                      ? "bg-white text-[#1D1D1F] shadow-sm"
-                      : "text-gray-400 hover:text-gray-600")
-                  }
-                >
-                  {n} 轮
-                </button>
-              ))}
-            </div>
           </div>
           <button
             onClick={p.onStart}
