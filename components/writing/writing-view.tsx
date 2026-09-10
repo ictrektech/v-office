@@ -1475,6 +1475,44 @@ function SectionHeader({
 function ConfigStep(p: ConfigStepProps) {
   return (
     <div className="flex flex-col gap-5 pb-2">
+      {/* 选择文种 */}
+      <section className="bg-white rounded-2xl border border-black/6 shadow-sm p-6">
+        <SectionHeader icon={FileStack} title="选择文种" subtitle="不同文种有不同的格式与写作规范" />
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
+          {DOC_TYPES.map((t) => {
+            const Icon = DOC_TYPE_ICONS[t] ?? FileStack;
+            const active = p.docType === t;
+            return (
+              <button
+                key={t}
+                onClick={() => p.onDocType(t)}
+                className={
+                  "relative flex items-center gap-2 rounded-xl px-3 py-2.5 text-[13.5px] font-medium border transition-all active:scale-[0.98] " +
+                  (active
+                    ? "bg-white text-[#FF7A45] border-[#FF7A45] shadow-[0_1px_6px_rgba(255,122,69,0.12)]"
+                    : "bg-white text-gray-500 border-gray-200 hover:border-gray-300 hover:text-gray-700")
+                }
+              >
+                <span
+                  className={
+                    "flex w-7 h-7 shrink-0 rounded-lg items-center justify-center transition-colors " +
+                    typeTint(t)
+                  }
+                >
+                  <Icon className="w-4 h-4" strokeWidth={1.75} />
+                </span>
+                <span className="truncate">{t}</span>
+                {active && (
+                  <span className="absolute -top-1.5 -right-1.5 flex w-[18px] h-[18px] rounded-full bg-[#FF7A45] items-center justify-center">
+                    <Check className="w-3 h-3 text-white" strokeWidth={2.5} />
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
       {/* 选择模型 */}
       <section className="bg-white rounded-2xl border border-black/6 shadow-sm p-6">
         <SectionHeader
@@ -1536,44 +1574,6 @@ function ConfigStep(p: ConfigStepProps) {
           placeholder="如：解读某市四年度政策，重点说明背景、主要内容和落实要求..."
           className="w-full rounded-xl border border-gray-200 px-4 py-3 text-[15px] text-[#1D1D1F] outline-none focus:border-[#FF7A45] focus:ring-2 focus:ring-[#FF7A45]/10 transition resize-none placeholder:text-gray-300"
         />
-      </section>
-
-      {/* 选择文种 */}
-      <section className="bg-white rounded-2xl border border-black/6 shadow-sm p-6">
-        <SectionHeader icon={FileStack} title="选择文种" subtitle="不同文种有不同的格式与写作规范" />
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
-          {DOC_TYPES.map((t) => {
-            const Icon = DOC_TYPE_ICONS[t] ?? FileStack;
-            const active = p.docType === t;
-            return (
-              <button
-                key={t}
-                onClick={() => p.onDocType(t)}
-                className={
-                  "relative flex items-center gap-2 rounded-xl px-3 py-2.5 text-[13.5px] font-medium border transition-all active:scale-[0.98] " +
-                  (active
-                    ? "bg-white text-[#FF7A45] border-[#FF7A45] shadow-[0_1px_6px_rgba(255,122,69,0.12)]"
-                    : "bg-white text-gray-500 border-gray-200 hover:border-gray-300 hover:text-gray-700")
-                }
-              >
-                <span
-                  className={
-                    "flex w-7 h-7 shrink-0 rounded-lg items-center justify-center transition-colors " +
-                    typeTint(t)
-                  }
-                >
-                  <Icon className="w-4 h-4" strokeWidth={1.75} />
-                </span>
-                <span className="truncate">{t}</span>
-                {active && (
-                  <span className="absolute -top-1.5 -right-1.5 flex w-[18px] h-[18px] rounded-full bg-[#FF7A45] items-center justify-center">
-                    <Check className="w-3 h-3 text-white" strokeWidth={2.5} />
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
       </section>
 
       {/* 基础信息 */}
