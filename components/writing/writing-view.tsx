@@ -16,6 +16,7 @@ import {
   BarChart3,
   Bell,
   BookOpen,
+  Bot,
   Calendar,
   CalendarDays,
   Check,
@@ -35,6 +36,7 @@ import {
   Loader2,
   Mail,
   Megaphone,
+  MessageSquare,
   Mic,
   Newspaper,
   PenLine,
@@ -43,6 +45,7 @@ import {
   Search,
   Settings2,
   Shield,
+  Sparkles,
   Stamp,
   Upload,
   Users,
@@ -1490,20 +1493,97 @@ interface ConfigStepProps {
   onRetryMaterial: (name: string) => void;
 }
 
+function SectionHeader({
+  icon: Icon,
+  title,
+  subtitle,
+}: {
+  icon: LucideIcon;
+  title: string;
+  subtitle: string;
+}) {
+  return (
+    <div className="flex items-center gap-2.5 mb-5">
+      <span className="flex w-7 h-7 rounded-lg bg-[#FF7A45] items-center justify-center">
+        <Icon className="w-4 h-4 text-white" strokeWidth={1.75} />
+      </span>
+      <div>
+        <h2 className="text-[15px] font-semibold text-[#1D1D1F]">{title}</h2>
+        <p className="text-[12px] text-gray-400 mt-0.5">{subtitle}</p>
+      </div>
+    </div>
+  );
+}
+
 function ConfigStep(p: ConfigStepProps) {
   return (
-    <div className="flex flex-col gap-4 pb-2">
-      {/* 一 选择文种 */}
+    <div className="flex flex-col gap-5 pb-2">
+      {/* 选择模型 */}
       <section className="bg-white rounded-2xl border border-black/6 shadow-sm p-6">
-        <div className="flex items-center justify-between mb-5">
-          <div className="flex items-center gap-2.5">
-            <span className="flex w-6 h-6 rounded-md bg-primary items-center justify-center">
-              <FileStack className="w-3.5 h-3.5 text-white" strokeWidth={1.75} />
-            </span>
-            <h2 className="text-[15px] font-semibold text-[#1D1D1F]">选择文种</h2>
-          </div>
-          <span className="text-[12px] text-gray-300">{layoutHint(p.docType)}</span>
+        <SectionHeader
+          icon={Bot}
+          title="选择模型"
+          subtitle="不同模型在能力和效果上有所差异，请根据需求选择合适的模型"
+        />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-xl">
+          {([
+            { id: "claude", label: "Claude Code", desc: "擅长长文本与公文格式控制" },
+            { id: "opencode", label: "OpenCode", desc: "国产模型替代方案" },
+          ] as const).map((opt) => {
+            const active = p.agent === opt.id;
+            return (
+              <button
+                key={opt.id}
+                onClick={() => p.onAgent(opt.id)}
+                className={
+                  "relative flex items-center justify-between rounded-xl border px-4 py-3.5 transition-all active:scale-[0.98] " +
+                  (active
+                    ? "border-[#FF7A45] bg-orange-50/40 text-[#1D1D1F] shadow-[0_1px_6px_rgba(255,122,69,0.12)]"
+                    : "border-gray-200 bg-white text-gray-500 hover:border-gray-300 hover:text-gray-700")
+                }
+              >
+                <span className="flex items-center gap-3">
+                  <span
+                    className={
+                      "flex w-9 h-9 rounded-lg items-center justify-center " +
+                      (active ? "bg-[#FF7A45] text-white" : "bg-orange-100 text-orange-500")
+                    }
+                  >
+                    <Bot className="w-[18px] h-[18px]" strokeWidth={1.75} />
+                  </span>
+                  <span className="text-left">
+                    <span className="block text-[14px] font-medium text-[#1D1D1F]">
+                      {opt.label}
+                    </span>
+                    <span className="block text-[11px] text-gray-400 mt-0.5">{opt.desc}</span>
+                  </span>
+                </span>
+                {active && <Check className="w-5 h-5 text-[#FF7A45]" strokeWidth={2.5} />}
+              </button>
+            );
+          })}
         </div>
+      </section>
+
+      {/* 写作要求 */}
+      <section className="bg-white rounded-2xl border border-black/6 shadow-sm p-6">
+        <SectionHeader
+          icon={PenLine}
+          title="写作要求"
+          subtitle="请填写公文标题与核心需求，AI 将根据您的要求生成公文"
+        />
+        <textarea
+          value={p.title}
+          onChange={(e) => p.onTitle(e.target.value)}
+          rows={4}
+          placeholder="如：解读某市四年度政策，重点说明背景、主要内容和落实要求..."
+          className="w-full rounded-xl border border-gray-200 px-4 py-3 text-[15px] text-[#1D1D1F] outline-none focus:border-[#FF7A45] focus:ring-2 focus:ring-[#FF7A45]/10 transition resize-none placeholder:text-gray-300"
+        />
+      </section>
+
+      {/* 选择文种 */}
+      <section className="bg-white rounded-2xl border border-black/6 shadow-sm p-6">
+        <SectionHeader icon={FileStack} title="选择文种" subtitle="不同文种有不同的格式与写作规范" />
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
           {DOC_TYPES.map((t) => {
             const Icon = DOC_TYPE_ICONS[t] ?? FileStack;
@@ -1515,7 +1595,7 @@ function ConfigStep(p: ConfigStepProps) {
                 className={
                   "relative flex items-center gap-2 rounded-xl px-3 py-2.5 text-[13.5px] font-medium border transition-all active:scale-[0.98] " +
                   (active
-                    ? "bg-white text-primary border-primary shadow-[0_1px_6px_rgba(0,0,0,0.08)]"
+                    ? "bg-white text-[#FF7A45] border-[#FF7A45] shadow-[0_1px_6px_rgba(255,122,69,0.12)]"
                     : "bg-white text-gray-500 border-gray-200 hover:border-gray-300 hover:text-gray-700")
                 }
               >
@@ -1529,7 +1609,7 @@ function ConfigStep(p: ConfigStepProps) {
                 </span>
                 <span className="truncate">{t}</span>
                 {active && (
-                  <span className="absolute -top-1.5 -right-1.5 flex w-[18px] h-[18px] rounded-full bg-primary items-center justify-center">
+                  <span className="absolute -top-1.5 -right-1.5 flex w-[18px] h-[18px] rounded-full bg-[#FF7A45] items-center justify-center">
                     <Check className="w-3 h-3 text-white" strokeWidth={2.5} />
                   </span>
                 )}
@@ -1539,195 +1619,125 @@ function ConfigStep(p: ConfigStepProps) {
         </div>
       </section>
 
-      {/* 二 写作设置 */}
+      {/* 基础信息 */}
       <section className="bg-white rounded-2xl border border-black/6 shadow-sm p-6">
-        <div className="flex items-center justify-between mb-5">
-          <div className="flex items-center gap-2.5">
-            <span className="flex w-6 h-6 rounded-md bg-primary items-center justify-center">
-              <Settings2 className="w-3.5 h-3.5 text-white" strokeWidth={1.75} />
-            </span>
-            <h2 className="text-[15px] font-semibold text-[#1D1D1F]">写作设置</h2>
-          </div>
-          <span className="text-[12px] text-gray-300">
-            「{p.docType}」定制要素
-          </span>
-        </div>
+        <SectionHeader icon={Settings2} title="基础信息" subtitle="补充公文的基础要素（可留空）" />
 
-        {/* AI 引擎（默认 Claude Code） */}
-        <div className="mb-5">
-          <div className="text-[13px] text-gray-500 mb-2">
-            AI 引擎 <span className="text-gray-300">（执行写作与推稿的 agent）</span>
-          </div>
-          <div className="grid grid-cols-2 gap-2 max-w-md">
-            {([
-              { id: "claude", label: "Claude Code" },
-              { id: "opencode", label: "Opencode" },
-            ] as const).map((opt) => {
-              const active = p.agent === opt.id;
-              return (
-                <button
-                  key={opt.id}
-                  onClick={() => p.onAgent(opt.id)}
-                  className={
-                    "rounded-xl px-3.5 py-2.5 text-[13.5px] font-medium border transition-all active:scale-[0.98] " +
-                    (active
-                      ? "bg-white text-primary border-primary shadow-[0_1px_6px_rgba(0,0,0,0.08)]"
-                      : "bg-white text-gray-500 border-gray-200 hover:border-gray-300 hover:text-gray-700")
-                  }
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* 引用知识库 */}
-        {p.kbList !== null && (
-          <div className="mb-5">
-            <div className="text-[13px] text-gray-500 mb-2">
-              引用知识库 <span className="text-gray-300">（可多选，写作时作为参考资料）</span>
+        {p.kbList !== null && p.kbList.length > 0 && (
+          <div className="mb-4">
+            <label className="block text-[13px] text-gray-500 mb-2">引用知识库</label>
+            <div className="flex flex-wrap gap-2">
+              {p.kbList.map((kb) => {
+                const active = p.selectedKBs.includes(kb.name);
+                return (
+                  <button
+                    key={kb.id}
+                    onClick={() => p.onToggleKB(kb.name)}
+                    className={
+                      "rounded-full px-3.5 py-1.5 text-[13px] border transition-all " +
+                      (active
+                        ? "bg-[#FF7A45] text-white border-[#FF7A45]"
+                        : "bg-white text-gray-500 border-gray-200 hover:border-gray-400 hover:text-gray-700")
+                    }
+                  >
+                    {kb.name}
+                  </button>
+                );
+              })}
             </div>
-            {p.kbList.length === 0 ? (
-              <div className="text-[13px] text-gray-300">当前空间暂无可用知识库</div>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {p.kbList.map((kb) => {
-                  const active = p.selectedKBs.includes(kb.name);
-                  return (
-                    <button
-                      key={kb.id}
-                      onClick={() => p.onToggleKB(kb.name)}
-                      className={
-                        "rounded-full px-3.5 py-1.5 text-[13px] border transition-all " +
-                        (active
-                          ? "bg-primary text-white border-primary"
-                          : "bg-white text-gray-500 border-gray-200 hover:border-gray-400 hover:text-gray-700")
-                      }
-                    >
-                      {kb.name}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
           </div>
         )}
 
-        {/* 标题 */}
-        <div className="mb-5">
-          <label className="block text-[13px] text-gray-500 mb-1.5">标题 / 主题</label>
-          <input
-            value={p.title}
-            onChange={(e) => p.onTitle(e.target.value)}
-            placeholder="如：解读某市四年度政策"
-            className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-primary transition placeholder:text-gray-300"
-          />
-        </div>
-
-        {/* 材料提示 */}
-        {p.material && (
-          <MaterialInline
-            material={p.material}
-            onRemove={p.onRemoveMaterial}
-            onRetry={p.onRetryMaterial}
-          />
-        )}
-
-        {/* 三个可选要素 */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
           <div>
-            <label className="block text-[13px] text-gray-500 mb-1.5">
-              发布机关{REDHEAD_DOC_TYPES.has(p.docType) ? "（红头标志）" : ""}
-            </label>
+            <label className="block text-[13px] text-gray-500 mb-1.5">发布机关</label>
             <input
               value={p.publisher}
               onChange={(e) => p.onPublisher(e.target.value)}
-              placeholder="可留空"
-              className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-primary transition placeholder:text-gray-300"
+              placeholder={REDHEAD_DOC_TYPES.has(p.docType) ? "红头标志（可留空）" : "可留空"}
+              className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-[#FF7A45] focus:ring-2 focus:ring-[#FF7A45]/10 transition placeholder:text-gray-300"
             />
           </div>
           <div>
-            <label className="block text-[13px] text-gray-500 mb-1.5">
-              受文 / 解读对象
-            </label>
+            <label className="block text-[13px] text-gray-500 mb-1.5">受文 / 解读对象</label>
             <input
               value={p.audience}
               onChange={(e) => p.onAudience(e.target.value)}
               placeholder="自动 / 不指定"
-              className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-primary transition placeholder:text-gray-300"
+              className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-[#FF7A45] focus:ring-2 focus:ring-[#FF7A45]/10 transition placeholder:text-gray-300"
             />
           </div>
           <div>
-            <label className="block text-[13px] text-gray-500 mb-1.5">
-              行文口径 / 解读形式
-            </label>
+            <label className="block text-[13px] text-gray-500 mb-1.5">行文口径 / 解读形式</label>
             <input
               value={p.style}
               onChange={(e) => p.onStyle(e.target.value)}
               placeholder="自动 / 不指定"
-              className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-primary transition placeholder:text-gray-300"
+              className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-[#FF7A45] focus:ring-2 focus:ring-[#FF7A45]/10 transition placeholder:text-gray-300"
             />
           </div>
         </div>
 
-        {/* 红头文件：发文字号 */}
         {REDHEAD_DOC_TYPES.has(p.docType) && (
-          <div className="mb-5">
+          <div>
             <label className="block text-[13px] text-gray-500 mb-1.5">
-              发文字号 <span className="text-gray-300">（可留空，留空则不排字号行）</span>
+              发文字号 <span className="text-gray-300">（可留空）</span>
             </label>
             <input
               value={p.docNumber}
               onChange={(e) => p.onDocNumber(e.target.value)}
               placeholder="如：X政发〔2026〕5号"
-              className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-primary transition placeholder:text-gray-300"
+              className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-[#FF7A45] focus:ring-2 focus:ring-[#FF7A45]/10 transition placeholder:text-gray-300"
             />
           </div>
         )}
+      </section>
 
-        {/* 其他要求 */}
-        <div className="mb-5">
-          <label className="block text-[13px] text-gray-500 mb-1.5">
-            其他要求 <span className="text-gray-300">（可留空）</span>
-          </label>
-          <textarea
-            value={p.requirements}
-            onChange={(e) => p.onRequirements(e.target.value)}
-            rows={3}
-            placeholder="例如：结合本单位实际情况，重点写保障措施部分；文中数据以上年度报表为准…"
-            className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-primary transition resize-none placeholder:text-gray-300"
-          />
-        </div>
+      {/* 其他要求 */}
+      <section className="bg-white rounded-2xl border border-black/6 shadow-sm p-6">
+        <SectionHeader icon={MessageSquare} title="其他要求" subtitle="如有其他特殊要求，请在此处填写" />
+        <textarea
+          value={p.requirements}
+          onChange={(e) => p.onRequirements(e.target.value)}
+          rows={3}
+          placeholder="例如：结合本单位实际情况，重点写保障措施部分；文中数据以上年度报表为准…"
+          className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-[#FF7A45] focus:ring-2 focus:ring-[#FF7A45]/10 transition resize-none placeholder:text-gray-300"
+        />
+      </section>
 
-        {/* 篇幅 + 轮数 + 开始 */}
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_1fr_auto] gap-3 items-end">
-          <div>
-            <label className="block text-[13px] text-gray-500 mb-1.5">
-              篇幅（字，0 = 自动）
-            </label>
+      {/* 篇幅设置 */}
+      <section className="bg-white rounded-2xl border border-black/6 shadow-sm p-6">
+        <SectionHeader icon={Settings2} title="篇幅设置" subtitle="控制生成文档的长度" />
+        <div className="flex items-end gap-4">
+          <div className="flex-1 max-w-xs">
+            <label className="block text-[13px] text-gray-500 mb-1.5">篇幅（字，0 = 自动）</label>
             <input
               type="number"
               min={0}
               value={p.lengthWords}
               onChange={(e) => p.onLengthWords(e.target.value)}
-              className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-primary transition"
+              className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-[#FF7A45] focus:ring-2 focus:ring-[#FF7A45]/10 transition"
             />
           </div>
-          <button
-            onClick={p.onStart}
-            disabled={!p.canStart}
-            className={
-              "lg:w-44 rounded-xl py-3 text-[15px] font-semibold transition-all " +
-              (p.canStart
-                ? "bg-primary text-white hover:bg-primary/90 active:scale-[0.99] shadow-[0_2px_10px_rgba(206,75,50,0.35)]"
-                : "bg-gray-100 text-gray-300 cursor-not-allowed")
-            }
-          >
-            {p.starting ? "正在准备…" : "开始生成"}
-          </button>
         </div>
       </section>
+
+      {/* 开始生成 */}
+      <div className="flex justify-center pt-2">
+        <button
+          onClick={p.onStart}
+          disabled={!p.canStart}
+          className={
+            "inline-flex items-center gap-2 rounded-full px-10 py-3.5 text-[16px] font-semibold transition-all active:scale-[0.98] " +
+            (p.canStart
+              ? "bg-gradient-to-r from-[#FF7A45] to-[#FF5722] text-white shadow-[0_4px_16px_rgba(255,122,69,0.35)] hover:opacity-90"
+              : "bg-gray-100 text-gray-300 cursor-not-allowed")
+          }
+        >
+          <Sparkles className="w-5 h-5" strokeWidth={1.75} />
+          {p.starting ? "正在准备…" : "开始生成"}
+        </button>
+      </div>
     </div>
   );
 }

@@ -9,8 +9,13 @@
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  Check,
   ChevronRight,
+  CloudUpload,
+  FileSpreadsheet,
+  FileText,
   Loader2,
+  Presentation,
   ScrollText,
   Sparkles,
   Wrench,
@@ -66,10 +71,8 @@ interface StagePill {
 
 const STAGES: StagePill[] = [
   { key: "draft", icon: "✍️", label: "写手起草" },
-  { key: "review", icon: "🔍", label: "审查把关" },
-  { key: "rewrite", icon: "✏️", label: "推稿复写" },
-  { key: "audit", icon: "📋", label: "审核复核" },
-  { key: "finalize", icon: "🏛️", label: "审批定稿" },
+  { key: "reviewfix", icon: "🔍", label: "审查改稿" },
+  { key: "signoff", icon: "🏛️", label: "审批定稿" },
 ];
 
 interface GenerateViewProps {
@@ -163,7 +166,7 @@ export function GenerateView({
           <div className="mt-3 flex items-center gap-3">
             <span className="inline-flex items-center gap-2 rounded-lg bg-[#2C2C2E] text-white/90 text-[13px] px-3 py-1.5">
               <span className={"inline-block w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white " + (exporting ? "" : "animate-spin")} />
-              {exporting ? "正在生成文档并上传…" : "五阶段协作中"}
+              {exporting ? "正在生成文档并上传…" : "三阶段协作中"}
             </span>
             {stageLabel && (
               <span className="text-[13px] text-[#D93025] font-medium">{stageLabel}</span>
@@ -207,45 +210,54 @@ export function GenerateView({
         {result && (
           <>
             <div className="bg-white rounded-2xl border border-black/5 shadow-sm p-5">
-              <div className="flex items-baseline justify-between">
-                <h2 className="text-[15px] font-semibold text-gray-900">
-                  <span className="text-[#D93025] mr-2">三</span>成稿与导出
-                </h2>
-                <span className="text-[12px] text-gray-400">
-                  导出前已自动同步定稿内容
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="flex w-10 h-10 rounded-xl bg-gradient-to-br from-[#8B5CF6] to-[#6366F1] items-center justify-center text-white shadow-sm">
+                    <Sparkles className="w-5 h-5" strokeWidth={1.5} />
+                  </span>
+                  <div>
+                    <h2 className="text-[16px] font-semibold text-[#1D1D1F]">文档导出</h2>
+                    <p className="text-[12px] text-gray-400 mt-0.5">选择导出格式，开始下载您的文档</p>
+                  </div>
+                </div>
+                <span className="text-[12px] text-gray-400 flex items-center gap-1.5 shrink-0">
+                  <span className="w-1.5 h-1.5 rounded-full bg-gray-300" />
+                  导出后自动同步至稿内库
                 </span>
               </div>
-              <div className="mt-4 flex flex-wrap items-center gap-3">
+              <div className="mt-5 flex flex-wrap items-center gap-3">
                 <ExportWord file={result.files.find((f) => f.kind === "docx")} />
                 <ExportPdf file={result.files.find((f) => f.kind === "docx")} />
                 <ExportExcel file={result.files.find((f) => f.kind === "xlsx")} />
                 <UploadCloudButton onUpload={onUploadCloud} />
                 <button
                   disabled
-                  className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-[14px] font-medium text-gray-300 cursor-not-allowed"
+                  className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-4 py-2 text-[14px] font-medium text-gray-300 cursor-not-allowed"
                   title="后续版本支持"
                 >
-                  🖼️ 下载 PPT
+                  <span className="flex w-6 h-6 rounded-lg bg-orange-100 items-center justify-center text-orange-500">
+                    <Presentation className="w-3.5 h-3.5" strokeWidth={2} />
+                  </span>
+                  下载 PPT
                 </button>
                 {historySessionId && (
                   <button
                     onClick={() => setHistoryOpen(true)}
-                    className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-[14px] font-medium text-gray-600 hover:border-gray-300 hover:text-gray-900 active:scale-[0.98] transition"
-                    title="回放五阶段修订过程（草稿 / 审查 / 推稿 / 审核 / 定稿）"
+                    className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-4 py-2 text-[14px] font-medium text-gray-600 hover:border-gray-300 hover:text-gray-900 active:scale-[0.98] transition"
+                    title="回放五阶段修订过程"
                   >
-                    <ScrollText className="w-4 h-4" strokeWidth={1.75} />
+                    <span className="flex w-6 h-6 rounded-lg bg-gray-100 items-center justify-center text-gray-500">
+                      <ScrollText className="w-3.5 h-3.5" strokeWidth={2} />
+                    </span>
                     修订过程
                   </button>
                 )}
-                <span className="text-[12px] text-gray-400">
-                  Word / PDF 按文种版式排版（红头文件含 GB/T 9704-2012 红头）
-                </span>
               </div>
               <button
                 onClick={onBackToConfig}
-                className="mt-4 text-[13px] text-[#007AFF] hover:underline"
+                className="mt-5 text-[13px] text-[#007AFF] hover:underline flex items-center gap-1"
               >
-                ← 调整设置重新生成
+                <span className="inline-block rotate-180">←</span> 调整设置重新生成
               </button>
             </div>
 
@@ -364,7 +376,7 @@ const KIND_META: Record<StreamKind, { char: string; grad: string }> = {
 function StreamCard({ item }: { item: StreamItem }) {
   const meta = KIND_META[item.kind] ?? KIND_META.parse;
   /** 只有最终输出（审批定稿 / 局部微调的正文）才作为正文展示，其余阶段产出一律算思考过程 */
-  const isFinalOutput = item.kind === "finalize" || item.kind === "revise";
+  const isFinalOutput = item.kind === "signoff" || item.kind === "revise";
 
   // DeepSeek 逻辑：中间阶段的全部产出（思考 + 文本 + 工具）都是「思考过程」
   const thinkingAll =
@@ -759,7 +771,7 @@ function UploadCloudButton({
     <button
       onClick={click}
       disabled={busy}
-      className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-[14px] font-medium active:scale-[0.98] transition ${
+      className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 text-[14px] font-medium active:scale-[0.98] transition ${
         failed
           ? "border-[#F2B8B5] bg-[#FCE8E6] text-[#D93025]"
           : done
@@ -768,7 +780,10 @@ function UploadCloudButton({
       }`}
       title="把当前成稿导出并上传到云端文件"
     >
-      {busy ? "⏳ 上传中…" : done ? "✓ 已上传云端" : failed ? "☁️ 上传失败，点击重试" : "☁️ 上传到云端"}
+      <span className="flex w-6 h-6 rounded-lg bg-indigo-100 items-center justify-center text-indigo-500">
+        <CloudUpload className="w-3.5 h-3.5" strokeWidth={2} />
+      </span>
+      {busy ? "上传中…" : done ? "已上传云端" : failed ? "上传失败，点击重试" : "上传到云端"}
     </button>
   );
 }
@@ -792,9 +807,12 @@ function ExportWord({ file }: { file?: ResultFile }) {
     return (
       <button
         disabled
-        className="rounded-xl bg-gray-100 px-4 py-2.5 text-[14px] font-medium text-gray-300 cursor-not-allowed"
+        className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-4 py-2 text-[14px] font-medium text-gray-300 cursor-not-allowed"
       >
-        📄 下载 Word
+        <span className="flex w-6 h-6 rounded-lg bg-blue-100 items-center justify-center text-blue-500">
+          <FileText className="w-3.5 h-3.5" strokeWidth={2} />
+        </span>
+        下载 Word
       </button>
     );
   }
@@ -803,13 +821,17 @@ function ExportWord({ file }: { file?: ResultFile }) {
       onClick={onClick}
       disabled={busy}
       className={
-        "inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-[14px] font-medium shadow-sm transition active:scale-[0.98] " +
+        "inline-flex items-center gap-2 rounded-full px-4 py-2 text-[14px] font-medium shadow-sm transition active:scale-[0.98] " +
         (failed
-          ? "bg-[#FFF5F3] text-[#D93025]"
-          : "bg-[#007AFF] text-white hover:bg-[#0071EB]")
+          ? "border border-[#FFD5CC] bg-[#FFF5F3] text-[#D93025]"
+          : "bg-gradient-to-r from-[#8B5CF6] to-[#6366F1] text-white hover:opacity-90")
       }
     >
-      {busy ? "⏳ 下载中…" : failed ? "📄 下载失败，点击重试" : "📄 下载 Word"}
+      <span className="flex w-6 h-6 rounded-lg bg-white/20 items-center justify-center text-white">
+        <FileText className="w-3.5 h-3.5" strokeWidth={2} />
+      </span>
+      {busy ? "下载中…" : failed ? "下载失败，点击重试" : "下载 Word"}
+      {!busy && !failed && <Check className="w-4 h-4" strokeWidth={2.5} />}
     </button>
   );
 }
@@ -833,10 +855,13 @@ function ExportExcel({ file }: { file?: ResultFile }) {
     return (
       <button
         disabled
-        className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-[14px] font-medium text-gray-300 cursor-not-allowed"
+        className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-4 py-2 text-[14px] font-medium text-gray-300 cursor-not-allowed"
         title="定稿中未包含表格"
       >
-        📊 下载 Excel
+        <span className="flex w-6 h-6 rounded-lg bg-green-100 items-center justify-center text-green-500">
+          <FileSpreadsheet className="w-3.5 h-3.5" strokeWidth={2} />
+        </span>
+        下载 Excel
       </button>
     );
   }
@@ -845,13 +870,16 @@ function ExportExcel({ file }: { file?: ResultFile }) {
       onClick={onClick}
       disabled={busy}
       className={
-        "inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-[14px] font-medium transition active:scale-[0.98] " +
+        "inline-flex items-center gap-2 rounded-full border px-4 py-2 text-[14px] font-medium transition active:scale-[0.98] " +
         (failed
           ? "border-[#FFD5CC] bg-[#FFF5F3] text-[#D93025]"
-          : "border-gray-200 bg-white text-gray-700 hover:border-gray-300")
+          : "border-gray-200 bg-white text-green-600 hover:border-gray-300")
       }
     >
-      {busy ? "⏳ 下载中…" : failed ? "📊 下载失败，点击重试" : "📊 下载 Excel"}
+      <span className="flex w-6 h-6 rounded-lg bg-green-100 items-center justify-center text-green-500">
+        <FileSpreadsheet className="w-3.5 h-3.5" strokeWidth={2} />
+      </span>
+      {busy ? "下载中…" : failed ? "下载失败，点击重试" : "下载 Excel"}
     </button>
   );
 }
@@ -895,9 +923,12 @@ function ExportPdf({ file }: { file?: ResultFile }) {
     return (
       <button
         disabled
-        className="rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-[14px] font-medium text-gray-300 cursor-not-allowed"
+        className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-4 py-2 text-[14px] font-medium text-gray-300 cursor-not-allowed"
       >
-        📕 下载 PDF
+        <span className="flex w-6 h-6 rounded-lg bg-red-100 items-center justify-center text-red-500">
+          <FileText className="w-3.5 h-3.5" strokeWidth={2} />
+        </span>
+        下载 PDF
       </button>
     );
   }
@@ -907,13 +938,16 @@ function ExportPdf({ file }: { file?: ResultFile }) {
       disabled={busy}
       title={failed ? "PDF 转换失败，请重试" : undefined}
       className={
-        "inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-[14px] font-medium transition active:scale-[0.98] " +
+        "inline-flex items-center gap-2 rounded-full border px-4 py-2 text-[14px] font-medium transition active:scale-[0.98] " +
         (failed
           ? "border-[#FFD5CC] text-[#D93025] bg-[#FFF5F3]"
-          : "border-gray-200 bg-white text-gray-700 hover:border-gray-300")
+          : "border-gray-200 bg-white text-red-500 hover:border-gray-300")
       }
     >
-      {busy ? "⏳ 转换中…" : failed ? "📕 重试 PDF" : "📕 下载 PDF"}
+      <span className="flex w-6 h-6 rounded-lg bg-red-100 items-center justify-center text-red-500">
+        <FileText className="w-3.5 h-3.5" strokeWidth={2} />
+      </span>
+      {busy ? "转换中…" : failed ? "重试 PDF" : "下载 PDF"}
     </button>
   );
 }
