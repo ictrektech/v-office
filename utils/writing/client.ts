@@ -20,7 +20,7 @@ export const API_BASE = "/api/com.ictrek.agentic-search";
 let jwtCache: string | null = null;
 
 /** 本应用 JWT：VOS 模式兑换并缓存；本地模式返回 null */
-export async function getWritingJwt(): Promise<string | null> {
+async function getWritingJwt(): Promise<string | null> {
   try {
     if (!(await isVOSMode())) return null;
   } catch {
@@ -71,7 +71,7 @@ export async function checkWritingService(): Promise<boolean> {
 
 // ── 材料上传 ───────────────────────────────────────────────────────────────
 
-export interface UploadedSource {
+interface UploadedSource {
   uploadId: string;
   name: string;
   size: number;

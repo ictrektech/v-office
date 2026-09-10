@@ -41,3 +41,6 @@ public/ai-assistant
 *.pem
 *.local
 .pnpm-debug.log*
+
+# local test scripts — never into image
+.trae-test

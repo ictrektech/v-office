@@ -807,7 +807,7 @@ export function WritingView() {
           </div>
 
           <Segmented
-            options={vosMode ? ["本地", "知识库"] : ["本地"]}
+            options={vosMode ? ["本地", "云端文档"] : ["本地"]}
             value={tab === "local" ? 0 : 1}
             onChange={(i) => setTab(i === 0 ? "local" : "kb")}
           />
@@ -943,7 +943,7 @@ export function WritingView() {
             </>
           )}
 
-          {/* 知识库 tab：VOS 云端文档（与主页「最近」一致的空态与列表样式） */}
+          {/* 云端文档 tab：VOS 云端文件（与主页「最近」一致的空态与列表样式） */}
           {tab === "kb" && vosMode && (
             <div className="mt-4 flex-1 overflow-y-auto min-h-0">
               {cloudFiles === null && (

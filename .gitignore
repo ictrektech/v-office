@@ -52,3 +52,5 @@ next-env.d.ts
 # 生成，不进 git；生产由 agentic-search 应用经网关托管）
 /public/ai-assistant
   
+# local test scripts only — never commit
+.trae-test
