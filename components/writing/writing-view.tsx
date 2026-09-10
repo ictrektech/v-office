@@ -146,8 +146,9 @@ type Material =
   | {
       status: "ready";
       name: string;
-      uploadId: string;
-      chars: number;
+      /** 静默后台解析完成前可能缺省（恢复「最近使用」场景） */
+      uploadId?: string;
+      chars?: number;
       parseError?: string;
     }
   | { status: "error"; name: string; error: string };
@@ -224,22 +225,10 @@ export function WritingView() {
 
   // ── 材料选中即上传解析（本地文件 / 云文档统一走这里）──
   const selectMaterial = useCallback(
-    async (name: string, getFile: () => Promise<File>) => {
+    async (name: string, getFile: () => Promise<File>, opts?: { silent?: boolean }) => {
+      const silent = opts?.silent ?? false;
       loadersRef.current.set(name, getFile); // 记住加载方式，失败重试用
       setActiveName(name);
-      setSessions((prev) => {
-        const base = prev[name] ?? emptySession();
-        return {
-          ...prev,
-          [name]: {
-            ...base,
-            material:
-              base.material?.status === "ready"
-                ? base.material
-                : ({ status: "uploading", name } as const),
-          },
-        };
-      });
       // 已解析过（内存缓存）：切换即达，不重复上传
       const cached = parsedRef.current.get(name);
       if (cached) {
@@ -261,6 +250,51 @@ export function WritingView() {
         });
         return;
       }
+      if (silent) {
+        // 静默恢复（点「最近使用」）：材料直接就绪、不显示解析动作，
+        // 后台补一次解析拿 uploadId（重新生成时才需要），失败不影响查看成稿
+        setSessions((prev) => ({
+          ...prev,
+          [name]: {
+            ...(prev[name] ?? emptySession()),
+            material: { status: "ready", name },
+          },
+        }));
+        void (async () => {
+          try {
+            const f = await getFile();
+            const up = await uploadSourceFile(f);
+            parsedRef.current.set(name, { uploadId: up.uploadId, chars: up.chars, parseError: up.parseError });
+            setSessions((prev) => {
+              const cur = prev[name]?.material;
+              if (cur?.status !== "ready") return prev;
+              return {
+                ...prev,
+                [name]: {
+                  ...prev[name],
+                  material: { ...cur, uploadId: up.uploadId, chars: up.chars, parseError: up.parseError },
+                },
+              };
+            });
+          } catch {
+            // 静默失败：查看/恢复成稿不受影响
+          }
+        })();
+        return;
+      }
+      setSessions((prev) => {
+        const base = prev[name] ?? emptySession();
+        return {
+          ...prev,
+          [name]: {
+            ...base,
+            material:
+              base.material?.status === "ready"
+                ? base.material
+                : ({ status: "uploading", name } as const),
+          },
+        };
+      });
       try {
         const f = await getFile();
         const up = await uploadSourceFile(f);
@@ -907,8 +941,10 @@ export function WritingView() {
                         >
                           <button
                             onClick={() => {
+                              // 静默恢复：材料直接就绪（后台补解析），成稿立即从服务端拉回
                               void selectMaterial(rec.name, () =>
                                 loadLocalMaterial(rec.name),
+                                { silent: true },
                               ).then(() => {
                                 // 有历史成稿：从服务端恢复（秒级，无 LLM）
                                 if (rec.sessionId && rec.config) {
@@ -1361,7 +1397,10 @@ function MaterialStatusLine({
     return { text: material.error, tone: "warn" };
   if (material.parseError)
     return { text: material.parseError, tone: "warn" };
-  return { text: `已解析 ${fmtChars(material.chars)}`, tone: "muted" };
+  return {
+    text: material.chars !== undefined ? `已解析 ${fmtChars(material.chars)}` : "已就绪",
+    tone: "muted",
+  };
 }
 
 function MaterialCard({
