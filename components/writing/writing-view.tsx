@@ -451,7 +451,14 @@ export function WritingView() {
             items: cur.items.map((it) =>
               it.key === key ||
               (stage === "revise" && it.kind === "revise" && it.status === "active")
-                ? { ...it, status: "done" }
+                ? {
+                    ...it,
+                    status: "done",
+                    // 后端下发的阶段真实耗时（agent 从阶段开始到结束的执行时间）
+                    ...(data.elapsedMs != null
+                      ? { elapsed: Math.max(1, Math.round(Number(data.elapsedMs) / 1000)) }
+                      : {}),
+                  }
                 : it,
             ),
             ...(stage === "revise" ? { revising: false } : {}),
@@ -1401,56 +1408,6 @@ function MaterialCard({
           </button>
         )}
       </div>
-      <button
-        onClick={onRemove}
-        className="text-gray-300 hover:text-gray-600 transition-colors shrink-0"
-      >
-        <X className="w-3.5 h-3.5" />
-      </button>
-    </div>
-  );
-}
-
-function MaterialInline({
-  material,
-  onRemove,
-  onRetry,
-}: {
-  material: Material;
-  onRemove: () => void;
-  onRetry: (name: string) => void;
-}) {
-  const line = MaterialStatusLine({ material });
-  const warn = line.tone === "warn";
-  const canRetry =
-    material.status === "error" ||
-    (material.status === "ready" && !!material.parseError);
-  return (
-    <div
-      className={
-        "mb-5 rounded-xl border px-3.5 py-2.5 flex items-center gap-2 " +
-        (warn ? "bg-[#FFF5F3] border-[#FFD5CC]" : "bg-gray-50 border-gray-200")
-      }
-    >
-      <FileBadge name={material.name} size={24} />
-      <span className="text-[13px] text-[#1D1D1F] truncate">
-        参考材料：{material.name}
-      </span>
-      <span
-        className={
-          "text-[11.5px] shrink-0 " + (warn ? "text-[#D93025]" : "text-gray-400")
-        }
-      >
-        {material.status === "uploading" ? "解析中…" : line.text}
-      </span>
-      {canRetry && (
-        <button
-          onClick={() => onRetry(material.name)}
-          className="shrink-0 rounded-md border border-[#FFD5CC] bg-white px-2 py-0.5 text-[11px] text-[#D93025] hover:bg-[#FFF5F3] active:scale-[0.97] transition"
-        >
-          重试解析
-        </button>
-      )}
       <button
         onClick={onRemove}
         className="text-gray-300 hover:text-gray-600 transition-colors shrink-0"

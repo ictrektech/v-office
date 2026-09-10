@@ -44,6 +44,8 @@ export interface StreamItem {
   title: string;
   status: "active" | "done";
   round?: number;
+  /** 阶段真实耗时（秒）：后端 writing_stage done 事件 / 恢复重算 */
+  elapsed?: number;
   text: string;
   thinking: string;
   tools: string[];
@@ -394,7 +396,9 @@ function StreamCard({ item }: { item: StreamItem }) {
   const bodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!thinkingDone && thinkingAll && startRef.current === null) {
+    // 计时起点：卡片出现（阶段开始）即计时，而不是等第一条思考内容到达——
+    // agent 产出往往在阶段末尾才一次性到达，按内容到达计时会得到假的 1~2 秒
+    if (!thinkingDone && startRef.current === null) {
       startRef.current = Date.now();
     }
     if (thinkingDone && startRef.current !== null) {
@@ -465,7 +469,9 @@ function StreamCard({ item }: { item: StreamItem }) {
               <Sparkles className="w-3.5 h-3.5 animate-pulse" />
             )}
             {thinkingDone
-              ? `已深度思考${elapsed ? `（用时 ${elapsed} 秒）` : ""}`
+              ? `已深度思考${
+                  (item.elapsed ?? elapsed) ? `（用时 ${item.elapsed ?? elapsed} 秒）` : ""
+                }`
               : "思考中…"}
           </button>
           {open && (thinkingAll || item.tools.length > 0) && (
