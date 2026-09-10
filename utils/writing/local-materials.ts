@@ -6,10 +6,15 @@
  * 记录按文件名去重、按时间倒序，上限 12 条；
  * 点击列表项可重新加载文件内容作为参考材料。
  * 另存该文件的写作会话 id 与 config：刷新后据此恢复成稿（服务端版本栈）。
+ *
+ * 用户隔离：IndexedDB 只按浏览器（origin）隔离，同一浏览器切换登录用户
+ * 会看到别人的材料。因此库名带上登录用户名（VOS whoAmI），按用户硬隔离；
+ * 旧的混合数据库名无后缀，首次访问时直接删除。
  */
 
-import { openDB, type DBSchema, type IDBPDatabase } from "idb";
+import { openDB, deleteDB, type DBSchema, type IDBPDatabase } from "idb";
 import type { WritingConfig } from "./client";
+import { whoAmI } from "@/utils/vos/storage";
 
 export type { WritingConfig };
 
@@ -40,17 +45,39 @@ const DB_NAME = "writing-materials-db";
 const STORE = "writing-materials";
 const MAX_ITEMS = 12;
 
-let dbInstance: IDBPDatabase<MaterialsDB> | null = null;
+/** 按用户缓存的 DB 实例：key = 用户名（非 VOS 为 "local"） */
+const dbCache = new Map<string, IDBPDatabase<MaterialsDB>>();
+let legacyCleaned = false;
+
+/**
+ * 当前用户标识：VOS 登录用户名 / 本地模式 "local"。
+ * 页面生命周期内缓存（切换用户必然整页刷新重新登录）。
+ */
+let userKeyCache: string | null = null;
+
+async function getUserKey(): Promise<string> {
+  if (userKeyCache) return userKeyCache;
+  const username = await whoAmI().catch(() => null);
+  userKeyCache = username ? `u:${username}` : "local";
+  return userKeyCache;
+}
 
 async function getDB(): Promise<IDBPDatabase<MaterialsDB>> {
-  if (!dbInstance) {
-    dbInstance = await openDB<MaterialsDB>(DB_NAME, 1, {
-      upgrade(db) {
-        if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
-      },
-    });
+  const user = await getUserKey();
+  let db = dbCache.get(user);
+  if (db) return db;
+  db = await openDB<MaterialsDB>(`${DB_NAME}__${encodeURIComponent(user)}`, 1, {
+    upgrade(d) {
+      if (!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE);
+    },
+  });
+  dbCache.set(user, db);
+  // 旧库（无用户后缀）混有其他用户数据：清理一次
+  if (!legacyCleaned) {
+    legacyCleaned = true;
+    void deleteDB(DB_NAME).catch(() => undefined);
   }
-  return dbInstance;
+  return db;
 }
 
 /** 保存/更新一份本地上传材料（同名覆盖时间戳，保留已有会话信息） */

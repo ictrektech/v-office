@@ -1,6 +1,7 @@
 "use client";
 
-import { openDB, DBSchema, IDBPDatabase } from "idb";
+import { openDB, deleteDB, DBSchema, IDBPDatabase } from "idb";
+import { whoAmI } from "@/utils/vos/storage";
 
 // Recent file record structure for UI display
 export interface RecentFileRecord {
@@ -29,12 +30,25 @@ const DB_VERSION = 2; // Incremented version for schema update
 const STORE_NAME = "filehandles-store";
 const MAX_RECENT_FILES = 20;
 
-let dbInstance: IDBPDatabase<FileHandlesDB> | null = null;
+/** 按用户缓存的 DB 实例：key = 用户名（非 VOS 为 "local"）。库名带用户，切换登录互不可见 */
+const dbCache = new Map<string, IDBPDatabase<FileHandlesDB>>();
+let legacyCleaned = false;
+
+let userKeyCache: string | null = null;
+
+async function getUserKey(): Promise<string> {
+  if (userKeyCache) return userKeyCache;
+  const username = await whoAmI().catch(() => null);
+  userKeyCache = username ? `u:${username}` : "local";
+  return userKeyCache;
+}
 
 async function getDB(): Promise<IDBPDatabase<FileHandlesDB>> {
-  if (dbInstance) return dbInstance;
+  const user = await getUserKey();
+  let db = dbCache.get(user);
+  if (db) return db;
 
-  dbInstance = await openDB<FileHandlesDB>(DB_NAME, DB_VERSION, {
+  db = await openDB<FileHandlesDB>(`${DB_NAME}__${encodeURIComponent(user)}`, DB_VERSION, {
     upgrade(db, oldVersion) {
       if (oldVersion < 1) {
         db.createObjectStore(STORE_NAME);
@@ -43,8 +57,15 @@ async function getDB(): Promise<IDBPDatabase<FileHandlesDB>> {
       // Existing data will have undefined updatedAt, which we handle during retrieval.
     },
   });
+  dbCache.set(user, db);
 
-  return dbInstance;
+  // 旧库（无用户后缀）混有其他用户数据：清理一次
+  if (!legacyCleaned) {
+    legacyCleaned = true;
+    void deleteDB(DB_NAME).catch(() => undefined);
+  }
+
+  return db;
 }
 
 // Get file path from FileSystemFileHandle
