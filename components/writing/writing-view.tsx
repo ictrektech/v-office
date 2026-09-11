@@ -79,6 +79,9 @@ import {
   checkWritingService,
   API_BASE,
   authHeaders,
+  listMyWritingSessions,
+  deleteMyWritingSession,
+  type MyWritingDoc,
   type WritingConfig,
   type WritingEvent,
 } from "@/utils/writing/client";
@@ -180,6 +183,8 @@ export function WritingView() {
   const [dragOver, setDragOver] = useState(false);
   const [tab, setTab] = useState<"local" | "kb">("local");
   const [localFiles, setLocalFiles] = useState<LocalMaterialRecord[]>([]);
+  /** 服务端「最近使用」：当前用户有成稿的文档（入库，跨浏览器一致） */
+  const [serverDocs, setServerDocs] = useState<MyWritingDoc[]>([]);
   /** agentic-search 写作服务可用性：null 检测中 / false 不可用（提示安装） */
   const [serviceOk, setServiceOk] = useState<boolean | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -190,7 +195,8 @@ export function WritingView() {
   const [agent, setAgent] = useState<"claude" | "opencode">("claude");
   const clientsRef = useRef<Map<string, WritingClient>>(new Map());
   const loadersRef = useRef<Map<string, () => Promise<File>>>(new Map()); // 重试用
-  const configRef = useRef<WritingConfig | null>(null);
+  /** 按文件隔离的写作配置（多文件切换不串位；微调/撤销/导出用当前文件的配置） */
+  const configsRef = useRef<Map<string, WritingConfig>>(new Map());
   const parsedRef = useRef<Map<string, { uploadId: string; chars: number; parseError?: string }>>(new Map());
   const streamAnchorRef = useRef<HTMLDivElement>(null);
   const configAnchorRef = useRef<HTMLDivElement>(null);
@@ -219,8 +225,19 @@ export function WritingView() {
     listLocalMaterials()
       .then(setLocalFiles)
       .catch(() => setLocalFiles([]));
+    // 服务端「最近使用」：入库存储，换浏览器登录也能看到自己的文档
+    listMyWritingSessions()
+      .then(setServerDocs)
+      .catch(() => setServerDocs([]));
     // 服务可用性探测：agentic-search 不在则提示用户安装/启动（200 = 可用）
     void checkWritingService().then(setServiceOk);
+  }, []);
+
+  /** 刷新服务端「最近使用」列表（成稿落库 / 删除后调用） */
+  const refreshServerDocs = useCallback(() => {
+    listMyWritingSessions()
+      .then(setServerDocs)
+      .catch(() => setServerDocs([]));
   }, []);
 
   // ── 材料选中即上传解析（本地文件 / 云文档统一走这里）──
@@ -351,6 +368,7 @@ export function WritingView() {
         client.disconnect();
         clientsRef.current.delete(name);
       }
+      configsRef.current.delete(name);
       const cur = sessionsRef.current[name];
       sessionsRef.current = {
         ...sessionsRef.current,
@@ -381,18 +399,25 @@ export function WritingView() {
     [selectMaterial],
   );
 
-  /** 删除最近使用记录：移除 IndexedDB 记录；若为当前会话则一并关闭 */
+  /** 删除最近使用记录：移除 IndexedDB 记录与服务端会话；若为当前会话则一并关闭 */
   const removeSession = useCallback(
-    (name: string) => {
+    (name: string, sessionId?: string) => {
       void removeLocalMaterial(name)
         .then(() => listLocalMaterials())
         .then(setLocalFiles)
         .catch(() => {});
+      // 服务端会话一并删除：其他浏览器登录后列表同步移除
+      if (sessionId) {
+        void deleteMyWritingSession(sessionId)
+          .then(refreshServerDocs)
+          .catch(() => {});
+      }
       const client = clientsRef.current.get(name);
       if (client) {
         client.disconnect();
         clientsRef.current.delete(name);
       }
+      configsRef.current.delete(name);
       loadersRef.current.delete(name);
       parsedRef.current.delete(name);
       setSessions((prev) => {
@@ -402,7 +427,7 @@ export function WritingView() {
       });
       setActiveName((cur) => (cur === name ? null : cur));
     },
-    [],
+    [refreshServerDocs],
   );
 
   // ── 会话状态定点更新 ──
@@ -526,7 +551,7 @@ export function WritingView() {
         const files = (data.files as ResultData["files"] | undefined) ?? [];
         patchSession(name, (cur) => ({
           result: {
-            title: String(data.title ?? cur?.result?.title ?? configRef.current?.title ?? name),
+            title: String(data.title ?? cur?.result?.title ?? configsRef.current.get(name)?.title ?? name),
             content: String(data.content ?? ""),
             files,
             revisions: Number(data.revisions ?? 0),
@@ -542,12 +567,23 @@ export function WritingView() {
         }));
         // 记录文件 → 写作会话映射（刷新后恢复成稿用）
         const sid = clientsRef.current.get(name)?.sessionId;
-        if (sid && configRef.current) {
+        // 字号类微调：后端改档后回传 bodyFontSize，同步到配置供预览与下次导出使用
+        const fontPt = Number(data.bodyFontSize ?? 0);
+        if (fontPt > 0) {
+          const prev = configsRef.current.get(name);
+          if (prev && prev.bodyFontSize !== fontPt) {
+            configsRef.current.set(name, { ...prev, bodyFontSize: fontPt });
+          }
+        }
+        const cfg = configsRef.current.get(name);
+        if (sid && cfg) {
           patchSession(name, { sessionId: sid });
-          void updateLocalMaterialSession(name, sid, configRef.current)
+          void updateLocalMaterialSession(name, sid, cfg)
             .then(() => listLocalMaterials())
             .then(setLocalFiles)
             .catch(() => {});
+          // 成稿已入库：刷新服务端文档列表
+          refreshServerDocs();
         }
         return;
       }
@@ -567,14 +603,14 @@ export function WritingView() {
         return;
       }
     }
-  }, [patchSession]);
+  }, [patchSession, refreshServerDocs]);
 
   /** 刷新恢复：从服务端版本栈拉回成稿 + 重连会话（微调/撤销可用） */
   const restoreFromServer = useCallback(
     async (name: string, sessionId: string, config: WritingConfig) => {
       try {
-        // 关键：同步写作配置，否则微调/撤销因 configRef 为空而静默失效
-        configRef.current = config;
+        // 关键：同步写作配置，否则微调/撤销因配置缺失而静默失效
+        configsRef.current.set(name, config);
         const res = await restoreWriting(sessionId, config);
         if (!res?.restored || !res.content) return;
         patchSession(name, {
@@ -613,6 +649,40 @@ export function WritingView() {
     [patchSession, handleEvent],
   );
 
+  interface RecentEntry {
+    name: string;
+    updatedAt: number;
+    sessionId?: string;
+    config?: WritingConfig;
+    hasLocal: boolean;
+  }
+
+  /** 打开「最近使用」文档：本地有文件走原链路；换浏览器无文件时占位材料直接从服务端恢复成稿 */
+  const openRecent = useCallback(
+    (rec: RecentEntry) => {
+      if (rec.hasLocal) {
+        void selectMaterial(rec.name, () => loadLocalMaterial(rec.name), { silent: true }).then(() => {
+          if (rec.sessionId && rec.config) {
+            void restoreFromServer(rec.name, rec.sessionId, rec.config);
+          }
+        });
+        return;
+      }
+      setActiveName(rec.name);
+      setSessions((prev) => ({
+        ...prev,
+        [rec.name]: {
+          ...(prev[rec.name] ?? emptySession()),
+          material: { status: "ready" as const, name: rec.name },
+        },
+      }));
+      if (rec.sessionId && rec.config) {
+        void restoreFromServer(rec.name, rec.sessionId, rec.config);
+      }
+    },
+    [selectMaterial, restoreFromServer],
+  );
+
   const startWriting = useCallback(async () => {
     const name = activeName;
     const sess = name ? sessionsRef.current[name] : undefined;
@@ -643,7 +713,7 @@ export function WritingView() {
         lengthWords: Math.max(0, parseInt(lengthWords, 10) || 0),
         ...(selectedKBs.length ? { knowledgeBaseNames: selectedKBs } : {}),
       };
-      configRef.current = config;
+      configsRef.current.set(name, config);
 
       const client = new WritingClient();
       clientsRef.current.set(name, client);
@@ -666,11 +736,17 @@ export function WritingView() {
     }
   }, [activeName, docType, title, publisher, docNumber, audience, style, requirements, lengthWords, selectedKBs, agent, handleEvent, patchSession]);
 
-  // 确保该文件的写作客户端可用：没有则用记录的 sessionId 自动重连
+  // 确保该文件的写作客户端可用：没有则用记录的 sessionId 自动重连。
+  // 已有 client 但 WS 已断（服务重启/网络闪断）时必须丢弃重连，
+  // 否则微调/撤销永远拿到死连接而报「连接未就绪」。
   const ensureClient = useCallback(
     async (name: string): Promise<WritingClient | null> => {
       const existing = clientsRef.current.get(name);
-      if (existing) return existing;
+      if (existing) {
+        if (existing.isConnected()) return existing;
+        existing.disconnect();
+        clientsRef.current.delete(name);
+      }
       const sid = sessionsRef.current[name]?.sessionId;
       if (!sid) return null;
       const client = new WritingClient();
@@ -699,7 +775,8 @@ export function WritingView() {
       const name = activeName;
       if (!name) return;
       if (sessionsRef.current[name]?.revising) return;
-      if (!configRef.current) {
+      const config = configsRef.current.get(name);
+      if (!config) {
         patchSession(name, { reviseError: "写作配置缺失，请重新打开该文件或重新生成" });
         return;
       }
@@ -714,7 +791,7 @@ export function WritingView() {
         return;
       }
       try {
-        client.revise(instruction, configRef.current);
+        client.revise(instruction, config);
       } catch (err) {
         patchSession(name, {
           revising: false,
@@ -731,7 +808,8 @@ export function WritingView() {
       const name = activeName;
       if (!name) return;
       if (sessionsRef.current[name]?.revising) return;
-      if (!configRef.current) {
+      const undoConfig = configsRef.current.get(name);
+      if (!undoConfig) {
         patchSession(name, { reviseError: "写作配置缺失，请重新打开该文件或重新生成" });
         return;
       }
@@ -744,7 +822,7 @@ export function WritingView() {
         return;
       }
       try {
-        client.undo(configRef.current);
+        client.undo(undoConfig);
       } catch (err) {
         patchSession(name, {
           reviseError: err instanceof Error ? err.message : String(err),
@@ -764,7 +842,7 @@ export function WritingView() {
     async (): Promise<{ ok: boolean; message: string }> => {
       const name = activeName;
       const sessionId = name ? sessionsRef.current[name]?.sessionId : undefined;
-      const config = configRef.current;
+      const config = name ? configsRef.current.get(name) : undefined;
       if (!sessionId || !config) {
         return { ok: false, message: "缺少写作会话或配置，请重新生成后再试" };
       }
@@ -794,6 +872,7 @@ export function WritingView() {
     if (name) {
       clientsRef.current.get(name)?.disconnect();
       clientsRef.current.delete(name);
+      configsRef.current.delete(name);
       parsedRef.current.delete(name);
       setSessions((prev) => {
         const next = { ...prev };
@@ -907,23 +986,55 @@ export function WritingView() {
                 />
               </div>
 
-              {/* 最近使用（本地上传历史，点击重新加载） */}
+              {/* 最近使用：服务端入库文档 + 本地上传历史（合并，按时间倒序，跨浏览器一致） */}
               <div className="mt-4 flex-1 overflow-y-auto min-h-0">
                 <div className="flex items-center gap-1.5 text-[12px] text-gray-400 mb-1.5 px-1">
                   <History className="w-3.5 h-3.5" strokeWidth={1.5} />
                   最近使用
                 </div>
-                {localFiles.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-10 text-center">
-                    <FolderOpen className="w-9 h-9 text-gray-200" strokeWidth={1.25} />
-                    <div className="mt-3 text-[13px] text-gray-400">无最近文件</div>
-                    <div className="mt-1 text-[11.5px] text-gray-300 leading-4">
-                      上传过的材料将显示在此处，以便快速访问
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-1.5">
-                    {localFiles.map((rec) => {
+                {(() => {
+                  const seen = new Set<string>();
+                  const recentDocs: RecentEntry[] = [];
+                  for (const d of serverDocs) {
+                    const local = localFiles.find((r) => r.sessionId === d.sessionId);
+                    const name = local?.name ?? d.name;
+                    if (seen.has(name)) continue;
+                    seen.add(name);
+                    recentDocs.push({
+                      name,
+                      updatedAt: Date.parse(d.updatedAt) || 0,
+                      sessionId: d.sessionId,
+                      config: d.config ?? local?.config ?? undefined,
+                      hasLocal: !!local,
+                    });
+                  }
+                  for (const r of localFiles) {
+                    if (!seen.has(r.name)) {
+                      seen.add(r.name);
+                      recentDocs.push({
+                        name: r.name,
+                        updatedAt: r.updatedAt,
+                        sessionId: r.sessionId,
+                        config: r.config,
+                        hasLocal: true,
+                      });
+                    }
+                  }
+                  recentDocs.sort((a, b) => b.updatedAt - a.updatedAt);
+                  if (recentDocs.length === 0) {
+                    return (
+                      <div className="flex flex-col items-center justify-center py-10 text-center">
+                        <FolderOpen className="w-9 h-9 text-gray-200" strokeWidth={1.25} />
+                        <div className="mt-3 text-[13px] text-gray-400">无最近文件</div>
+                        <div className="mt-1 text-[11.5px] text-gray-300 leading-4">
+                          上传过的材料将显示在此处，以便快速访问
+                        </div>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="flex flex-col gap-1.5">
+                      {recentDocs.map((rec) => {
                       const isActive = rec.name === activeName;
                       const sess = sessions[rec.name];
                       const running =
@@ -940,18 +1051,7 @@ export function WritingView() {
                           }
                         >
                           <button
-                            onClick={() => {
-                              // 静默恢复：材料直接就绪（后台补解析），成稿立即从服务端拉回
-                              void selectMaterial(rec.name, () =>
-                                loadLocalMaterial(rec.name),
-                                { silent: true },
-                              ).then(() => {
-                                // 有历史成稿：从服务端恢复（秒级，无 LLM）
-                                if (rec.sessionId && rec.config) {
-                                  void restoreFromServer(rec.name, rec.sessionId, rec.config);
-                                }
-                              });
-                            }}
+                            onClick={() => openRecent(rec)}
                             className="flex flex-1 items-center gap-2.5 min-w-0 text-left"
                           >
                             <FileBadge name={rec.name} size={28} />
@@ -974,7 +1074,7 @@ export function WritingView() {
                             </span>
                           )}
                           <button
-                            onClick={() => void removeSession(rec.name)}
+                            onClick={() => void removeSession(rec.name, rec.sessionId)}
                             title="从最近使用中删除"
                             className="hidden group-hover:flex w-5 h-5 items-center justify-center rounded-md text-gray-300 hover:text-white hover:bg-[#D93025] transition-colors shrink-0"
                           >
@@ -982,9 +1082,10 @@ export function WritingView() {
                           </button>
                         </div>
                       );
-                    })}
-                  </div>
-                )}
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
             </>
           )}
@@ -1121,6 +1222,9 @@ export function WritingView() {
                 revising={active.revising}
                 reviseError={active.reviseError}
                 historySessionId={active.sessionId}
+                bodyFontSize={
+                  configsRef.current.get(activeName ?? "")?.bodyFontSize
+                }
                 onStop={stopWriting}
                 onBackToConfig={backToConfig}
                 onRevise={handleRevise}

@@ -90,6 +90,8 @@ interface GenerateViewProps {
   reviseError?: string | null;
   /** 写作会话 id（有则可回放修订过程） */
   historySessionId?: string;
+  /** 正文字号（pt，可空；微调字号指令后由后端回传，预览按此渲染） */
+  bodyFontSize?: number;
   onStop: () => void;
   onBackToConfig: () => void;
   onRevise: (instruction: string) => void;
@@ -110,6 +112,7 @@ export function GenerateView({
   revising,
   reviseError,
   historySessionId,
+  bodyFontSize,
   onStop,
   onBackToConfig,
   onRevise,
@@ -265,7 +268,7 @@ export function GenerateView({
 
             {/* 定稿预览 */}
             <div className="bg-white rounded-2xl border border-black/5 shadow-sm p-8 md:p-10">
-              <DocPreview content={result.content} title={result.title} />
+              <DocPreview content={result.content} title={result.title} bodyFontSize={bodyFontSize} />
             </div>
 
             {/* 局部微调 */}
@@ -960,12 +963,16 @@ function ExportPdf({ file }: { file?: ResultFile }) {
 
 // ── 定稿预览（轻量 Markdown 渲染，仿宋正文风格）────────────────────────────
 
-function DocPreview({ content, title }: { content: string; title: string }) {
+function DocPreview({ content, title, bodyFontSize }: { content: string; title: string; bodyFontSize?: number }) {
   const blocks = parsePreview(content);
   return (
     <div
-      className="text-[17px] leading-8 text-gray-900"
-      style={{ fontFamily: '"FangSong", "STFangsong", "仿宋", "FangSong_GB2312", serif' }}
+      className="leading-8 text-gray-900"
+      style={{
+        fontFamily: '"FangSong", "STFangsong", "仿宋", "FangSong_GB2312", serif',
+        // 正文字号：默认 17px；微调改档后按 pt→px（×4/3）渲染
+        fontSize: bodyFontSize ? `${Math.round(bodyFontSize * (4 / 3))}px` : undefined,
+      }}
     >
       <h1 className="text-center text-[24px] font-bold mb-8" style={{ fontFamily: '"Songti SC", "SimSun", serif' }}>
         {title}

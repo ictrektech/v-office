@@ -111,6 +111,8 @@ export interface WritingConfig {
   knowledgeBaseNames?: string[];
   /** 发文字号（红头文件版式用，如 "X政发〔2026〕5号"） */
   docNumber?: string;
+  /** 正文字号（pt，可空；微调字号指令由后端改档后回传） */
+  bodyFontSize?: number;
 }
 
 export type WritingEvent = Record<string, unknown> & { _event?: string };
@@ -241,6 +243,11 @@ export class WritingClient {
 
   /** 当前会话 id（create_session / join_session 成功后可用） */
   sessionId = "";
+
+  /** 连接是否可用（WS OPEN 且已完成会话握手）；断线后微调/撤销需先重连 */
+  isConnected(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN && this.started;
+  }
 
   /** 重连已有写作会话（join_session）：刷新后恢复微调/撤销能力 */
   async resume(sessionId: string): Promise<void> {
@@ -391,4 +398,34 @@ export async function restoreWriting(
   });
   if (!res.ok) throw new Error(`恢复失败 (${res.status})`);
   return (await res.json()) as RestoredWriting;
+}
+
+export interface MyWritingDoc {
+  sessionId: string;
+  name: string;
+  updatedAt: string;
+  config: WritingConfig | null;
+}
+
+/** 服务端「最近使用」：当前用户有成稿的写作文档（入库存储，跨浏览器一致） */
+export async function listMyWritingSessions(): Promise<MyWritingDoc[]> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API_BASE}/writing/my-sessions`, {
+    headers,
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new Error(`获取文档列表失败 (${res.status})`);
+  const body = (await res.json()) as { docs?: MyWritingDoc[] };
+  return body.docs ?? [];
+}
+
+/** 删除服务端写作会话（跨浏览器列表同步移除） */
+export async function deleteMyWritingSession(sessionId: string): Promise<void> {
+  const headers = await authHeaders();
+  const res = await fetch(`${API_BASE}/sessions/${sessionId}`, {
+    method: "DELETE",
+    headers,
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok && res.status !== 404) throw new Error(`删除失败 (${res.status})`);
 }
