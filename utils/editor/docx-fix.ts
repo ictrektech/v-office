@@ -1,19 +1,27 @@
 /**
- * docx 页眉/页脚浮动对象环绕修正（sdkjs 渲染兼容层）。
+ * docx 页眉/页脚浮动元素修正（sdkjs 渲染兼容层）。
  *
  * 背景：
  * x2t 把 docx 转成内部 Editor.bin 是正常的（产物合法、无报错），LibreOffice /
- * WPS / Word 渲染同一份文件也正常，唯独 sdkjs 渲染时第一页会整体错位。
+ * WPS / Word 渲染同一份文件也正常，唯独 sdkjs 渲染时第一页会整体错位：正文中
+ * `tblLayout="fixed"` 的表格列宽被整体算错，第一列被撑满、后面的列被挤出页面，
+ * 而后续页看起来是正常的。
  *
- * 定位结论：sdkjs 会把「页眉/页脚里的浮动对象（wp:anchor）」当成正文的环绕
- * 对象，用它的宽度去压缩正文的可用宽度。WPS 导出的表单类文档很常见「页眉里
- * 放一个比正文区还宽的透明文本框（里面套一张表格）」，此时正文中
- * `tblLayout="fixed"` 的表格列宽会被整体算错 —— 表现为第一页表格溢出页面、
- * 列宽错乱，而后续页（没有再被环绕计算影响）看起来是好的。
+ * 定位结论：sdkjs 会把「页眉/页脚里的浮动元素」当成正文的环绕障碍，用它的
+ * 占位宽度去压缩正文的可用宽度。WPS 导出的表单类文档很常见在页眉里放一个比
+ * 正文区还宽的浮动元素，目前实测到两种形态（本质相同）：
  *
- * 处理方式：在把 docx 交给 x2t 之前，把页眉/页脚中浮动对象的环绕方式改成
- * `wrapNone`。页眉内容原样保留，只是不再参与正文环绕计算。
- * 只改页眉/页脚，不动正文里的浮动对象（正文环绕是正常功能，改了会破坏排版）。
+ *   1) 浮动文本框：<wp:anchor> + <wp:wrapSquare/>
+ *      文本框宽 18.4cm，而正文区只有 18cm，wrapSquare 让它参与正文环绕。
+ *   2) 浮动表格：  <w:tblpPr/> + <w:tblOverlap/>
+ *      表格脱离文本流定位（horzAnchor=page + tblpX），表宽 10422 twips 从
+ *      tblpX=884 起算正好越过正文右边界，leftFromText/rightFromText 即环绕距离。
+ *
+ * 处理方式：在把 docx 交给 x2t 之前，把页眉/页脚里的浮动元素"去浮动化"：
+ *   - wp:wrapSquare/Tight/Through/TopAndBottom → wrapNone（不再环绕）
+ *   - 移除 w:tblpPr / w:tblOverlap（浮动表格回归文本流）
+ * 页眉内容原样保留，只是不再参与正文的环绕计算。
+ * 只改页眉/页脚，不动正文里的浮动元素（正文环绕是正常功能，改了会破坏排版）。
  */
 
 const ZIP_SIG_EOCD = 0x06054b50;
@@ -30,6 +38,11 @@ const HEADER_FOOTER_PART = /^word\/(?:header|footer)\d*\.xml$/;
 const WRAP_AROUND = /<wp:wrap(?:Square|Tight|Through|TopAndBottom)\b[^>]*\/>/g;
 const WRAP_AROUND_PAIRED =
   /<wp:wrap(?:Square|Tight|Through|TopAndBottom)\b[^>]*>[\s\S]*?<\/wp:wrap(?:Square|Tight|Through|TopAndBottom)>/g;
+
+/** 浮动表格定位：让表格脱离文本流，从而成为正文的环绕障碍。 */
+const TABLE_POSITION = /<w:tblpPr\b[^>]*\/>/g;
+const TABLE_POSITION_PAIRED = /<w:tblpPr\b[^>]*>[\s\S]*?<\/w:tblpPr>/g;
+const TABLE_OVERLAP = /<w:tblOverlap\b[^>]*\/>/g;
 
 interface ZipEntry {
   name: string;
@@ -235,12 +248,12 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 }
 
 /**
- * 把页眉/页脚中浮动对象的环绕方式改为 wrapNone。
+ * 把页眉/页脚里的浮动元素"去浮动化"（环绕改 wrapNone / 浮动表格回归文本流）。
  *
- * 不是 docx（不是 zip）、没有页眉页脚、或没有任何环绕对象时原样返回，
+ * 不是 docx（不是 zip）、没有页眉页脚、或没有需要处理的内容时原样返回，
  * 因此对绝大多数文档是零开销；解析失败也一律回退到原始数据，绝不阻断打开。
  */
-export async function relaxHeaderFooterAnchors(
+export async function stripHeaderFooterFloats(
   input: ArrayBuffer | Uint8Array,
 ): Promise<ArrayBuffer> {
   const source = toUint8Array(input);
@@ -273,7 +286,10 @@ export async function relaxHeaderFooterAnchors(
         const xml = new TextDecoder().decode(xmlBytes);
         const fixed = xml
           .replace(WRAP_AROUND_PAIRED, "<wp:wrapNone/>")
-          .replace(WRAP_AROUND, "<wp:wrapNone/>");
+          .replace(WRAP_AROUND, "<wp:wrapNone/>")
+          .replace(TABLE_POSITION_PAIRED, "")
+          .replace(TABLE_POSITION, "")
+          .replace(TABLE_OVERLAP, "");
 
         if (fixed !== xml) {
           changed = true;
@@ -310,7 +326,7 @@ export async function relaxHeaderFooterAnchors(
     if (!changed) return toArrayBuffer(bytes);
     return toArrayBuffer(buildZip(rewritten));
   } catch (error) {
-    console.error("Failed to relax header/footer anchors", error);
+    console.error("Failed to strip header/footer floats", error);
     return toArrayBuffer(source);
   }
 }

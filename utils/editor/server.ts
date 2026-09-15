@@ -11,7 +11,7 @@ import {
 import { emptyDocx, emptyPdf, emptyPptx, emptyXlsx } from "./empty";
 import { getDocumentType, getFileExt } from "./utils";
 import { convertDocBuffer } from "./doc-convert";
-import { relaxHeaderFooterAnchors } from "./docx-fix";
+import { stripHeaderFooterFloats } from "./docx-fix";
 import { allPlugins, featuredPlugins, getPluginConfigUrl } from "./plugins";
 import { isVOSMode } from "@/utils/vos/fastpath";
 import { saveCloudFile, clientLog } from "@/utils/vos/storage";
@@ -215,12 +215,12 @@ export class EditorServer {
       if (fileType == "doc") {
         data = await convertDocBuffer(data, "doc", "docx");
       }
-      // 页眉/页脚里的浮动对象（wp:anchor）会被 sdkjs 当成正文环绕对象，
-      // 用它去压缩正文可用宽度；当页眉里的文本框比正文区还宽（WPS 导出的
-      // 表单很常见）时，正文中 tblLayout=fixed 的表格列宽会整体算错 ——
-      // 表现为第一页错位、溢出页面。转换前把环绕方式改为 wrapNone，
-      // 页眉内容保留但不再参与正文环绕。详见 docx-fix.ts。
-      data = await relaxHeaderFooterAnchors(data);
+      // 页眉/页脚里的浮动元素会被 sdkjs 当成正文的环绕障碍，用它们的占位
+      // 宽度压缩正文可用宽度；当浮动元素比正文区还宽（WPS 导出的表单很常见）
+      // 时，正文中 tblLayout=fixed 的表格列宽会被整体算错 —— 表现为第一页
+      // 错位、溢出页面。转换前把页眉/页脚"去浮动化"（环绕改 wrapNone、
+      // 浮动表格回归文本流），内容保留但不再参与正文环绕。详见 docx-fix.ts。
+      data = await stripHeaderFooterFloats(data);
       const result = await converter.convert({
         data: data,
         // .doc 的字节此时已是 docx，按真实格式喂给 x2t
