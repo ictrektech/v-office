@@ -21,13 +21,16 @@ import asyncio
 import logging
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Optional
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -59,7 +62,7 @@ app = FastAPI(title="v-office-storage", docs_url=None, redoc_url=None)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET", "PUT", "PATCH", "DELETE"],
+    allow_methods=["GET", "PUT", "PATCH", "DELETE", "POST"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -225,6 +228,66 @@ async def delete_file(name: str, request: Request) -> JSONResponse:
     target.unlink()
     LOG.info("deleted %s for %s", name, username)
     return JSONResponse({"status": "ok"})
+
+
+@app.post("/api/v1/convert")
+async def convert_file(request: Request, to: str = "docx", frm: str = "doc") -> Response:
+    """LibreOffice headless format conversion (doc <-> docx), auth required.
+
+    The editor engine cannot read legacy .doc reliably nor write it at all,
+    so the web app opens a LibreOffice-converted docx copy and converts the
+    edited docx back to .doc on save. `frm` is the source extension, `to`
+    the target extension ("docx" or "doc").
+    """
+    await current_username(request)  # auth gate (username unused: stateless conversion)
+
+    to = to.lower()
+    frm = frm.lower()
+    allowed = (("docx", "doc"), ("doc", "docx"), ("pdf", "doc"), ("pdf", "docx"))
+    if (to, frm) not in allowed:
+        raise HTTPException(status_code=400, detail="unsupported conversion")
+
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="empty body")
+    if len(body) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="file too large")
+
+    workdir = tempfile.mkdtemp(prefix="convert-")
+    try:
+        src = Path(workdir) / f"input.{frm}"
+        src.write_bytes(body)
+        # 独立 UserInstallation profile：避免并发请求争抢 LibreOffice 配置锁
+        profile = f"file://{workdir}/lo-profile"
+        try:
+            proc = await asyncio.to_thread(
+                subprocess.run,
+                [
+                    "soffice", "--headless", "--norestore",
+                    f"-env:UserInstallation={profile}",
+                    "--convert-to", to, "--outdir", workdir, str(src),
+                ],
+                capture_output=True,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired:
+            raise HTTPException(status_code=504, detail="conversion timed out")
+        out = Path(workdir) / f"input.{to}"
+        if proc.returncode != 0 or not out.is_file():
+            LOG.warning("convert %s->%s failed rc=%s stderr=%s",
+                        frm, to, proc.returncode, proc.stderr.decode("utf-8", "replace")[:300])
+            raise HTTPException(status_code=500, detail="conversion failed")
+        data = out.read_bytes()
+        if not data:
+            raise HTTPException(status_code=500, detail="conversion produced empty output")
+        LOG.info("converted %s->%s (%d -> %d bytes)", frm, to, len(body), len(data))
+        return Response(
+            content=data,
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="converted.{to}"'},
+        )
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 @app.patch("/api/v1/files/{name}")

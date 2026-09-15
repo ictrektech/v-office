@@ -54,3 +54,7 @@ next-env.d.ts
   
 # local test scripts only — never commit
 .trae-test
+
+# python bytecode (server/ 本地运行时生成)
+__pycache__/
+*.pyc

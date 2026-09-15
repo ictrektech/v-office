@@ -11,6 +11,11 @@ COPY requirements.txt ./
 ARG PIP_INDEX_URL=https://pypi.org/simple
 RUN pip install --no-cache-dir -i "${PIP_INDEX_URL}" -r requirements.txt
 
+# LibreOffice headless: doc <-> docx conversion for the editor save/open loop
+# (the x2t engine cannot read legacy .doc layouts nor write .doc at all).
+RUN apt-get update && apt-get install -y --no-install-recommends libreoffice-writer \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY main.py ./
 
 ENV DATA_ROOT=/data

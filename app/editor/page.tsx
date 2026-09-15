@@ -22,6 +22,7 @@ import { createFetchProxy } from "@/utils/editor/fetch";
 import { createXHRProxy } from "@/utils/editor/xhr";
 import { DocEditor } from "@/utils/editor/types";
 import { createExtensionLoader } from "@/utils/extension";
+import { convertDocBuffer, FALLBACK_PREVIEW_PDF } from "@/utils/editor/doc-convert";
 import InstallExtensionDialog from "@/components/install-extension-dialog";
 import DocumentNameDialog from "@/components/document-name-dialog";
 import KnowledgeBaseUploadDialog from "@/components/knowledge-base-upload-dialog";

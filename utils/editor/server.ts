@@ -6,9 +6,12 @@ import {
   AscSaveTypes,
   ServerOptions,
   DocEditor,
+  AvsFileType,
 } from "./types";
 import { emptyDocx, emptyPdf, emptyPptx, emptyXlsx } from "./empty";
 import { getDocumentType, getFileExt } from "./utils";
+import { convertDocBuffer } from "./doc-convert";
+import { relaxHeaderFooterAnchors } from "./docx-fix";
 import { allPlugins, featuredPlugins, getPluginConfigUrl } from "./plugins";
 import { isVOSMode } from "@/utils/vos/fastpath";
 import { saveCloudFile, clientLog } from "@/utils/vos/storage";
@@ -198,19 +201,30 @@ export class EditorServer {
     buffer: ArrayBuffer | (() => Promise<ArrayBuffer>),
     fileType: string,
   ) {
-    if (typeof buffer == "function") {
-      buffer = await buffer();
-    }
+    let data: ArrayBuffer =
+      typeof buffer == "function" ? await buffer() : buffer;
 
     let output: Uint8Array | null = null;
     let media: { [key: string]: Uint8Array } = {};
 
     if (fileType == "pdf") {
-      output = new Uint8Array(buffer);
+      output = new Uint8Array(data);
     } else {
+      // 老版 .doc：x2t 直接解析排版会错乱，先用 LibreOffice 转成 docx 副本
+      // （原文件不动，仅本次打开的内存数据），后续按 docx 正常解析渲染
+      if (fileType == "doc") {
+        data = await convertDocBuffer(data, "doc", "docx");
+      }
+      // 页眉/页脚里的浮动对象（wp:anchor）会被 sdkjs 当成正文环绕对象，
+      // 用它去压缩正文可用宽度；当页眉里的文本框比正文区还宽（WPS 导出的
+      // 表单很常见）时，正文中 tblLayout=fixed 的表格列宽会整体算错 ——
+      // 表现为第一页错位、溢出页面。转换前把环绕方式改为 wrapNone，
+      // 页眉内容保留但不再参与正文环绕。详见 docx-fix.ts。
+      data = await relaxHeaderFooterAnchors(data);
       const result = await converter.convert({
-        data: buffer,
-        fileFrom: "doc." + fileType,
+        data: data,
+        // .doc 的字节此时已是 docx，按真实格式喂给 x2t
+        fileFrom: "doc." + (fileType == "doc" ? "docx" : fileType),
         fileTo: "Editor.bin",
       });
       output = result.output;
@@ -519,6 +533,15 @@ export class EditorServer {
         formatTo = 513;
       }
 
+      // x2t 无法把内部 bin 导出为老版 .doc 二进制格式（输出 0 字节文件，
+      // PUT 到存储后被判 empty body 返回 400 → 编辑器弹「保存文件时发生错误」）。
+      // .doc 文档保存时统一升级为 .docx：输出格式与保存文件名同步改名。
+      const saveExt = (getFileExt(cmd.title) || this.fileType || "docx").toLowerCase();
+      const isLegacyDoc = saveExt === "doc";
+      if (isLegacyDoc) {
+        formatTo = AvsFileType.AVS_FILE_DOCUMENT_DOCX;
+      }
+
       const browserDownload = (data: Uint8Array) => {
         const blob = new Blob([new Uint8Array(data)]);
         const url = URL.createObjectURL(blob);
@@ -551,8 +574,7 @@ export class EditorServer {
           fileFrom = "from.pdf";
         }
 
-        const fileTo =
-          "doc." + (getFileExt(cmd.title) || this.fileType || "docx");
+        const fileTo = "doc." + (isLegacyDoc ? "docx" : saveExt);
 
         let { output } = await converter.convert({
           data: input.buffer,
@@ -564,10 +586,25 @@ export class EditorServer {
         if (!output && cmd.format == "pdf") {
           output = input;
         }
-        if (!output) {
-          console.error("Conversion failed");
-          // TODO: error message
+        if (!output || output.byteLength === 0) {
+          // 0 字节输出也视为失败：空文件 PUT 到存储会被判 empty body（400）
+          console.error("Conversion failed (empty output)");
+          clientLog(`save-failed: ${saveName} :: conversion produced empty output`);
           return { status: "error" };
+        }
+        // 老版 .doc：编辑器只能导出 docx（x2t 写不了 .doc 二进制），
+        // 经 LibreOffice 转回 .doc —— 格式、文件名都保持原样，用户无感知
+        let finalOutput = output;
+        if (isLegacyDoc) {
+          try {
+            finalOutput = new Uint8Array(
+              await convertDocBuffer(finalOutput, "docx", "doc"),
+            );
+          } catch (error) {
+            clientLog(`save-failed: ${saveName} :: doc round-trip failed :: ${error}`);
+            console.error("Failed to convert docx back to legacy .doc", error);
+            return { status: "error" };
+          }
         }
 
         // 导出模式（上传知识库）：把转换后的字节回调出去，不落 VOS 存储、
@@ -577,7 +614,7 @@ export class EditorServer {
           this.exportResolver = null;
           const exportedName = this.exportFileName || saveName;
           this.exportFileName = null;
-          resolver({ fileName: exportedName, data: output });
+          resolver({ fileName: exportedName, data: finalOutput });
           return { status: "ok" };
         }
 
@@ -585,9 +622,9 @@ export class EditorServer {
         // A failed server save must remain an error instead of silently changing
         // the operation into a browser download.
         if (vosMode) {
-          clientLog(`save-begin: ${saveName} (${output.byteLength} bytes)`);
+          clientLog(`save-begin: ${saveName} (${finalOutput.byteLength} bytes)`);
           try {
-            await saveCloudFile(saveName, output);
+            await saveCloudFile(saveName, finalOutput);
             clientLog(`save-ok: ${saveName}`);
             return { status: "ok" };
           } catch (error) {
@@ -598,7 +635,7 @@ export class EditorServer {
         }
 
         clientLog("save-skipped: not vos mode");
-        browserDownload(output);
+        browserDownload(finalOutput);
         return { status: "ok" };
       };
 
