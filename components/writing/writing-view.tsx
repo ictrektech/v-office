@@ -185,6 +185,8 @@ export function WritingView() {
   const [localFiles, setLocalFiles] = useState<LocalMaterialRecord[]>([]);
   /** 服务端「最近使用」：当前用户有成稿的文档（入库，跨浏览器一致） */
   const [serverDocs, setServerDocs] = useState<MyWritingDoc[]>([]);
+  /** 服务端列表加载中：加载期间空列表显示加载态而非"无最近文件" */
+  const [serverDocsLoading, setServerDocsLoading] = useState(true);
   /** agentic-search 写作服务可用性：null 检测中 / false 不可用（提示安装） */
   const [serviceOk, setServiceOk] = useState<boolean | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -225,20 +227,43 @@ export function WritingView() {
     listLocalMaterials()
       .then(setLocalFiles)
       .catch(() => setLocalFiles([]));
-    // 服务端「最近使用」：入库存储，换浏览器登录也能看到自己的文档
-    listMyWritingSessions()
-      .then(setServerDocs)
-      .catch(() => setServerDocs([]));
+    // 服务端「最近使用」：入库存储，换浏览器登录也能看到自己的文档。
+    // 挂载瞬间 JWT 兑换可能未完成 → 首次请求会失败，自动重试直到成功
+    loadServerDocsRef.current();
     // 服务可用性探测：agentic-search 不在则提示用户安装/启动（200 = 可用）
     void checkWritingService().then(setServiceOk);
   }, []);
 
+  /**
+   * 加载服务端「最近使用」列表。
+   * - 失败自动重试（挂载时 JWT 兑换/whoAmI 可能未就绪，静默失败会让列表
+   *   永远显示"无最近文件"——实际数据在服务端好好的）；
+   * - 重试耗尽不清空已有列表，仅结束加载态（数据还在就继续展示）。
+   */
+  const loadServerDocs = useCallback((retries = 5) => {
+    setServerDocsLoading(true);
+    listMyWritingSessions()
+      .then((docs) => {
+        setServerDocs(docs);
+        setServerDocsLoading(false);
+      })
+      .catch(() => {
+        if (retries > 0) {
+          setTimeout(() => loadServerDocs(retries - 1), 2_000);
+        } else {
+          setServerDocsLoading(false);
+        }
+      });
+  }, []);
+
+  // loadServerDocs 稳定引用：mount effect 依赖空数组，经 ref 调用避免依赖告警
+  const loadServerDocsRef = useRef(loadServerDocs);
+  loadServerDocsRef.current = loadServerDocs;
+
   /** 刷新服务端「最近使用」列表（成稿落库 / 删除后调用） */
   const refreshServerDocs = useCallback(() => {
-    listMyWritingSessions()
-      .then(setServerDocs)
-      .catch(() => setServerDocs([]));
-  }, []);
+    loadServerDocs();
+  }, [loadServerDocs]);
 
   // ── 材料选中即上传解析（本地文件 / 云文档统一走这里）──
   const selectMaterial = useCallback(
@@ -1022,6 +1047,14 @@ export function WritingView() {
                   }
                   recentDocs.sort((a, b) => b.updatedAt - a.updatedAt);
                   if (recentDocs.length === 0) {
+                    if (serverDocsLoading) {
+                      return (
+                        <div className="flex flex-col items-center justify-center py-10 text-center">
+                          <span className="inline-block w-5 h-5 rounded-full border-2 border-gray-200 border-t-primary animate-spin" />
+                          <div className="mt-3 text-[13px] text-gray-400">正在加载最近文件…</div>
+                        </div>
+                      );
+                    }
                     return (
                       <div className="flex flex-col items-center justify-center py-10 text-center">
                         <FolderOpen className="w-9 h-9 text-gray-200" strokeWidth={1.25} />
