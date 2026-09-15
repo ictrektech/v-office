@@ -678,14 +678,32 @@ export class EditorServer {
       // 导致插件白屏——所以这里必须 push 带 origin 的绝对 URL。
       // config 里的 url 保持相对（见 agentic-search 插件 config.json），
       // api 网关由插件 index.js 自动嗅探，不在 url 上传参。
-      configs.push(
-        AGENTIC_SEARCH_PLUGIN_CONFIG.startsWith("http")
-          ? AGENTIC_SEARCH_PLUGIN_CONFIG
-          : u.origin + AGENTIC_SEARCH_PLUGIN_CONFIG,
-      );
+      // 软依赖：VOS 中未安装 agentic-search 时 config.json 会 404，
+      // sdk 加载插件失败会连带把整个编辑器拖垮（「使用文档出错」，
+      // 全部功能瘫痪）。注入前先探测可用性，不可用直接跳过——
+      // 缺的只是 AI 助手插件入口，文档编辑本身不受影响。
+      const agenticUrl = AGENTIC_SEARCH_PLUGIN_CONFIG.startsWith("http")
+        ? AGENTIC_SEARCH_PLUGIN_CONFIG
+        : u.origin + AGENTIC_SEARCH_PLUGIN_CONFIG;
+      if (await probeUrl(agenticUrl)) {
+        configs.push(agenticUrl);
+      }
       return Response.json({ url: "", pluginsData: configs, autostart: [] });
     }
 
     return null;
+  }
+}
+
+/** 探测 URL 可用性（2s 超时）：不可达时返回 false，让调用方跳过注入 */
+async function probeUrl(url: string): Promise<boolean> {
+  try {
+    const resp = await fetch(url, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(2_000),
+    });
+    return resp.ok;
+  } catch {
+    return false;
   }
 }
