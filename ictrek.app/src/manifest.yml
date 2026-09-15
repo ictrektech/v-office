@@ -18,6 +18,8 @@ frontend:
 platform:
   version: ">=3.0.0"
 
+require-profiles: true
+
 storage:
   directories:
     - path: documents
