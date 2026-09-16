@@ -25,6 +25,9 @@ function resolveLanguage(language: Language): Locale {
   return language as Locale;
 }
 
+/** Word 文档（doc/docx）解析内核偏好，默认 OnlyOffice */
+export type WordEngine = "onlyoffice" | "collabora";
+
 interface AppState {
   // Document State
   server: EditorServer;
@@ -33,10 +36,13 @@ interface AppState {
   language: Language;
   theme: OfficeTheme;
   plugins: PluginMode;
+  wordEngine: WordEngine;
 
   // Actions
   setState: (
-    state: Partial<Pick<AppState, "language" | "theme" | "plugins">>,
+    state: Partial<
+      Pick<AppState, "language" | "theme" | "plugins" | "wordEngine">
+    >,
   ) => void;
 }
 
@@ -52,6 +58,7 @@ export const useAppStore = create<AppState>()(
       language: LocaleExtend.Auto,
       theme: "theme-white",
       plugins: "featured",
+      wordEngine: "onlyoffice",
 
       // Settings Actions
       setState: (newState) => set((state) => ({ ...state, ...newState })),
@@ -63,6 +70,7 @@ export const useAppStore = create<AppState>()(
         language: state.language,
         theme: state.theme,
         plugins: state.plugins,
+        wordEngine: state.wordEngine,
       }),
     },
   ),

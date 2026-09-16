@@ -1,8 +1,15 @@
 "use client";
 
-import { Upload, FileText, FolderOpen, Download } from "lucide-react";
+import { Upload, FileText, FolderOpen, Download, Info } from "lucide-react";
 import { useRef, useState, useEffect } from "react";
 import { useExtracted } from "next-intl";
+import { cn } from "@/lib/utils";
+import {
+  useAppStore,
+  useHasHydrated,
+  useResolvedLanguage,
+  type WordEngine,
+} from "@/store";
 
 interface FilePickerCardProps {
   onFileSelect?: (file: File) => void;
@@ -251,6 +258,11 @@ export function FilePickerCard({
             {t("Supports: DOCX, DOC, XLSX, XLS, PPTX, PPT, PDF")}
           </p>
 
+          {/* Word 文档解析引擎选择（默认 OnlyOffice，复杂文档推荐 Collabora）。
+              点击切换不能触发文件选择，需阻断冒泡。 */}
+          <EngineSwitch />
+
+
           {/* Quick access buttons for File System Access API */}
           {supportsFileSystemAPI && false && (
             <div className="flex items-center justify-center gap-3">
@@ -300,5 +312,103 @@ export function FilePickerCard({
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * Word 文档解析引擎选择器：默认 OnlyOffice，可切换到 Collabora
+ * （LibreOffice 内核，对复杂文档解析能力更强）。选择持久化到 store，
+ * 打开文档后编辑器按此选择启动对应内核。
+ */
+function EngineSwitch() {
+  const hasHydrated = useHasHydrated();
+  const wordEngine = useAppStore((state) => state.wordEngine);
+  const resolved = useResolvedLanguage();
+  // SSR 与客户端首帧必须输出同一份内容：hydrate 前按站点默认语言（中文）
+  // 渲染，与 i18n/request.ts 的 defaultLocale 保持一致；hydrate 后再跟随
+  // 用户语言，避免 hydration 不匹配导致整棵 SSR 树被丢弃重渲染。
+  const zh = hasHydrated ? resolved.toLowerCase().startsWith("zh") : true;
+  // SSR 与客户端首帧必须一致（默认 OnlyOffice），persist 恢复完成后再显示
+  // 用户实际选择，否则 localStorage 里的值会触发 hydration 不匹配，
+  // 导致 React 丢弃整棵 SSR 树重渲染（表现为页面闪一下 + dev 报 Issue）。
+  const activeEngine: WordEngine = hasHydrated ? wordEngine : "onlyoffice";
+
+  const setEngine = (engine: WordEngine) =>
+    useAppStore.getState().setState({ wordEngine: engine });
+
+  const collaboraHint = zh
+    ? "Collabora（LibreOffice 内核）：对复杂文档（如 WPS 表单类 Word）解析能力更强"
+    : "Collabora (LibreOffice core): renders complex documents (e.g. WPS-style Word forms) more faithfully";
+  const onlyOfficeHint = zh
+    ? "默认内核，适合常规文档"
+    : "Default core for regular documents";
+
+  return (
+    <div
+      className="mb-4 flex flex-col items-center gap-1.5"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+    >
+      <div className="flex items-center justify-center gap-2">
+        <span className="text-xs text-text-secondary/70">
+          {zh ? "Word 解析引擎" : "Word engine"}
+        </span>
+        <div className="inline-flex items-center rounded-lg border border-border bg-background/70 p-0.5 shadow-sm">
+          <button
+            type="button"
+            onClick={() => setEngine("onlyoffice")}
+            title={onlyOfficeHint}
+            className={cn(
+              "rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors",
+              activeEngine === "onlyoffice"
+                ? "bg-primary text-primary-foreground shadow"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            OnlyOffice
+          </button>
+          <button
+            type="button"
+            onClick={() => setEngine("collabora")}
+            title={collaboraHint}
+            className={cn(
+              "rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors",
+              activeEngine === "collabora"
+                ? "bg-primary text-primary-foreground shadow"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            Collabora
+          </button>
+        </div>
+        <span title={collaboraHint} className="cursor-help">
+          <Info className="w-3 h-3 text-text-secondary/60" aria-hidden />
+        </span>
+      </div>
+      {/* 常显的引擎说明：加粗引擎名并配色区分，一眼看清两个引擎的取舍 */}
+      <p className="max-w-lg text-center text-sm leading-relaxed text-foreground/85">
+        {zh ? (
+          <>
+            <span className="font-semibold text-primary">OnlyOffice</span>
+            {" 解析快，但复杂文档解析能力有限；"}
+            <span className="font-semibold text-violet-500 dark:text-violet-400">
+              Collabora
+            </span>
+            {" 解析能力强、能处理复杂文档，速度稍慢"}
+          </>
+        ) : (
+          <>
+            <span className="font-semibold text-primary">OnlyOffice</span>
+            {" is fast but limited on complex documents; "}
+            <span className="font-semibold text-violet-500 dark:text-violet-400">
+              Collabora
+            </span>
+            {" handles complex documents better, slightly slower"}
+          </>
+        )}
+      </p>
+    </div>
   );
 }

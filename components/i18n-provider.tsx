@@ -35,17 +35,23 @@ async function loadMessages(locale: Locale): Promise<AbstractIntlMessages> {
 interface I18nProviderProps {
   children: ReactNode;
   initialMessages: AbstractIntlMessages;
+  /** SSR/静态导出首屏使用的语言，保证初始 locale 与消息一致 */
+  initialLocale?: Locale;
 }
 
 /**
  * Client-side i18n provider that switches language based on store setting.
  * Dynamically loads message files when language changes.
  */
-export function I18nProvider({ children, initialMessages }: I18nProviderProps) {
+export function I18nProvider({
+  children,
+  initialMessages,
+  initialLocale = Locale.EN,
+}: I18nProviderProps) {
   const locale = useResolvedLanguage();
   const [messages, setMessages] =
     useState<AbstractIntlMessages>(initialMessages);
-  const [currentLocale, setCurrentLocale] = useState<Locale>(Locale.EN);
+  const [currentLocale, setCurrentLocale] = useState<Locale>(initialLocale);
 
   useEffect(() => {
     // Load messages when locale changes

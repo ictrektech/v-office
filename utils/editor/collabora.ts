@@ -12,8 +12,9 @@
  * 加载 Collabora；Collabora 通过 WOPI 协议直接读写 storage，
  * 因此保存链路与原有实现一致，Excel/PPT 等其它格式完全不受影响。
  *
- * 开关为 NEXT_PUBLIC_WORD_ENGINE=collabora；未设置时本模块全部返回 null，
- * 编辑器保持原有 OnlyOffice 内核，便于随时回退。
+ * 默认仍用 OnlyOffice 内核解析；用户可在编辑器里点击按钮手动切换到
+ * Collabora（对复杂文档解析能力更强），NEXT_PUBLIC_WORD_ENGINE=collabora
+ * 可让 Word 文档默认就走 Collabora。
  */
 
 import { getVOSAccessToken, clearVOSAuthCache } from "@/utils/vos/fastpath";
@@ -22,17 +23,22 @@ const STORAGE_API =
   process.env.NEXT_PUBLIC_STORAGE_API || "/api/com.ictrek.v-office/api/v1";
 
 /**
- * 是否用 Collabora 作为 Word 内核。
+ * Word 文档是否默认走 Collabora 内核。
  *
- * 默认启用（Word 文档按新内核打开）；如某环境尚未部署 Collabora 容器，
- * 设 NEXT_PUBLIC_WORD_ENGINE=onlyoffice 即可整体回退到原内核。
- * 即使启用，会话取不到时也会自动回退，不会出现“文档打不开”。
+ * 默认关闭（OnlyOffice 优先），由用户在编辑器里手动切换；部署侧想让
+ * Word 文档默认用 Collabora 时设 NEXT_PUBLIC_WORD_ENGINE=collabora。
+ * 即使默认/手动启用，会话取不到时也会自动回退，不会出现“文档打不开”。
  */
 export const COLLABORA_WORD_ENGINE =
-  process.env.NEXT_PUBLIC_WORD_ENGINE !== "onlyoffice";
+  process.env.NEXT_PUBLIC_WORD_ENGINE === "collabora";
 
 /** 走 Collabora 的扩展名：本阶段只覆盖 Word 文档。 */
 const COLLABORA_EXTS = new Set(["doc", "docx"]);
+
+/** 是否为 Collabora 可接管的 Word 文档（doc/docx），供编辑器 UI 判断。 */
+export function isWordDocExt(ext: string | undefined | null): boolean {
+  return COLLABORA_EXTS.has((ext || "").toLowerCase().replace(/^\./, ""));
+}
 
 /**
  * 是否改用 Collabora 内核。
@@ -45,10 +51,7 @@ export function shouldUseCollabora(
   ext: string | undefined | null,
   override?: string | null,
 ): boolean {
-  const isWord = COLLABORA_EXTS.has(
-    (ext || "").toLowerCase().replace(/^\./, ""),
-  );
-  if (!isWord) return false;
+  if (!isWordDocExt(ext)) return false;
   if (override === "collabora") return true;
   if (override === "onlyoffice") return false;
   return COLLABORA_WORD_ENGINE;

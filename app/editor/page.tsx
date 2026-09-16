@@ -7,7 +7,7 @@ import {
   useEffect,
   useState,
 } from "react";
-import { X, Upload } from "lucide-react";
+import { X, Upload, Layers, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { Toaster } from "sonner";
 import { useAppStore, useResolvedLanguage, useHasHydrated } from "@/store";
@@ -26,6 +26,7 @@ import { convertDocBuffer, FALLBACK_PREVIEW_PDF } from "@/utils/editor/doc-conve
 import {
   fetchCollaboraSession,
   guessExtension,
+  isWordDocExt,
   pushDocumentToStorage,
   shouldUseCollabora,
 } from "@/utils/editor/collabora";
@@ -69,6 +70,18 @@ export default function Page() {
    * 内核（默认、以及取不到会话时的回退路径）。
    */
   const [collaboraUrl, setCollaboraUrl] = useState<string | null>(null);
+  /** 当前文档是否为 Collabora 可接管的 Word 文档（doc/docx，非新建文档） */
+  const [wordDoc, setWordDoc] = useState(false);
+  /** 引擎切换进行中（换会话/重挂编辑器），期间禁用切换按钮 */
+  const [switchingEngine, setSwitchingEngine] = useState(false);
+  /** 当前实际生效的内核，用于避免重复初始化与切换失败的回退判断 */
+  const activeEngineRef = useRef<"onlyoffice" | "collabora" | null>(null);
+  /** 可重复执行的编辑器启动函数（供 UI 按钮切换内核时复用） */
+  const startEditorRef = useRef<((useCollabora: boolean) => Promise<void>) | null>(
+    null,
+  );
+  /** 打开文档时的编辑权限（切换内核时沿用） */
+  const editingRef = useRef(true);
   /** HybRAG 是否已安装（未安装时隐藏"上传到知识库"入口） */
   const [kbAvailable, setKbAvailable] = useState(false);
   const tryDirectRef = useRef<(() => Promise<void>) | null>(null);
@@ -140,6 +153,48 @@ export default function Page() {
     isDirty.current = false;
     window.location.href = sitePath("/");
   }, [language, server, requestFileName]);
+
+  /**
+   * 手动切换解析内核：doc/docx 默认用 OnlyOffice，用户点击按钮后换
+   * Collabora（对复杂文档解析能力更强），也可从 Collabora 切回 OnlyOffice。
+   */
+  const handleSwitchEngine = useCallback(
+    async (useCollabora: boolean) => {
+      const start = startEditorRef.current;
+      if (!start || switchingEngine) return;
+      const zh = language.toLowerCase().startsWith("zh");
+      setSwitchingEngine(true);
+      try {
+        // 选择持久化，下次从首页打开文档时沿用同一内核
+        useAppStore.getState().setState({
+          wordEngine: useCollabora ? "collabora" : "onlyoffice",
+        });
+        await start(useCollabora);
+        if (useCollabora) {
+          if (activeEngineRef.current === "collabora") {
+            toast.success(
+              zh
+                ? "已切换到 Collabora 内核：对复杂文档（如 WPS 表单类 Word）的解析能力更强"
+                : "Switched to Collabora: it renders complex documents (e.g. WPS-style Word forms) more faithfully",
+            );
+          } else {
+            toast.error(
+              zh
+                ? "Collabora 内核暂不可用，已保留 OnlyOffice"
+                : "Collabora is unavailable, staying on OnlyOffice",
+            );
+          }
+        } else {
+          toast.info(
+            zh ? "已切换回 OnlyOffice 内核" : "Switched back to OnlyOffice",
+          );
+        }
+      } finally {
+        setSwitchingEngine(false);
+      }
+    },
+    [language, switchingEngine],
+  );
 
   /** 上传到知识库：导出当前文档字节 → hybrag 上传 */
   const handleKbUpload = useCallback(
@@ -477,13 +532,11 @@ export default function Page() {
         })
       }
 
-      // Word 文档（doc/docx）改用 Collabora 内核：它原生读写老版 .doc，
-      // 且对 WPS 表单类文档的渲染保真度明显更高。会话取不到时回退到原有
-      // OnlyOffice 链路，保证“新内核不可用”不会演变成“文档打不开”。
-      //
+      editingRef.current = editing;
+
       // 判定必须以实际装载的文档为准：本地文件（拖拽 / 选择 / 最近 / 云端
       // 下载）走的是 server.open(file) + router.push("/editor")，URL 上不带
-      // 任何参数，只认 searchParams 会永远命中不到，等于 Collabora 没生效。
+      // 任何参数，只认 searchParams 会永远命中不到。
       const document = server.getDocument();
       const original = server.getOriginalDocument();
       const ext = guessExtension(
@@ -493,32 +546,74 @@ export default function Page() {
         searchParams.get("fileType"),
         fileUrl,
       );
-      if (
-        !server.isNewDocumentOpen() &&
-        shouldUseCollabora(ext, engineOverride)
-      ) {
-        const name =
-          original?.name ||
-          searchParams.get("fileName") ||
-          document.title;
-        // 本地文件只在浏览器内存里，Collabora 服务端取不到，先原样推一份到
-        // storage；?url= 指向存储时文件本来就在，不必重复上传。
-        const ready = original
-          ? await pushDocumentToStorage(original.name, original.data)
-          : Boolean(fileUrl);
-        if (ready) {
-          const session = await fetchCollaboraSession(name, editing);
-          if (session) {
-            setCollaboraUrl(session.editorUrl);
-            return; // 不再初始化 OnlyOffice 内核
-          }
-        }
-        console.warn(
-          "[editor] Collabora session unavailable, falling back to OnlyOffice",
-        );
-      }
+      const isWord = isWordDocExt(ext) && !server.isNewDocumentOpen();
+      setWordDoc(isWord);
 
-      loadEditor()
+      /**
+       * 按内核启动编辑器，可重复调用（UI 按钮切换内核时复用）。
+       * doc/docx 默认用 OnlyOffice；useCollabora 为 true 时先换取
+       * Collabora 会话，取不到再回退 OnlyOffice，保证“新内核不可用”
+       * 不会演变成“文档打不开”。
+       */
+      const startEditor = async (useCollabora: boolean) => {
+        if (useCollabora && isWord) {
+          const name =
+            original?.name ||
+            searchParams.get("fileName") ||
+            document.title;
+          // 本地文件只在浏览器内存里，Collabora 服务端取不到，先原样推一份
+          // 到 storage；?url= 指向存储时文件本来就在，不必重复上传。
+          const ready = original
+            ? await pushDocumentToStorage(original.name, original.data)
+            : Boolean(fileUrl);
+          const session = ready
+            ? await fetchCollaboraSession(name, editingRef.current)
+            : null;
+          if (session) {
+            // 销毁已有 OnlyOffice 实例，避免事件监听残留
+            editorRef.current?.destroyEditor?.();
+            editorRef.current = null;
+            editor?.destroyEditor?.();
+            editor = null;
+            activeEngineRef.current = "collabora";
+            setCollaboraUrl(session.editorUrl);
+            return;
+          }
+          if (activeEngineRef.current === "onlyoffice") {
+            // 手动切换失败：OnlyOffice 仍在运行，维持现状不重复初始化
+            console.warn(
+              "[editor] Collabora session unavailable, staying on OnlyOffice",
+            );
+            return;
+          }
+          console.warn(
+            "[editor] Collabora session unavailable, falling back to OnlyOffice",
+          );
+        }
+
+        activeEngineRef.current = "onlyoffice";
+        setCollaboraUrl(null);
+        editorRef.current?.destroyEditor?.();
+        editorRef.current = null;
+        editor?.destroyEditor?.();
+        editor = null;
+        // #placeholder 由 collaboraUrl 条件渲染，等 React 提交后再挂编辑器
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        loadEditor();
+      };
+      startEditorRef.current = startEditor;
+
+      // 引擎优先级：URL 参数（调试）> 用户偏好（首页上传卡选择/编辑器内
+      // 切换，持久化在 store）> 环境变量默认（OnlyOffice）
+      const userEngine = useAppStore.getState().wordEngine;
+      const enginePref =
+        engineOverride ||
+        (userEngine === "collabora"
+          ? "collabora"
+          : userEngine === "onlyoffice"
+            ? "onlyoffice"
+            : null);
+      await startEditor(shouldUseCollabora(ext, enginePref));
     }
 
     init()
@@ -570,6 +665,56 @@ export default function Page() {
           {language.toLowerCase().startsWith("zh")
             ? "上传到知识库"
             : "Upload to KB"}
+        </span>
+      </button>
+    )}
+    {wordDoc && !collaboraUrl && (
+      <button
+        type="button"
+        onClick={() => handleSwitchEngine(true)}
+        disabled={switchingEngine}
+        aria-label={
+          language.toLowerCase().startsWith("zh")
+            ? "使用 Collabora 打开"
+            : "Open with Collabora"
+        }
+        title={
+          language.toLowerCase().startsWith("zh")
+            ? "使用 Collabora 打开：对复杂文档（如 WPS 表单类 Word）解析能力更强"
+            : "Open with Collabora: renders complex documents (e.g. WPS-style Word forms) more faithfully"
+        }
+        className="fixed right-64 top-3 z-50 flex h-9 items-center gap-1.5 rounded-lg bg-background/90 px-3 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted disabled:opacity-60"
+      >
+        <Layers className="h-4 w-4" />
+        <span className="text-sm font-medium">
+          {language.toLowerCase().startsWith("zh")
+            ? "使用 Collabora 打开"
+            : "Open with Collabora"}
+        </span>
+      </button>
+    )}
+    {collaboraUrl && (
+      <button
+        type="button"
+        onClick={() => handleSwitchEngine(false)}
+        disabled={switchingEngine}
+        aria-label={
+          language.toLowerCase().startsWith("zh")
+            ? "切换回 OnlyOffice"
+            : "Switch back to OnlyOffice"
+        }
+        title={
+          language.toLowerCase().startsWith("zh")
+            ? "切换回 OnlyOffice 内核"
+            : "Switch back to OnlyOffice"
+        }
+        className="fixed right-64 top-3 z-50 flex h-9 items-center gap-1.5 rounded-lg bg-background/90 px-3 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted disabled:opacity-60"
+      >
+        <RotateCcw className="h-4 w-4" />
+        <span className="text-sm font-medium">
+          {language.toLowerCase().startsWith("zh")
+            ? "切换回 OnlyOffice"
+            : "Back to OnlyOffice"}
         </span>
       </button>
     )}
