@@ -65,6 +65,15 @@ export class EditorServer {
   private fileType: string = "docx";
   private title: string = "";
   private isNewDocument = false;
+  /**
+   * 打开文档时的原始字节与文件名（未经 x2t 转换）。
+   *
+   * Collabora 是服务端渲染，只能通过 WOPI 从 storage 取文件，因此本地打开的
+   * 文档要先原样推一份到存储。fsMap 里只有转换后的 Editor.bin，回写不出可用
+   * 的原文件，所以这里必须单独留底。
+   */
+  private originalData: ArrayBuffer | null = null;
+  private originalName = "";
   /** 新建文档在编辑期间静默保存用的默认文件名（退出时 UI 据此弹框改名） */
   private untitledSavedAs: string | null = null;
   private requestFileName:
@@ -108,6 +117,8 @@ export class EditorServer {
     this.title = title;
     this.isNewDocument = false;
     const buffer = await file.arrayBuffer();
+    this.originalData = buffer;
+    this.originalName = title;
     this.loadPromise = this.loadDocument(buffer, this.fileType);
 
     return {
@@ -122,6 +133,8 @@ export class EditorServer {
     this.id = this.id || randomId();
     this.title = "New Document";
     this.isNewDocument = true;
+    this.originalData = null;
+    this.originalName = "";
     const documentType = getDocumentType(this.fileType);
 
     let binData: Uint8Array | null = null;
@@ -195,6 +208,22 @@ export class EditorServer {
 
   getUser() {
     return this.user;
+  }
+
+  /** 当前装载的是否是"新建文档"（新建文档不进存储，不能走 Collabora）。 */
+  isNewDocumentOpen() {
+    return this.isNewDocument;
+  }
+
+  /**
+   * `open(file)` 打开时留底的原文件。
+   *
+   * 只对"有 File 对象"的入口（拖拽 / 选择本地文件 / 云端文档下载后打开）
+   * 有值；`openUrl` 是惰性下载，决策时通常还没有字节，返回 null。
+   */
+  getOriginalDocument(): { name: string; data: ArrayBuffer } | null {
+    if (!this.originalData || !this.originalName) return null;
+    return { name: this.originalName, data: this.originalData };
   }
 
   private async loadDocument(

@@ -18,6 +18,10 @@ users call the REST API directly.
 """
 
 import asyncio
+import base64
+import hashlib
+import hmac
+import json
 import logging
 import os
 import re
@@ -51,8 +55,9 @@ USERINFO_TIMEOUT = httpx.Timeout(10.0)
 USERNAME_CACHE_TTL = 300.0
 
 # File names handed over by the editor; keep them boring and traversal-free.
+# `doc` 是 Collabora 路线需要的：它原生读写老版 .doc，不必再转成 docx。
 FILENAME_RE = re.compile(
-    r"^[\w][\w .()\[\]\-]{0,180}\.(docx|xlsx|pptx|pdf|odt|ods|odp|csv|txt|md)$",
+    r"^[\w][\w .()\[\]\-]{0,180}\.(doc|docx|xlsx|pptx|pdf|odt|ods|odp|csv|txt|md)$",
     re.IGNORECASE,
 )
 # VOS usernames are mapped onto directory names; everything unusual becomes "_".
@@ -307,6 +312,255 @@ async def rename_file(
     os.replace(source, target)
     LOG.info("renamed %s to %s for %s", name, target.name, username)
     return JSONResponse({"status": "ok", "name": target.name})
+
+
+# ============================================================================
+# WOPI host —— Collabora Online 集成
+#
+# Collabora 不接触用户凭证：前端先向本服务换取一个短时效 access_token，
+# Collabora 再拿它回调 /wopi/files/... 读写文档。token 由 HMAC 签名并自带
+# 用户名与文件名，因此即使 Collabora 侧被诱导，也无法越权访问他人目录。
+#
+# 为不打断既有 OnlyOffice 链路，这里只新增端点，不改动原有 REST API。
+# ============================================================================
+
+from urllib.parse import quote  # noqa: E402  (紧随相关实现，便于阅读)
+
+WOPI_SECRET = os.environ.get("V_OFFICE_WOPI_SECRET", "v-office-dev-wopi-secret")
+WOPI_TOKEN_TTL = int(os.environ.get("V_OFFICE_WOPI_TOKEN_TTL", "3600"))
+# Collabora 容器访问本服务的地址（据此拼 WOPISrc）
+WOPI_PUBLIC_BASE = os.environ.get("V_OFFICE_WOPI_PUBLIC_BASE", "http://172.17.0.1:5000")
+# 浏览器访问 Collabora 的地址
+COLLABORA_PUBLIC_URL = os.environ.get("V_OFFICE_COLLABORA_URL", "http://localhost:9980")
+# 本服务访问 Collabora 的地址（用于拉 discovery）
+COLLABORA_INTERNAL_URL = os.environ.get(
+    "V_OFFICE_COLLABORA_INTERNAL_URL", COLLABORA_PUBLIC_URL
+)
+
+# (username, filename) -> lock id；只在单实例内存里，够用即可
+_wopi_locks: dict[str, str] = {}
+
+
+def _b64e(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _b64d(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+
+
+def _wopi_sig(payload: bytes) -> str:
+    return _b64e(
+        hmac.new(WOPI_SECRET.encode("utf-8"), payload, hashlib.sha256).digest()
+    )
+
+
+def issue_wopi_token(username: str, name: str, can_write: bool = True) -> str:
+    body = json.dumps(
+        {
+            "u": username,
+            "n": name,
+            "w": can_write,
+            "e": int(time.time()) + WOPI_TOKEN_TTL,
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"{_b64e(body)}.{_wopi_sig(body)}"
+
+
+def parse_wopi_token(token: str) -> dict:
+    try:
+        encoded, sig = token.split(".", 1)
+        body = _b64d(encoded)
+        if not hmac.compare_digest(sig, _wopi_sig(body)):
+            raise ValueError("signature mismatch")
+        data = json.loads(body)
+        if int(data.get("e", 0)) < time.time():
+            raise ValueError("token expired")
+        return data
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - 统一按未授权处理
+        LOG.warning("invalid WOPI token: %s", exc)
+        raise HTTPException(status_code=401, detail="invalid WOPI token")
+
+
+def _wopi_identity(request: Request, name: str) -> dict:
+    token = request.query_params.get("access_token") or ""
+    if not token:
+        auth = request.headers.get("Authorization", "")
+        if auth.lower().startswith("bearer "):
+            token = auth[7:].strip()
+    data = parse_wopi_token(token)
+    if data.get("n") != name:
+        raise HTTPException(status_code=403, detail="token does not match file")
+    return data
+
+
+async def _collabora_editor_url(wopi_src: str, token: str) -> str:
+    """向 Collabora 取 urlsrc 模板（带构建哈希），填入 WOPISrc 与 token。
+
+    urlsrc 在镜像升级时会变（含哈希路径），因此不能写死，必须动态取。
+    """
+    internal = COLLABORA_INTERNAL_URL.rstrip("/")
+    template = ""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{internal}/hosting/discovery")
+            resp.raise_for_status()
+            found = re.search(r'urlsrc="([^"]+)"', resp.text)
+            template = found.group(1) if found else ""
+    except Exception as exc:  # noqa: BLE001 - 取不到就走兜底模板
+        LOG.warning("collabora discovery failed: %s", exc)
+
+    public = COLLABORA_PUBLIC_URL.rstrip("/")
+    if not template:
+        template = f"{public}/browser/dist/cool.html?"
+    elif template.startswith(internal):
+        # discovery 返回的是 Collabora 自身视角地址，换成浏览器可达的
+        template = public + template[len(internal) :]
+
+    if template.endswith(("?", "&")):
+        sep = ""
+    elif "?" in template:
+        sep = "&"
+    else:
+        sep = "?"
+    return (
+        f"{template}{sep}WOPISrc={quote(wopi_src, safe='')}"
+        f"&access_token={quote(token, safe='')}"
+    )
+
+
+@app.post("/api/v1/wopi/session")
+async def wopi_session(request: Request, name: str) -> JSONResponse:
+    """前端调用：为一个文档换取 Collabora 编辑器地址与 access_token。"""
+    username = await current_username(request)
+    target = safe_target(username, name)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+
+    can_write = request.query_params.get("edit", "1") not in ("0", "false")
+    token = issue_wopi_token(username, name, can_write)
+    wopi_src = f"{WOPI_PUBLIC_BASE.rstrip('/')}/wopi/files/{quote(name, safe='')}"
+    editor_url = await _collabora_editor_url(wopi_src, token)
+    LOG.info("wopi session for %s (%s)", name, username)
+    return JSONResponse(
+        {
+            "editorUrl": editor_url,
+            "wopiSrc": wopi_src,
+            "accessToken": token,
+            "name": name,
+            "canWrite": can_write,
+        }
+    )
+
+
+@app.get("/wopi/files/{name}")
+async def wopi_check_file_info(name: str, request: Request) -> JSONResponse:
+    data = _wopi_identity(request, name)
+    username = str(data["u"])
+    target = safe_target(username, name)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    stat = target.stat()
+    return JSONResponse(
+        {
+            "BaseFileName": name,
+            "Size": stat.st_size,
+            "Version": str(int(stat.st_mtime)),
+            "OwnerId": username,
+            "UserId": username,
+            "UserFriendlyName": username,
+            "UserCanWrite": bool(data.get("w", True)),
+            "UserCanRename": False,
+            "SupportsUpdate": True,
+            "SupportsLocks": True,
+            "SupportsExtendedLockLength": True,
+            "SupportsGetLock": True,
+            "PostMessageOrigin": "*",
+        }
+    )
+
+
+@app.get("/wopi/files/{name}/contents")
+async def wopi_get_contents(name: str, request: Request) -> FileResponse:
+    data = _wopi_identity(request, name)
+    target = safe_target(str(data["u"]), name)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    return FileResponse(target, media_type="application/octet-stream")
+
+
+@app.post("/wopi/files/{name}/contents")
+async def wopi_put_contents(name: str, request: Request) -> Response:
+    data = _wopi_identity(request, name)
+    if not data.get("w", True):
+        raise HTTPException(status_code=403, detail="read-only token")
+
+    username = str(data["u"])
+    key = f"{username}/{name}"
+    lock = request.headers.get("X-WOPI-Lock", "")
+    current = _wopi_locks.get(key, "")
+    # 已被别人持锁且锁不一致 → 按 WOPI 规范回 409 并带上当前锁
+    if current and lock != current:
+        return JSONResponse(
+            {"error": "lock mismatch"},
+            status_code=409,
+            headers={"X-WOPI-Lock": current},
+        )
+
+    target = safe_target(username, name)
+    length = request.headers.get("Content-Length")
+    if length and length.isdigit() and int(length) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="file too large")
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="empty body")
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_bytes(body)
+    os.replace(tmp, target)
+    LOG.info("wopi saved %s for %s (%d bytes)", name, username, len(body))
+    return Response(status_code=200)
+
+
+@app.post("/wopi/files/{name}")
+async def wopi_file_operations(name: str, request: Request) -> Response:
+    """WOPI 锁操作：通过 X-WOPI-Override 区分 LOCK/UNLOCK/REFRESH_LOCK/GET_LOCK。"""
+    data = _wopi_identity(request, name)
+    username = str(data["u"])
+    key = f"{username}/{name}"
+    override = request.headers.get("X-WOPI-Override", "").upper()
+    client_lock = request.headers.get("X-WOPI-Lock", "")
+    current = _wopi_locks.get(key, "")
+
+    if override == "GET_LOCK":
+        headers = {"X-WOPI-Lock": current} if current else {}
+        return Response(status_code=200, content=b"", headers=headers)
+
+    if override in ("LOCK", "REFRESH_LOCK", "UNLOCK_AND_RELOCK"):
+        if current and current != client_lock and override != "UNLOCK_AND_RELOCK":
+            return Response(
+                status_code=409,
+                content=b"",
+                headers={"X-WOPI-Lock": current},
+            )
+        if client_lock:
+            _wopi_locks[key] = client_lock
+        return Response(status_code=200, content=b"")
+
+    if override == "UNLOCK":
+        if current and current != client_lock:
+            return Response(
+                status_code=409,
+                content=b"",
+                headers={"X-WOPI-Lock": current},
+            )
+        _wopi_locks.pop(key, None)
+        return Response(status_code=200, content=b"")
+
+    # 未知 override：一律接受，避免 Collabora 卡在握手阶段
+    return Response(status_code=200, content=b"")
 
 
 if __name__ == "__main__":

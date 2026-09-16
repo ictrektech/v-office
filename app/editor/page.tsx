@@ -23,6 +23,12 @@ import { createXHRProxy } from "@/utils/editor/xhr";
 import { DocEditor } from "@/utils/editor/types";
 import { createExtensionLoader } from "@/utils/extension";
 import { convertDocBuffer, FALLBACK_PREVIEW_PDF } from "@/utils/editor/doc-convert";
+import {
+  fetchCollaboraSession,
+  guessExtension,
+  pushDocumentToStorage,
+  shouldUseCollabora,
+} from "@/utils/editor/collabora";
 import InstallExtensionDialog from "@/components/install-extension-dialog";
 import DocumentNameDialog from "@/components/document-name-dialog";
 import KnowledgeBaseUploadDialog from "@/components/knowledge-base-upload-dialog";
@@ -58,6 +64,11 @@ export default function Page() {
   const [nameRequest, setNameRequest] = useState<NameRequest | null>(null);
   const [showKbUpload, setShowKbUpload] = useState(false);
   const [vosMode, setVosMode] = useState(false);
+  /**
+   * Word 文档改用 Collabora 内核时的编辑器地址；为空表示走原有 OnlyOffice
+   * 内核（默认、以及取不到会话时的回退路径）。
+   */
+  const [collaboraUrl, setCollaboraUrl] = useState<string | null>(null);
   /** HybRAG 是否已安装（未安装时隐藏"上传到知识库"入口） */
   const [kbAvailable, setKbAvailable] = useState(false);
   const tryDirectRef = useRef<(() => Promise<void>) | null>(null);
@@ -448,6 +459,8 @@ export default function Page() {
     };
 
     const init = async () => {
+      const engineOverride = searchParams.get("engine");
+
       if (newDoc) {
         server.openNew(newDoc)
       }
@@ -463,6 +476,48 @@ export default function Page() {
           loader,
         })
       }
+
+      // Word 文档（doc/docx）改用 Collabora 内核：它原生读写老版 .doc，
+      // 且对 WPS 表单类文档的渲染保真度明显更高。会话取不到时回退到原有
+      // OnlyOffice 链路，保证“新内核不可用”不会演变成“文档打不开”。
+      //
+      // 判定必须以实际装载的文档为准：本地文件（拖拽 / 选择 / 最近 / 云端
+      // 下载）走的是 server.open(file) + router.push("/editor")，URL 上不带
+      // 任何参数，只认 searchParams 会永远命中不到，等于 Collabora 没生效。
+      const document = server.getDocument();
+      const original = server.getOriginalDocument();
+      const ext = guessExtension(
+        original?.name,
+        document.title,
+        searchParams.get("fileName"),
+        searchParams.get("fileType"),
+        fileUrl,
+      );
+      if (
+        !server.isNewDocumentOpen() &&
+        shouldUseCollabora(ext, engineOverride)
+      ) {
+        const name =
+          original?.name ||
+          searchParams.get("fileName") ||
+          document.title;
+        // 本地文件只在浏览器内存里，Collabora 服务端取不到，先原样推一份到
+        // storage；?url= 指向存储时文件本来就在，不必重复上传。
+        const ready = original
+          ? await pushDocumentToStorage(original.name, original.data)
+          : Boolean(fileUrl);
+        if (ready) {
+          const session = await fetchCollaboraSession(name, editing);
+          if (session) {
+            setCollaboraUrl(session.editorUrl);
+            return; // 不再初始化 OnlyOffice 内核
+          }
+        }
+        console.warn(
+          "[editor] Collabora session unavailable, falling back to OnlyOffice",
+        );
+      }
+
       loadEditor()
     }
 
@@ -535,16 +590,25 @@ export default function Page() {
     >
       <X className="h-5 w-5" />
     </button>
-    <div>
-      <div className="w-screen h-screen">
-        <div id="placeholder">
-          <iframe
-            className="w-0 h-0 hidden"
-            src={APP_ROOT + PRELOAD_HTML}
-          ></iframe>
+    {collaboraUrl ? (
+      <iframe
+        title="document"
+        src={collaboraUrl}
+        className="fixed inset-0 h-screen w-screen border-0"
+        allow="clipboard-read; clipboard-write; fullscreen"
+      />
+    ) : (
+      <div>
+        <div className="w-screen h-screen">
+          <div id="placeholder">
+            <iframe
+              className="w-0 h-0 hidden"
+              src={APP_ROOT + PRELOAD_HTML}
+            ></iframe>
+          </div>
         </div>
       </div>
-    </div>
+    )}
     {showKbUpload && (
       <KnowledgeBaseUploadDialog
         language={language}
