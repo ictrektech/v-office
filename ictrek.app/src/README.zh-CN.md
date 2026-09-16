@@ -1,10 +1,10 @@
 # V-Office
 
-本地优先的浏览器 Office 套件，直接在浏览器中查看和编辑 Word（.docx）、Excel（.xlsx）、PowerPoint（.pptx）文档。安装后自动完成 VOS 免登录，并使用 VOS 自动分配的应用私有存储。
+本地优先的浏览器 Office 套件，直接在浏览器中查看和编辑 Word（.doc/.docx）、Excel（.xlsx）、PowerPoint（.pptx）文档。安装后自动完成 VOS 免登录，并使用 VOS 自动分配的应用私有存储。
 
 ## 功能
 
-- 打开和编辑 `.docx`、`.xlsx`、`.pptx` 文档
+- 打开和编辑 `.doc`、`.docx`、`.xlsx`、`.pptx` 文档
 - VOS 免登录：自动完成 VOS OIDC Fastpath 认证，无需手动登录或反复跳转
 - 用户目录直读写：每个用户只列出、打开和保存应用私有存储中 `<用户名>/` 下的文件，并可逐文件打开、下载或重命名
 - 自动保存：编辑中的变更每 10 秒自动保存一次；新文档首次保存时先提示输入文件名

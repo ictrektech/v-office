@@ -1,6 +1,6 @@
 # V-Office
 
-Local-first browser office suite for viewing and editing Word (.docx), Excel (.xlsx) and PowerPoint (.pptx) documents entirely in the browser. After installation it signs in via VOS automatically and uses private app storage assigned by VOS.
+Local-first browser office suite for viewing and editing Word (.doc/.docx), Excel (.xlsx) and PowerPoint (.pptx) documents entirely in the browser. After installation it signs in via VOS automatically and uses private app storage assigned by VOS.
 
 ## Features
 

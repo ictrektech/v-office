@@ -14,3 +14,13 @@ configs:
       zh-CN: 存储服务校验 VOS OIDC Fastpath 令牌使用的 /v1000/oauth2/userinfo 地址，默认适配 VOS backend 使用 host 网络 `SITE_PORT=8105` 的部署，一般无需修改。
       en: /v1000/oauth2/userinfo endpoint used by the storage service to verify VOS OIDC Fastpath tokens. The default matches a VOS backend on the host network with `SITE_PORT=8105`; usually no change is needed.
     default: http://172.17.0.1:8105/v1000/oauth2/userinfo
+
+  - name: V_OFFICE_WOPI_SECRET
+    type: string
+    title:
+      zh-CN: WOPI 令牌签名密钥
+      en: WOPI token signing secret
+    description:
+      zh-CN: 存储服务为 Collabora 签发 WOPI access_token 时使用的 HMAC 密钥，只在本服务内校验，Collabora 只回传不解析。留空则使用镜像内的开发默认值，生产部署建议填入一段随机字符串。
+      en: HMAC secret the storage service uses to sign WOPI access_tokens for Collabora. It is verified only inside this service (Collabora just echoes the token). Leave empty to use the image's development default; set a random value for production.
+    default: ""

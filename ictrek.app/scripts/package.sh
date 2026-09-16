@@ -30,6 +30,7 @@ PROFILES=(
 COMPONENTS=(
   "V_OFFICE|v-office|swr.cn-southwest-2.myhuaweicloud.com/ictrek/v-office"
   "V_OFFICE_STORAGE|v-office-storage|swr.cn-southwest-2.myhuaweicloud.com/ictrek/v-office-storage"
+  "V_OFFICE_COLLABORA|v-office-collabora|swr.cn-southwest-2.myhuaweicloud.com/ictrek/v-office-collabora"
 )
 
 usage() {

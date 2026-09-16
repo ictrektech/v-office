@@ -8,9 +8,10 @@
 
 ## 应用形态
 
-- `v-office-web`：纯前端静态服务。Next.js 静态导出 + OnlyOffice 前端资源（fonts / sdkjs / web-apps / sdkjs-plugins），Caddy 在容器内 80 端口提供静态服务，无状态。
-- `v-office-storage`：应用私有文档存储服务（FastAPI，见 fork 内 `server/`）。校验 VOS OIDC Fastpath 令牌后，只读写 `${VOS_APP_STORAGE_PATH}/documents/<用户名>/` 中的文档。
-- `amd` / `arm` 两个 profile，安装时由 VOS 为每个 profile 各选择一对镜像（web + storage）。
+- `v-office-web`：纯前端静态服务。Next.js 静态导出 + OnlyOffice 前端资源（fonts / sdkjs / web-apps / sdkjs-plugins），Caddy 在容器内 80 端口提供静态服务，无状态。Excel / PPT 以及新建文档仍由它内置的 OnlyOffice 内核渲染。
+- `v-office-storage`：应用私有文档存储服务（FastAPI，见 fork 内 `server/`）。校验 VOS OIDC Fastpath 令牌后，只读写 `${VOS_APP_STORAGE_PATH}/documents/<用户名>/` 中的文档；同时充当 Collabora 的 WOPI host（`/wopi/files/...`）。
+- `v-office-collabora`：Word 文档（doc/docx）的编辑器内核（Collabora Online / LibreOffice 内核，见 fork 内 `collabora/`）。WPS 导出的复杂表单类文档在 OnlyOffice 内核下会出现表格错位、页眉浮动对象被当成正文环绕障碍，改用它渲染；它通过 WOPI 直接读写 storage，不接触用户凭证。
+- `amd` / `arm` 两个 profile，安装时由 VOS 为每个 profile 各选择三个镜像（web + storage + collabora）。
 
 ## VOS 认证与应用私有存储
 
@@ -24,6 +25,8 @@
 
 - 文档目录无需配置：VOS 自动注入 `VOS_APP_STORAGE_PATH`，应用固定使用其 `documents/` 子目录。
 - `VOS_OIDC_USERINFO_URL`（默认 `http://172.17.0.1:8105/v1000/oauth2/userinfo`）：存储服务校验令牌的 VOS 地址，默认适配 VOS backend host 网络 `SITE_PORT=8105` 部署，一般不改。
+- `V_OFFICE_WOPI_SECRET`：存储服务为 Collabora 签发 WOPI access_token 的 HMAC 密钥，只在本服务内校验（Collabora 只回传令牌、不解析）。留空用镜像内的开发默认值，生产部署建议填一段随机字符串。
+- Collabora 相关地址无需配置，由 compose 固定：storage 的 `V_OFFICE_WOPI_PUBLIC_BASE` 与 Collabora 的 `aliasgroup1` 都取服务别名 `http://v-office-storage:5000`（两者必须一致），下发给浏览器的 `V_OFFICE_COLLABORA_URL` 取相对路径 `/app/com.ictrek.v-office/cool`。
 
 ## 目录结构
 
@@ -32,14 +35,15 @@
 | `README.md` | 本文件，VOS app 打包与发布主入口。 |
 | `VERSION` | 当前 VOS 包版本，由 `update_version.sh` 递增。 |
 | `src/manifest.yml` | 应用元数据（id、分类 `office`、profiles、frontend basePath、oauth2 client）。 |
-| `src/docker-compose.yml` | web + storage 双服务定义，Traefik 路由与 `vos_default` 外部网络。 |
+| `src/docker-compose.yml` | web + storage + collabora 三服务定义，Traefik 路由与 `vos_default` 外部网络。 |
 | `src/routers.yml` | 侧边栏导航：`com-ictrek-v-office` 组 + `v-office` 页面。 |
-| `src/configs.yml` | 安装配置：仅保留 VOS OIDC userinfo 地址；文档目录由平台自动分配。 |
+| `src/configs.yml` | 安装配置：VOS OIDC userinfo 地址与 WOPI 签名密钥；文档目录由平台自动分配。 |
 | `src/README.zh-CN.md` / `src/README.en.md` | 打进安装包的应用商店简版说明。 |
 | `src/icon.png` | 应用图标（256x256 PNG，由上游 `public/logo.svg` 渲染）。 |
 | `scripts/package.sh` | pull 模式打包脚本（读飞书版本 → 渲染 → 打 tar → 自校验）。 |
 | `scripts/update_version.sh` | 递增版本并推送 `vos-v-office-v{version}` 触发 tag。 |
-| `../server/`（fork 内） | 逐用户存储服务源码（FastAPI + Dockerfile）。 |
+| `../server/`（fork 内） | 逐用户存储服务源码（FastAPI + Dockerfile），同时是 Collabora 的 WOPI host。 |
+| `../collabora/`（fork 内） | Collabora 镜像定义（基础镜像 + `extra_params` 固化，见文件内注释）。 |
 
 ## 与上游的差异
 
@@ -49,9 +53,12 @@
 - `Dockerfile`：builder stage 新增 `ARG NEXT_PUBLIC_BASE_PATH` 透传，并把 `NEXT_PUBLIC_APP_ROOT` 改为 `${NEXT_PUBLIC_BASE_PATH}/v${DS_VERSION}-${HASH}`；不传该参数时与上游产物一致。
 - `server/`：新增应用私有存储中的逐用户文档服务（仅 VOS 部署使用）。
 - `utils/vos/`：新增 VOS OIDC Fastpath 静默认证与云端存储客户端。
+- `utils/editor/collabora.ts`：新增 Collabora（WOPI）客户端——Word 文档改用 Collabora 内核打开，本地文件先原样推入应用私有存储再换会话，取不到会话自动回退 OnlyOffice。
+- `collabora/`：新增 Collabora 镜像定义（上游 `collabora/code` + 固化的 `extra_params`）。
+- `server/main.py`：新增 WOPI host（`/api/v1/wopi/session` 签发一次性令牌、`/wopi/files/...` 读写文档）。
 - `components/main/open-view.tsx`：新增"云端文档"列表以及逐文件打开、下载、删除操作（VOS 模式才显示）。
 - `components/main/api-guide-view.tsx`：新增 API 接入指南，包含版本化接口、认证说明和可复制的 Agent 调用示例。
-- `utils/editor/server.ts`：保存时 VOS 模式改为自动入云，新文档首次保存先命名。
+- `utils/editor/server.ts`：保存时 VOS 模式改为自动入云，新文档首次保存先命名；打开文档时保留转换前的原始字节，供 Collabora 内核前推入存储。
 - `app/editor/page.tsx`：新增首次保存命名对话框和关闭当前文档按钮。
 - `package.json`：新增 `js-sha256` 依赖（PKCE S256，兼容非 HTTPS 门户）。
 - `messages/*.json`：新增 `vosCloud*` 文案键（en/zh-CN/zh-TW 译文，其余 locale 暂用英文兜底）。
@@ -68,9 +75,28 @@ VOS 网关把 `/app/com.ictrek.v-office/` 前缀剥离后转发到容器，但�
 
 已知残余问题：`components/install-extension-dialog.tsx` 中 `window.location.href = "/"` 在子路径部署时会跳到门户根路径；如需修复，在 fork 内把该跳转改为 basePath 感知。
 
+## Collabora 的网关路由（为什么除了应用前缀还要占根路径）
+
+Word 文档的编辑器 iframe 加载的是 `/app/com.ictrek.v-office/cool/browser/<hash>/cool.html`（前缀入口，Traefik `stripprefix` 后转给 Collabora）。但 Collabora 返回的页面有三个硬约束：
+
+- 资源引用是**根绝对路径**（`/browser/<hash>/bundle.js`、`.../bundle.css`、`.../l10n/*`）；
+- WebSocket 走根路径 `/cool/ws`；
+- 响应头带 `Referrer-Policy: no-referrer`。
+
+前两条意味着这些请求不会带应用前缀；第三条意味着**没法像 `v-chatcut` 那样用 `Referer` 正则把根路径限定给本应用**（已实测：请求里没有 Referer）。因此 compose 里除了前缀入口 `-collab`（priority 1100），还有一条根路径路由 `-collab-root`（priority 1090）：
+
+```
+PathPrefix(`/browser`) || PathPrefix(`/cool`) || PathPrefix(`/hosting`) || PathPrefix(`/lool`)
+```
+
+- 实测本版本只用到 `/browser`（静态资源）与 `/cool`（WebSocket）；`/hosting`（discovery）与 `/lool`（旧版 WS 路径）同属 Collabora 自身路径，一并挂上以防升级换路径。
+- 这四个前缀目前没有其它应用占用。新增应用若也要占用，需要同步调整——Traefik 里同 rule 的路由会互相抢流量。
+- 前缀入口的 priority 必须高于 web 的 `-top-open`（1000）：后者对同一前缀按 `Sec-Fetch-Dest=document` 匹配并重定向到门户路由，直接打开 `cool.html` 时会被它截走。
+- Collabora 侧不需额外开关：`net.proxy_prefix` 实测不改变上述绝对路径，因此没有启用它；镜像里只固化 `--o:ssl.enable=false --o:net.proto=IPv4`（见 `collabora/Dockerfile`）。
+
 ## 镜像构建与发布流程
 
-镜像构建需要在有 Docker 的构建机上执行（无 CUDA 参与，amd 用 x86_64 构建机 tc232，arm 用 aarch64 构建机 tc35（远程/居家）或 tc192（办公室内网），l4t 为 tc912）。仓库根目录 `build_image.sh` 按 WeKnora 构建规则完成：基础镜像拉取（带国内镜像源回退）→ 构建两个镜像 → 推送 SWR → 按飞书规则写回发布表（列不存在则追加列，日期行不存在则在 A4 插入新行）。
+镜像构建需要在有 Docker 的构建机上执行（无 CUDA 参与，amd 用 x86_64 构建机 tc232，arm 用 aarch64 构建机 tc35（远程/居家）或 tc192（办公室内网），l4t 为 tc912）。仓库根目录 `build_image.sh` 按 WeKnora 构建规则完成：基础镜像拉取（带国内镜像源回退）→ 构建三个镜像 → 推送 SWR → 按飞书规则写回发布表（列不存在则追加列，日期行不存在则在 A4 插入新行）。
 
 ```bash
 # amd 构建机（tc232）
@@ -83,13 +109,14 @@ FEISHU_CONFIG_FILE=/home/jhu/.feishu.components.json ./build_image.sh --target a
 产物：
 
 - `swr.cn-southwest-2.myhuaweicloud.com/ictrek/v-office:{amd|arm}_${YYYYMMDD}`（web，注入 `NEXT_PUBLIC_BASE_PATH=/app/com.ictrek.v-office`）
-- `swr.cn-southwest-2.myhuaweicloud.com/ictrek/v-office-storage:{amd|arm}_${YYYYMMDD}`（storage）
+- `swr.cn-southwest-2.myhuaweicloud.com/ictrek/v-office-storage:{amd|arm}_${YYYYMMDD}`（storage，兼 WOPI host）
+- `swr.cn-southwest-2.myhuaweicloud.com/ictrek/v-office-collabora:{amd|arm}_${YYYYMMDD}`（collabora，Word 内核；基础镜像 `collabora/code` 同时提供 amd64 / arm64）
 
-可选开关：`--web-only` / `--storage-only` / `--no-push` / `--no-feishu` / `--feishu-only` / `--dry-run` / `--tag` / `--sheet`；`V_OFFICE_DS_VERSION`、`V_OFFICE_ASSET_HASH` 控制 OnlyOffice 资源版本目录。
+可选开关：`--web-only` / `--storage-only` / `--collabora-only` / `--no-push` / `--no-feishu` / `--feishu-only` / `--dry-run` / `--tag` / `--sheet`；`V_OFFICE_DS_VERSION`、`V_OFFICE_ASSET_HASH` 控制 OnlyOffice 资源版本目录，`V_OFFICE_COLLABORA_VERSION` 控制 Collabora 基础镜像版本（默认 `latest`，生产建议锁定具体版本）。
 
 发布步骤：
 
-1. 镜像推送 SWR 后，在飞书发布表 `AMD_with_cuda`、`ARM_with_cuda` 各新建 `v-office` 和 `v-office-storage` 两列并写入 tag（Row 1 = 服务名，Row 2 = SWR 仓库 URI，日期行 = tag）。
+1. 镜像推送 SWR 后，在飞书发布表 `AMD_with_cuda`、`ARM_with_cuda` 各新建 `v-office`、`v-office-storage` 和 `v-office-collabora` 三列并写入 tag（Row 1 = 服务名，Row 2 = SWR 仓库 URI，日期行 = tag）。
 2. 提交应用代码改动，保持工作树干净。
 3. `./ictrek.app/scripts/update_version.sh [patch|minor|major]` —— 递增 `VERSION`、创建并推送 `vos-v-office-v{version}` 触发 tag。
 4. GitHub Actions（`.github/workflows/vos-release.yml`）读取飞书版本、打包 `v-office_{version}_pull.tar`、创建公开 tag `v{version}` 与 release，并发布到 VOS App Store。

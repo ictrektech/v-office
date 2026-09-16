@@ -1,14 +1,23 @@
 # =============================================================================
 # V-Office — VOS 应用 Docker Compose
 # =============================================================================
-# 两个服务，安装时由 VOS 按 profile（amd / arm）各选其一：
-#   - v-office-web:     纯静态前端（Next.js 静态导出 + OnlyOffice 前端
-#                            资源），Caddy 在容器内 80 端口提供静态服务。
-#   - v-office-storage: 文档存储服务（FastAPI），校验 VOS OIDC
-#                            Fastpath 令牌后直接读写 VOS 自动分配的
-#                            VOS_APP_STORAGE_PATH/documents 私有目录。
+# 三个服务，安装时由 VOS 按 profile（amd / arm）各选其一：
+#   - v-office-web:       纯静态前端（Next.js 静态导出 + OnlyOffice 前端资源），
+#                         Caddy 在容器内 80 端口提供静态服务。
+#   - v-office-storage:   文档存储服务（FastAPI），校验 VOS OIDC Fastpath 令牌后
+#                         直接读写 VOS 自动分配的 VOS_APP_STORAGE_PATH/documents
+#                         私有目录，同时充当 Collabora 的 WOPI host。
+#   - v-office-collabora: Word 文档（doc/docx）的编辑器内核（Collabora Online /
+#                         LibreOffice 内核）。Excel/PPT 等仍由前端内置的
+#                         OnlyOffice 内核渲染，不经过本容器。
 # 镜像从华为云 SWR 拉取（pull 模式），标签由 package.sh 从飞书发布表读取
 # 并写入 .env。前端无状态；所有文档落在应用私有存储中。
+#
+# Collabora 的浏览器入口必须挂在应用前缀下，但它吐出的 cool.html 里资源引用是
+# 根绝对路径（/browser/...）、WebSocket 也走根路径（/cool/ws），且页面带
+# Referrer-Policy: no-referrer——无法像 v-chatcut 那样用 Referer 限定归属
+# （已实测）。因此除了前缀入口，还要把 Collabora 那几个根前缀一并挂出来，
+# 详见 collab-root 路由上的说明。
 # =============================================================================
 
 x-v-office-web-base: &v-office-web-base
@@ -56,6 +65,20 @@ x-v-office-storage-base: &v-office-storage-base
     DATA_ROOT: /data
     VOS_APP_VERSION: "__APP_VERSION__"
     VOS_OIDC_USERINFO_URL: ${VOS_OIDC_USERINFO_URL:-http://172.17.0.1:8105/v1000/oauth2/userinfo}
+    # --- WOPI host（Collabora 集成）---
+    # Collabora 回调本服务读写文档的地址；必须与 Collabora 的 aliasgroup1
+    # 完全一致，否则 Collabora 会以「不在白名单」拒绝打开文档。用服务别名
+    # 而非容器名：容器名带 VOS 安装随机后缀，写死会随重装失效。
+    V_OFFICE_WOPI_PUBLIC_BASE: http://v-office-storage:5000
+    # 下发给浏览器的编辑器地址。走 VOS 网关的应用前缀、用相对路径，浏览器
+    # 按页面 origin 解析，各环境无需写死域名。
+    V_OFFICE_COLLABORA_URL: /app/com.ictrek.v-office/cool
+    # 取 Collabora discovery（urlsrc 带构建哈希，不能写死）用的容器内地址。
+    # 因为上面那个是相对路径，必须显式给一个 Collabora 侧可达的绝对地址。
+    V_OFFICE_COLLABORA_INTERNAL_URL: http://v-office-collabora:9980
+    # 签署 WOPI access_token 的密钥。只在本服务内使用（Collabora 只回传令牌
+    # 不解析），生产环境建议改掉；未设置时用代码里的开发默认值。
+    V_OFFICE_WOPI_SECRET: ${V_OFFICE_WOPI_SECRET:-v-office-dev-wopi-secret}
   volumes:
     - ${VOS_APP_STORAGE_PATH}/documents:/data
   labels:
@@ -73,6 +96,50 @@ x-v-office-storage-base: &v-office-storage-base
     start_period: 15s
     retries: 3
 
+x-v-office-collabora-base: &v-office-collabora-base
+  restart: unless-stopped
+  pull_policy: always
+  environment:
+    VOS_APP_VERSION: "__APP_VERSION__"
+    # Collabora 只接受白名单内的 WOPI host 回调；取值必须与 storage 的
+    # V_OFFICE_WOPI_PUBLIC_BASE 完全一致。
+    aliasgroup1: http://v-office-storage:5000
+  networks:
+    vos_default:
+      aliases:
+        - v-office-collabora
+  labels:
+    - "traefik.enable=true"
+    - "traefik.docker.network=vos_default"
+
+    # --- 1) 入口：应用前缀下的编辑器地址（前端 iframe 直接加载）---
+    # priority 必须高于 web 的 -top-open(1000)：它按 Sec-Fetch-Dest=document
+    # 匹配同一前缀并重定向到门户路由，直接打开 cool.html 时会被它截走。
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-collab.rule=PathPrefix(`/app/com.ictrek.v-office/cool`)"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-collab.priority=1100"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-collab.service=${COMPOSE_PROJECT_NAME:-v-office}-collab"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-collab.middlewares=${COMPOSE_PROJECT_NAME:-v-office}-collab-strip"
+    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-v-office}-collab-strip.stripprefix.prefixes=/app/com.ictrek.v-office/cool"
+
+    # --- 2) 根路径：cool.html 的资源引用是根绝对路径，且带
+    # Referrer-Policy: no-referrer（实测确认收不到 Referer），无法像
+    # v-chatcut 那样用 Referer 圈定归属，只能把 Collabora 真正用到的根前缀
+    # 挂出来。实测只有 /browser（静态资源）与 /cool（WebSocket）；/hosting
+    # 与 /lool 是 Collabora 自身路径（discovery / 旧版 WS），一并挂上以兼容
+    # 其它版本。这四个前缀目前没有其它应用占用。
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-collab-root.rule=PathPrefix(`/browser`) || PathPrefix(`/cool`) || PathPrefix(`/hosting`) || PathPrefix(`/lool`)"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-collab-root.priority=1090"
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-collab-root.service=${COMPOSE_PROJECT_NAME:-v-office}-collab"
+    - "traefik.http.services.${COMPOSE_PROJECT_NAME:-v-office}-collab.loadbalancer.server.port=9980"
+  healthcheck:
+    # 该镜像里没有 shell，只能用 coolwsd 自带的探针
+    test: ["CMD", "/usr/bin/coolwsd", "--probe"]
+    interval: 30s
+    timeout: 10s
+    # Collabora 启动时要拉起 LibreOffice，首次启动明显慢于另两个服务
+    start_period: 60s
+    retries: 3
+
 services:
   v-office-web-amd:
     <<: *v-office-web-base
@@ -84,6 +151,11 @@ services:
     profiles: ["amd"]
     image: ${V_OFFICE_STORAGE_AMD_IMAGE}
 
+  v-office-collabora-amd:
+    <<: *v-office-collabora-base
+    profiles: ["amd"]
+    image: ${V_OFFICE_COLLABORA_AMD_IMAGE}
+
   v-office-web-arm:
     <<: *v-office-web-base
     profiles: ["arm"]
@@ -93,6 +165,11 @@ services:
     <<: *v-office-storage-base
     profiles: ["arm"]
     image: ${V_OFFICE_STORAGE_ARM_IMAGE}
+
+  v-office-collabora-arm:
+    <<: *v-office-collabora-base
+    profiles: ["arm"]
+    image: ${V_OFFICE_COLLABORA_ARM_IMAGE}
 
 networks:
   vos_default:
