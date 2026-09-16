@@ -682,6 +682,7 @@ fi
 if [[ "$PUSH_IMAGES" == "1" ]]; then
   [[ "$BUILD_WEB" == "1" ]] && docker push "${WEB_IMAGE}:${TAG}"
   [[ "$BUILD_STORAGE" == "1" ]] && docker push "${STORAGE_IMAGE}:${TAG}"
+  [[ "$BUILD_COLLABORA" == "1" ]] && docker push "${COLLABORA_IMAGE}:${TAG}"
 fi
 
 if [[ "$UPDATE_FEISHU" == "1" ]]; then
