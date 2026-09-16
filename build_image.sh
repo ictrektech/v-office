@@ -485,11 +485,13 @@ while [[ $# -gt 0 ]]; do
     --web-only)
       BUILD_WEB=1
       BUILD_STORAGE=0
+      BUILD_COLLABORA=0
       shift
       ;;
     --storage-only)
       BUILD_WEB=0
       BUILD_STORAGE=1
+      BUILD_COLLABORA=0
       shift
       ;;
     --collabora-only)
