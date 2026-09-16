@@ -1,9 +1,10 @@
 "use client";
 
-import { Upload, FileText, FolderOpen, Download, Info } from "lucide-react";
+import { Upload, FileText, FolderOpen, Download, Info, Loader2 } from "lucide-react";
 import { useRef, useState, useEffect } from "react";
 import { useExtracted } from "next-intl";
 import { cn } from "@/lib/utils";
+import { fetchCollaboraStatus, type CollaboraState } from "@/utils/editor/collabora";
 import {
   useAppStore,
   useHasHydrated,
@@ -333,15 +334,53 @@ function EngineSwitch() {
   // 导致 React 丢弃整棵 SSR 树重渲染（表现为页面闪一下 + dev 报 Issue）。
   const activeEngine: WordEngine = hasHydrated ? wordEngine : "onlyoffice";
 
-  const setEngine = (engine: WordEngine) =>
-    useAppStore.getState().setState({ wordEngine: engine });
+  // Collabora 就绪状态（storage 侧后台探活）。unknown 表示无 storage 服务
+  // （独立部署），按钮保持可用、行为与从前一致。
+  const [collaboraState, setCollaboraState] = useState<CollaboraState>("unknown");
 
+  useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = async () => {
+      const state = await fetchCollaboraStatus();
+      if (!active) return;
+      setCollaboraState(state);
+      // 未就绪期间 5s 一次直到就绪；就绪后 30s 保活（感知容器重启）；
+      // unknown（无 storage）不再轮询，避免无意义请求。
+      timer = setTimeout(poll, state === "ok" || state === "unknown" ? 30_000 : 5_000);
+    };
+    void poll();
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+
+  const setEngine = (engine: WordEngine) => {
+    useAppStore.getState().setState({ wordEngine: engine });
+  };
+
+  const collaboraStarting = zh
+    ? "Collabora 正在启动（首次约需 1 分钟），就绪后自动可用，无需刷新页面"
+    : "Collabora is starting (first boot takes ~1 min). It will become available automatically — no page refresh needed";
+  const collaboraUnavailable = zh
+    ? "Collabora 服务当前不可用，请稍后再试或使用 OnlyOffice"
+    : "Collabora is currently unavailable. Try again later or use OnlyOffice";
   const collaboraHint = zh
     ? "Collabora（LibreOffice 内核）：对复杂文档（如 WPS 表单类 Word）解析能力更强"
     : "Collabora (LibreOffice core): renders complex documents (e.g. WPS-style Word forms) more faithfully";
   const onlyOfficeHint = zh
     ? "默认内核，适合常规文档"
     : "Default core for regular documents";
+
+  const collaboraDisabled =
+    collaboraState === "warming_up" || collaboraState === "unavailable";
+  const collaboraTitle =
+    collaboraState === "warming_up"
+      ? collaboraStarting
+      : collaboraState === "unavailable"
+        ? collaboraUnavailable
+        : collaboraHint;
 
   return (
     <div
@@ -372,14 +411,19 @@ function EngineSwitch() {
           <button
             type="button"
             onClick={() => setEngine("collabora")}
-            title={collaboraHint}
+            disabled={collaboraDisabled}
+            title={collaboraTitle}
             className={cn(
-              "rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors",
+              "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors",
               activeEngine === "collabora"
                 ? "bg-primary text-primary-foreground shadow"
                 : "text-muted-foreground hover:text-foreground",
+              collaboraDisabled && "cursor-not-allowed opacity-50 hover:text-muted-foreground",
             )}
           >
+            {collaboraState === "warming_up" && (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            )}
             Collabora
           </button>
         </div>
@@ -409,6 +453,18 @@ function EngineSwitch() {
           </>
         )}
       </p>
+      {/* 状态提示独立成行，不覆盖上面的引擎说明：让用户在任何时刻都知道
+          Collabora 处于什么状态、为什么要等、等待期间该做什么 */}
+      {collaboraState === "warming_up" && (
+        <p className="max-w-lg text-center text-xs leading-relaxed text-amber-600 dark:text-amber-400">
+          {collaboraStarting}
+        </p>
+      )}
+      {collaboraState === "unavailable" && (
+        <p className="max-w-lg text-center text-xs leading-relaxed text-red-500">
+          {collaboraUnavailable}
+        </p>
+      )}
     </div>
   );
 }

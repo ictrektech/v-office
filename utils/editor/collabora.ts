@@ -148,3 +148,35 @@ export function guessExtension(...candidates: (string | null | undefined)[]): st
   }
   return "";
 }
+
+/**
+ * 查询 Collabora 就绪状态（storage 侧后台探活结果）。
+ *
+ * ok          —— 可正常打开文档
+ * warming_up  —— 容器冷启动中，前端应展示等待提示并自动重试
+ * unavailable —— 超过预热窗口仍未就绪，大概率未部署，前端应立即回退
+ * unknown     —— 无 storage 服务（独立部署），保持旧行为：点了再试、失败回退
+ */
+export type CollaboraState = "ok" | "warming_up" | "unavailable" | "unknown";
+
+export async function fetchCollaboraStatus(): Promise<CollaboraState> {
+  const token = await getVOSAccessToken();
+  try {
+    const resp = await fetch(`${STORAGE_API}/wopi/status`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!resp.ok) return "unknown";
+    const data = (await resp.json()) as { state?: string };
+    if (
+      data.state === "ok" ||
+      data.state === "warming_up" ||
+      data.state === "unavailable"
+    ) {
+      return data.state;
+    }
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
+}

@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 import { GoogleAnalytics } from '@next/third-parties/google'
 import { getMessages, getLocale } from "next-intl/server";
+import type { Locale } from "@ziziyi/utils";
 import { I18nProvider } from "@/components/i18n-provider";
 import { ProgressProvider } from "@/components/progress-provider";
+import { AppToaster } from "@/components/app-toaster";
 import "./globals.css";
 import { sitePath } from "@/utils/site-path";
 
@@ -113,7 +115,10 @@ export default async function RootLayout({
       </head>
       <body>
         <ProgressProvider>
-          <I18nProvider initialMessages={messages}>{children}</I18nProvider>
+          <I18nProvider initialMessages={messages} initialLocale={locale as Locale}>
+            {children}
+          </I18nProvider>
+          <AppToaster />
         </ProgressProvider>
       </body>
       <GoogleAnalytics gaId="G-EFLBPT6TS8" />

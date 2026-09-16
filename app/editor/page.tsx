@@ -7,9 +7,8 @@ import {
   useEffect,
   useState,
 } from "react";
-import { X, Upload, Layers, RotateCcw } from "lucide-react";
+import { X, Upload, Layers, RotateCcw, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { Toaster } from "sonner";
 import { useAppStore, useResolvedLanguage, useHasHydrated } from "@/store";
 import {
   API_JS,
@@ -25,6 +24,7 @@ import { createExtensionLoader } from "@/utils/extension";
 import { convertDocBuffer, FALLBACK_PREVIEW_PDF } from "@/utils/editor/doc-convert";
 import {
   fetchCollaboraSession,
+  fetchCollaboraStatus,
   guessExtension,
   isWordDocExt,
   pushDocumentToStorage,
@@ -154,6 +154,64 @@ export default function Page() {
     window.location.href = sitePath("/");
   }, [language, server, requestFileName]);
 
+  /** Collabora 冷启动等待：遮罩可见时轮询状态直到就绪/超时/用户取消 */
+  const [collaboraWaiting, setCollaboraWaiting] = useState(false);
+  const [waitSeconds, setWaitSeconds] = useState(0);
+  const waitCancelRef = useRef(false);
+
+  /**
+   * 确保 Collabora 就绪再继续。warming_up 时展示等待遮罩并自动轮询，
+   * unavailable 直接失败，unknown（无 storage 服务）视为可尝试。
+   * 返回 false 表示用户应停留在 OnlyOffice。
+   */
+  const ensureCollaboraReady = useCallback(async (): Promise<boolean> => {
+    const zh = language.toLowerCase().startsWith("zh");
+    const state = await fetchCollaboraStatus();
+    if (state !== "warming_up") {
+      if (state === "unavailable") {
+        toast.error(
+          zh
+            ? "Collabora 服务当前不可用，已为你保留 OnlyOffice 内核"
+            : "Collabora is currently unavailable, staying on OnlyOffice",
+        );
+        return false;
+      }
+      return true; // ok / unknown
+    }
+
+    // 冷启动等待：遮罩 + 实时秒数 + 可取消，全程告知用户发生了什么
+    const timeoutMs = 150_000;
+    const startedAt = Date.now();
+    waitCancelRef.current = false;
+    setWaitSeconds(0);
+    setCollaboraWaiting(true);
+    try {
+      while (Date.now() - startedAt < timeoutMs) {
+        if (waitCancelRef.current) {
+          toast.info(
+            zh
+              ? "已取消等待，继续使用 OnlyOffice 内核"
+              : "Waiting cancelled, staying on OnlyOffice",
+          );
+          return false;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        const next = await fetchCollaboraStatus();
+        if (next === "ok" || next === "unknown") return true;
+        if (next === "unavailable") break;
+        setWaitSeconds(Math.floor((Date.now() - startedAt) / 1000));
+      }
+      toast.error(
+        zh
+          ? "Collabora 启动超时，已为你保留 OnlyOffice 内核，请稍后重试"
+          : "Collabora start-up timed out, staying on OnlyOffice. Try again later",
+      );
+      return false;
+    } finally {
+      setCollaboraWaiting(false);
+    }
+  }, [language]);
+
   /**
    * 手动切换解析内核：doc/docx 默认用 OnlyOffice，用户点击按钮后换
    * Collabora（对复杂文档解析能力更强），也可从 Collabora 切回 OnlyOffice。
@@ -169,6 +227,15 @@ export default function Page() {
         useAppStore.getState().setState({
           wordEngine: useCollabora ? "collabora" : "onlyoffice",
         });
+        if (useCollabora) {
+          const ready = await ensureCollaboraReady();
+          if (!ready) {
+            // 用户取消/服务不可用：内核偏好退回 OnlyOffice，避免下次
+            // 打开文档又自动撞一次失败
+            useAppStore.getState().setState({ wordEngine: "onlyoffice" });
+            return;
+          }
+        }
         await start(useCollabora);
         if (useCollabora) {
           if (activeEngineRef.current === "collabora") {
@@ -193,7 +260,7 @@ export default function Page() {
         setSwitchingEngine(false);
       }
     },
-    [language, switchingEngine],
+    [language, switchingEngine, ensureCollaboraReady],
   );
 
   /** 上传到知识库：导出当前文档字节 → hybrag 上传 */
@@ -613,7 +680,17 @@ export default function Page() {
           : userEngine === "onlyoffice"
             ? "onlyoffice"
             : null);
-      await startEditor(shouldUseCollabora(ext, enginePref));
+      const useCollabora = shouldUseCollabora(ext, enginePref);
+      if (useCollabora) {
+        // 上次会话选了 Collabora：若内核还在冷启动，先等就绪再挂载，
+        // 避免静默回退 OnlyOffice 让用户困惑
+        const ready = await ensureCollaboraReady();
+        if (!ready) {
+          await startEditor(false);
+          return;
+        }
+      }
+      await startEditor(useCollabora);
     }
 
     init()
@@ -763,16 +840,39 @@ export default function Page() {
         onUpload={handleKbUpload}
       />
     )}
-    <Toaster
-      richColors
-      position="top-center"
-      theme={
-        typeof document !== "undefined" &&
-        document.documentElement.classList.contains("dark")
-          ? "dark"
-          : "light"
-      }
-    />
+    {collaboraWaiting && (
+      <div className="fixed inset-0 z-[60] flex items-center justify-center bg-background/80 backdrop-blur-sm">
+        <div className="flex max-w-md flex-col items-center gap-3 rounded-2xl bg-card px-10 py-8 text-center shadow-xl ring-1 ring-border">
+          <Loader2 className="h-10 w-10 animate-spin text-primary" />
+          <p className="text-base font-semibold">
+            {language.toLowerCase().startsWith("zh")
+              ? "正在启动 Collabora 解析内核…"
+              : "Starting the Collabora engine…"}
+          </p>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            {language.toLowerCase().startsWith("zh")
+              ? "Collabora 容器首次启动约需 1 分钟。无需刷新页面，就绪后将自动为你打开文档。"
+              : "First boot takes about a minute. No need to refresh — the document will open automatically once it is ready."}
+          </p>
+          <p className="text-xs text-muted-foreground/70">
+            {language.toLowerCase().startsWith("zh")
+              ? `已等待 ${waitSeconds} 秒`
+              : `Waited ${waitSeconds}s`}
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              waitCancelRef.current = true;
+            }}
+            className="mt-1 rounded-lg border border-border px-4 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            {language.toLowerCase().startsWith("zh") ? "取消，使用 OnlyOffice" : "Cancel, use OnlyOffice"}
+          </button>
+        </div>
+      </div>
+    )}
+    {/* 全局 toast 容器已提升到根 layout（components/app-toaster.tsx），
+        这里不再单独渲染，否则同一条 toast 会显示两次 */}
     </>
   );
 }

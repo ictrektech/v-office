@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -64,7 +65,20 @@ FILENAME_RE = re.compile(
 # VOS usernames are mapped onto directory names; everything unusual becomes "_".
 USERNAME_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 
-app = FastAPI(title="v-office-storage", docs_url=None, redoc_url=None)
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """启动 Collabora 冷启动探活后台任务，停机时回收。"""
+    task = asyncio.create_task(_collabora_warmup_loop())
+    yield
+    task.cancel()
+
+
+app = FastAPI(
+    title="v-office-storage",
+    docs_url=None,
+    redoc_url=None,
+    lifespan=lifespan,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -347,6 +361,63 @@ COLLABORA_INTERNAL_URL = os.environ.get(
     "V_OFFICE_COLLABORA_INTERNAL_URL", COLLABORA_PUBLIC_URL
 )
 
+# ----------------------------------------------------------------------------
+# Collabora 冷启动探活
+#
+# coolwsd 从容器启动到 /hosting/discovery 可用通常需要几秒到几十秒（fork 子
+# 进程、加载 WOPI 白名单）。此前首个用户请求会撞上这个窗口：discovery 超时
+# → 503 → 前端被迫回退 OnlyOffice，用户只能靠"刷新页面"二次尝试。
+#
+# 现在由后台任务持续探活：就绪前每 5s 探一次，就绪后降频到 30s 保活（感知
+# 容器重启）。就绪状态通过 GET /api/v1/wopi/status 暴露给前端，驱动
+# 「启动中」按钮态与等待提示。
+# ----------------------------------------------------------------------------
+_collabora_state = "warming_up"          # ok | warming_up
+_collabora_state_since = time.time()     # 进入当前状态的时刻
+COLLABORA_WARMUP_TIMEOUT = int(
+    os.environ.get("V_OFFICE_COLLABORA_WARMUP_TIMEOUT", "180")
+)
+
+
+async def _collabora_discover() -> str:
+    """单次探测 discovery，成功返回 urlsrc 模板，失败返回空串。"""
+    internal = COLLABORA_INTERNAL_URL.rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{internal}/hosting/discovery")
+            resp.raise_for_status()
+            found = re.search(r'urlsrc="([^"]+)"', resp.text)
+            return found.group(1) if found else ""
+    except Exception as exc:  # noqa: BLE001 - 探活失败是常态，debug 记录即可
+        LOG.debug("collabora discovery probe failed: %s", exc)
+        return ""
+
+
+async def _collabora_warmup_loop() -> None:
+    global _collabora_state, _collabora_state_since
+    while True:
+        ok = bool(await _collabora_discover())
+        if ok:
+            if _collabora_state != "ok":
+                LOG.info("collabora discovery ready")
+            _collabora_state = "ok"
+            await asyncio.sleep(30)  # 就绪后降频保活，感知容器重启
+        else:
+            if _collabora_state != "warming_up":
+                LOG.warning("collabora discovery lost, probing again")
+                _collabora_state = "warming_up"
+                _collabora_state_since = time.time()
+            await asyncio.sleep(5)  # 未就绪期间高频探测
+
+
+def _collabora_effective_state() -> str:
+    """对外的就绪状态；warming_up 超过阈值视为不可用（大概率未部署）。"""
+    if _collabora_state == "ok":
+        return "ok"
+    if time.time() - _collabora_state_since > COLLABORA_WARMUP_TIMEOUT:
+        return "unavailable"
+    return "warming_up"
+
 # (username, filename) -> lock id；只在单实例内存里，够用即可
 _wopi_locks: dict[str, str] = {}
 
@@ -412,24 +483,30 @@ async def _collabora_editor_url(wopi_src: str, token: str) -> str:
 
     urlsrc 在镜像升级时会变（含哈希路径），因此不能写死，必须动态取。
     """
-    internal = COLLABORA_INTERNAL_URL.rstrip("/")
     template = ""
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{internal}/hosting/discovery")
-            resp.raise_for_status()
-            found = re.search(r'urlsrc="([^"]+)"', resp.text)
-            template = found.group(1) if found else ""
-    except Exception as exc:  # noqa: BLE001 - 统一按不可用处理
-        LOG.warning("collabora discovery failed: %s", exc)
+    # 请求内重试：撞上冷启动窗口时原地等容器就绪（约 20s），而不是立即失败
+    for attempt in range(3):
+        template = await _collabora_discover()
+        if template:
+            break
+        LOG.warning("collabora discovery attempt %d/3 failed", attempt + 1)
+        if attempt < 2:
+            await asyncio.sleep(2)
 
     if not template:
         # 取不到 discovery（Collabora 容器没起来 / 网络不通）时不要编一个地址：
         # 旧版的 browser/dist/cool.html 在当前 Collabora 上必然 404，会把
-        # 「内核不可用」变成「编辑器打开是白页」。直接失败，让前端按既定设计
-        # 回退到 OnlyOffice —— 任何情况下都保证文档打得开。
-        LOG.warning("collabora discovery unavailable, refusing to fabricate an URL")
-        raise HTTPException(status_code=503, detail="collabora discovery unavailable")
+        # 「内核不可用」变成「编辑器打开是白页」。直接失败，并带上原因让
+        # 前端区分「正在启动（等待重试）」和「确实不可用（立即回退）」。
+        reason = _collabora_effective_state()
+        LOG.warning(
+            "collabora discovery unavailable (state=%s), refusing to fabricate an URL",
+            reason,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=json.dumps({"reason": reason}),
+        )
 
     # urlsrc 是 Collabora 自己视角的绝对地址（含构建哈希），只取它的路径与查询
     # 部分，换到浏览器可达的 public 前缀上。
@@ -454,6 +531,22 @@ async def _collabora_editor_url(wopi_src: str, token: str) -> str:
     return (
         f"{template}{sep}WOPISrc={quote(wopi_src, safe='')}"
         f"&access_token={quote(token, safe='')}"
+    )
+
+
+@app.get("/api/v1/wopi/status")
+async def wopi_status() -> JSONResponse:
+    """前端轮询：Collabora 是否就绪（驱动「启动中」按钮态与等待提示）。
+
+    state 取值：
+      ok          —— discovery 可用，可以正常打开文档
+      warming_up  —— 容器冷启动中（启动后 5s 一次探活），前端应等待重试
+      unavailable —— 超过 WARMUP_TIMEOUT 仍未就绪，大概率未部署，前端应立即回退
+    unknown 不会出现在这里：状态接口本身 404/超时时由前端按"无 storage 服务"处理。
+    """
+    state = _collabora_effective_state()
+    return JSONResponse(
+        {"state": state, "ready": state == "ok"}
     )
 
 
