@@ -420,25 +420,30 @@ async def _collabora_editor_url(wopi_src: str, token: str) -> str:
             resp.raise_for_status()
             found = re.search(r'urlsrc="([^"]+)"', resp.text)
             template = found.group(1) if found else ""
-    except Exception as exc:  # noqa: BLE001 - 取不到就走兜底模板
+    except Exception as exc:  # noqa: BLE001 - 统一按不可用处理
         LOG.warning("collabora discovery failed: %s", exc)
 
-    public = COLLABORA_PUBLIC_URL.rstrip("/")
     if not template:
-        template = f"{public}/browser/dist/cool.html?"
-    else:
-        # urlsrc 是 Collabora 自己视角的绝对地址（含构建哈希），只取它的路径与
-        # 查询部分，换到浏览器可达的 public 前缀上。
-        #
-        # 不能按 internal 做字符串前缀匹配：网关终止 TLS 时镜像开了
-        # ssl.termination，Collabora 吐出的 scheme 是 https，与 internal 的
-        # http 对不上，替换会被跳过，浏览器就会拿到 https://v-office-collabora:9980
-        # 这类内网地址，表现为「找不到 v-office-collabora 的服务器 IP 地址」。
-        split = urlsplit(template)
-        if split.path:
-            template = f"{public}{split.path}" + (
-                f"?{split.query}" if split.query else "?"
-            )
+        # 取不到 discovery（Collabora 容器没起来 / 网络不通）时不要编一个地址：
+        # 旧版的 browser/dist/cool.html 在当前 Collabora 上必然 404，会把
+        # 「内核不可用」变成「编辑器打开是白页」。直接失败，让前端按既定设计
+        # 回退到 OnlyOffice —— 任何情况下都保证文档打得开。
+        LOG.warning("collabora discovery unavailable, refusing to fabricate an URL")
+        raise HTTPException(status_code=503, detail="collabora discovery unavailable")
+
+    # urlsrc 是 Collabora 自己视角的绝对地址（含构建哈希），只取它的路径与查询
+    # 部分，换到浏览器可达的 public 前缀上。
+    #
+    # 不能按 internal 做字符串前缀匹配：网关终止 TLS 时镜像开了 ssl.termination，
+    # Collabora 吐出的 scheme 是 https，与 internal 的 http 对不上，替换会被跳过，
+    # 浏览器就会拿到 https://v-office-collabora:9980 这类内网地址，表现为
+    # 「找不到 v-office-collabora 的服务器 IP 地址」。
+    public = COLLABORA_PUBLIC_URL.rstrip("/")
+    split = urlsplit(template)
+    if not split.path:
+        LOG.warning("collabora urlsrc unusable: %s", template)
+        raise HTTPException(status_code=503, detail="collabora urlsrc unusable")
+    template = f"{public}{split.path}" + (f"?{split.query}" if split.query else "?")
 
     if template.endswith(("?", "&")):
         sep = ""
