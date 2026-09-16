@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -324,9 +325,18 @@ async def rename_file(
 # 为不打断既有 OnlyOffice 链路，这里只新增端点，不改动原有 REST API。
 # ============================================================================
 
-from urllib.parse import quote  # noqa: E402  (紧随相关实现，便于阅读)
+from urllib.parse import quote, urlsplit  # noqa: E402  (紧随相关实现，便于阅读)
 
-WOPI_SECRET = os.environ.get("V_OFFICE_WOPI_SECRET", "v-office-dev-wopi-secret")
+# WOPI access_token 的签名密钥。必须每套部署各不相同：写死成公共值等于所有
+# 服务器共用同一密钥，任意一套被拿下就能伪造另一套的令牌。未配置时随机生成
+# （进程级），只影响本实例；重启会使在途会话的令牌失效，因此生产建议在安装
+# 配置里显式填一段随机串。
+WOPI_SECRET = os.environ.get("V_OFFICE_WOPI_SECRET") or secrets.token_urlsafe(32)
+if not os.environ.get("V_OFFICE_WOPI_SECRET"):
+    LOG.warning(
+        "V_OFFICE_WOPI_SECRET unset: generated an ephemeral secret for this "
+        "process; set it explicitly for production"
+    )
 WOPI_TOKEN_TTL = int(os.environ.get("V_OFFICE_WOPI_TOKEN_TTL", "3600"))
 # Collabora 容器访问本服务的地址（据此拼 WOPISrc）
 WOPI_PUBLIC_BASE = os.environ.get("V_OFFICE_WOPI_PUBLIC_BASE", "http://172.17.0.1:5000")
@@ -416,9 +426,19 @@ async def _collabora_editor_url(wopi_src: str, token: str) -> str:
     public = COLLABORA_PUBLIC_URL.rstrip("/")
     if not template:
         template = f"{public}/browser/dist/cool.html?"
-    elif template.startswith(internal):
-        # discovery 返回的是 Collabora 自身视角地址，换成浏览器可达的
-        template = public + template[len(internal) :]
+    else:
+        # urlsrc 是 Collabora 自己视角的绝对地址（含构建哈希），只取它的路径与
+        # 查询部分，换到浏览器可达的 public 前缀上。
+        #
+        # 不能按 internal 做字符串前缀匹配：网关终止 TLS 时镜像开了
+        # ssl.termination，Collabora 吐出的 scheme 是 https，与 internal 的
+        # http 对不上，替换会被跳过，浏览器就会拿到 https://v-office-collabora:9980
+        # 这类内网地址，表现为「找不到 v-office-collabora 的服务器 IP 地址」。
+        split = urlsplit(template)
+        if split.path:
+            template = f"{public}{split.path}" + (
+                f"?{split.query}" if split.query else "?"
+            )
 
     if template.endswith(("?", "&")):
         sep = ""

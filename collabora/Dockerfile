@@ -32,11 +32,20 @@
 #                         会以 EBADF 直接退出（Exited 70），必须钉成 IPv4。
 #   --o:ssl.enable=false  由 VOS 网关终止 TLS，容器内走明文 HTTP，
 #                         避免自签证书导致浏览器侧连接失败。
+#   --o:ssl.termination=true
+#                         告诉 coolwsd「对外这一跳是 HTTPS」。只设 ssl.enable=false
+#                         时 coolwsd 认为对外是 http，产出的 CSP 与前端连接都用
+#                         ws://；而页面是经网关以 HTTPS 加载的，浏览器会直接抛
+#                         SecurityError: An insecure WebSocket connection may not
+#                         be initiated from a page loaded over HTTPS，编辑器卡在
+#                         连接中。实测对照（同一镜像、Host 相同）：
+#                           不加 -> connect-src ws://<host> http://<host>
+#                           加上 -> connect-src wss://<host> https://<host>
 
 ARG COLLABORA_BASE=collabora/code:latest
 FROM ${COLLABORA_BASE}
 
 # 参数以环境变量形式固化；部署时可在平台侧覆盖（例如追加字体或调整 AS）。
-ENV extra_params="--o:ssl.enable=false --o:net.proto=IPv4"
+ENV extra_params="--o:ssl.enable=false --o:net.proto=IPv4 --o:ssl.termination=true"
 
 EXPOSE 9980

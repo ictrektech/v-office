@@ -77,8 +77,10 @@ x-v-office-storage-base: &v-office-storage-base
     # 因为上面那个是相对路径，必须显式给一个 Collabora 侧可达的绝对地址。
     V_OFFICE_COLLABORA_INTERNAL_URL: http://v-office-collabora:9980
     # 签署 WOPI access_token 的密钥。只在本服务内使用（Collabora 只回传令牌
-    # 不解析），生产环境建议改掉；未设置时用代码里的开发默认值。
-    V_OFFICE_WOPI_SECRET: ${V_OFFICE_WOPI_SECRET:-v-office-dev-wopi-secret}
+    # 不解析）。这里特意不给默认值：留空时存储服务每次启动随机生成一个，各套
+    # 部署天然互不相同；写死成公共值等于所有服务器共用同一密钥。
+    # 生产建议在安装配置里显式填写——固定值可让重启不影响在途编辑会话。
+    V_OFFICE_WOPI_SECRET: ${V_OFFICE_WOPI_SECRET:-}
   volumes:
     - ${VOS_APP_STORAGE_PATH}/documents:/data
   labels:

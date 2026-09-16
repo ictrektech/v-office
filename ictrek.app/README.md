@@ -92,7 +92,7 @@ PathPrefix(`/browser`) || PathPrefix(`/cool`) || PathPrefix(`/hosting`) || PathP
 - 实测本版本只用到 `/browser`（静态资源）与 `/cool`（WebSocket）；`/hosting`（discovery）与 `/lool`（旧版 WS 路径）同属 Collabora 自身路径，一并挂上以防升级换路径。
 - 这四个前缀目前没有其它应用占用。新增应用若也要占用，需要同步调整——Traefik 里同 rule 的路由会互相抢流量。
 - 前缀入口的 priority 必须高于 web 的 `-top-open`（1000）：后者对同一前缀按 `Sec-Fetch-Dest=document` 匹配并重定向到门户路由，直接打开 `cool.html` 时会被它截走。
-- Collabora 侧不需额外开关：`net.proxy_prefix` 实测不改变上述绝对路径，因此没有启用它；镜像里只固化 `--o:ssl.enable=false --o:net.proto=IPv4`（见 `collabora/Dockerfile`）。
+- Collabora 侧不需额外开关：`net.proxy_prefix` 实测不改变上述绝对路径，因此没有启用它；镜像里固化 `--o:ssl.enable=false --o:net.proto=IPv4 --o:ssl.termination=true`（见 `collabora/Dockerfile`）。其中 `ssl.termination=true` 不可省：网关终止 TLS 后 coolwsd 必须知道对外是 HTTPS，否则它产出 `ws://`，而页面是 HTTPS 加载的，浏览器会抛 `SecurityError` 拒绝建立 WebSocket。
 
 ## 镜像构建与发布流程
 
