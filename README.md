@@ -22,7 +22,7 @@
 
 ## 🚀 Overview
 
-**V-Office** is a browser-based suite for viewing and editing Word, Excel and PowerPoint documents. Standalone deployments keep documents local to the browser. VOS deployments add automatic sign-in, per-user private app storage, 10-second auto-save, cloud document management and an Agent API.
+**V-Office** is a browser-based suite for viewing and editing Word, Excel and PowerPoint documents. Standalone deployments keep documents local to the browser. VOS deployments add automatic sign-in, per-user private app storage, 10-second auto-save, a personal "My Documents" library and an Agent API.
 
 ### Deployment Modes
 
@@ -37,7 +37,7 @@
 - **🛠️ Rich Tools**: Integrated with advanced editing capabilities.
 - **📦 Persistent Storage**: Uses IndexedDB for local file management.
 - **🌐 Cloud Integration**: Easy file selection via Uppy (Google Drive, Dropbox, OneDrive).
-- **💾 VOS Auto-save**: Edited documents save every 10 seconds; the first save asks for a name, and cloud documents can be opened, downloaded, renamed or deleted.
+- **💾 VOS Auto-save**: Edited documents save every 10 seconds; the first save asks for a name, and documents can be opened, downloaded, renamed or deleted from My Documents.
 - **🤖 VOS Agent API**: VOS deployments expose a versioned, per-user document API for listing, downloading, uploading, overwriting, renaming, and deleting files, with an in-app guide.
 
 ## 🛠️ Technology Stack

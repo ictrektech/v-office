@@ -14,7 +14,7 @@ import { convertDocBuffer } from "./doc-convert";
 import { stripHeaderFooterFloats } from "./docx-fix";
 import { allPlugins, featuredPlugins, getPluginConfigUrl } from "./plugins";
 import { isVOSMode } from "@/utils/vos/fastpath";
-import { saveCloudFile, clientLog } from "@/utils/vos/storage";
+import { saveStoredFile, clientLog } from "@/utils/vos/storage";
 
 // AI 助手插件统一走 VOS 网关形态路径（本地 dev 由 next.config.ts rewrite 映射到
 // public/ai-assistant 镜像副本，VOS 由平台网关路由到 agentic-search 应用）。
@@ -218,7 +218,7 @@ export class EditorServer {
   /**
    * `open(file)` 打开时留底的原文件。
    *
-   * 只对"有 File 对象"的入口（拖拽 / 选择本地文件 / 云端文档下载后打开）
+   * 只对"有 File 对象"的入口（拖拽 / 选择本地文件 / 我的文档下载后打开）
    * 有值；`openUrl` 是惰性下载，决策时通常还没有字节，返回 null。
    */
   getOriginalDocument(): { name: string; data: ArrayBuffer } | null {
@@ -653,7 +653,7 @@ export class EditorServer {
         if (vosMode) {
           clientLog(`save-begin: ${saveName} (${finalOutput.byteLength} bytes)`);
           try {
-            await saveCloudFile(saveName, finalOutput);
+            await saveStoredFile(saveName, finalOutput);
             clientLog(`save-ok: ${saveName}`);
             return { status: "ok" };
           } catch (error) {

@@ -51,7 +51,7 @@ export async function convertDocBuffer(
     signal: AbortSignal.timeout(120_000),
   });
   if (resp.status === 401 && retry) {
-    // token 过期：清缓存重试一次（与 saveCloudFile 同策略）
+    // token 过期：清缓存重试一次（与 saveStoredFile 同策略）
     clearVOSAuthCache();
     return convertDocBuffer(data, from, to, false);
   }

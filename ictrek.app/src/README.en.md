@@ -16,7 +16,7 @@ Local-first browser office suite for viewing and editing Word (.doc/.docx), Exce
 
 After installation, open **V-Office** from the VOS sidebar:
 
-1. The "Cloud documents" section lists files in the current user's private directory, with explicit Open, Download and Rename actions
+1. The "My Documents" section lists files in the current user's private directory, with explicit Open, Download and Rename actions
 2. Create a new document or open a local file to edit
 3. The first manual or automatic save of a new document asks for its file name. Pending edits are then written back to that file every 10 seconds. Use the top-right button to close the document.
 4. Open "API Guide" from the sidebar for endpoint, authentication and copyable agent examples.

@@ -53,10 +53,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
-  listCloudFiles,
-  openCloudFile,
-  saveCloudFile,
-  type CloudFile,
+  listStoredFiles,
+  openStoredFile,
+  saveStoredFile,
+  type StoredFile,
 } from "@/utils/vos/storage";
 import { isVOSMode } from "@/utils/vos/fastpath";
 import {
@@ -178,7 +178,7 @@ export function WritingView() {
 
   // ── 左栏 ──
   const [vosMode, setVosMode] = useState(false);
-  const [cloudFiles, setCloudFiles] = useState<CloudFile[] | null>(null);
+  const [storedFiles, setStoredFiles] = useState<StoredFile[] | null>(null);
   const [kbList, setKbList] = useState<KnowledgeBase[] | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [tab, setTab] = useState<"local" | "kb">("local");
@@ -214,11 +214,11 @@ export function WritingView() {
       const vos = await isVOSMode().catch(() => false);
       setVosMode(vos);
       if (vos) {
-        listCloudFiles()
-          .then((files) => setCloudFiles(files))
-          .catch(() => setCloudFiles([]));
+        listStoredFiles()
+          .then((files) => setStoredFiles(files))
+          .catch(() => setStoredFiles([]));
       } else {
-        setCloudFiles([]);
+        setStoredFiles([]);
       }
       listDocumentKnowledgeBases()
         .then((kbs) => setKbList(kbs))
@@ -359,14 +359,14 @@ export function WritingView() {
           .then(() => listLocalMaterials())
           .then(setLocalFiles)
           .catch(() => {});
-        // VOS 线上模式：材料同步保存到云端，跨端可见
+        // VOS 线上模式：材料同步保存到「我的文档」，跨端可见
         if (await isVOSMode().catch(() => false)) {
           void f
             .arrayBuffer()
-            .then((buf) => saveCloudFile(f.name, buf))
-            .then(() => listCloudFiles())
-            .then(setCloudFiles)
-            .catch((err) => console.warn("[writing] 云端备份失败:", err));
+            .then((buf) => saveStoredFile(f.name, buf))
+            .then(() => listStoredFiles())
+            .then(setStoredFiles)
+            .catch((err) => console.warn("[writing] 文档备份失败:", err));
         }
       } catch (err) {
         setSessions((prev) => ({
@@ -862,8 +862,8 @@ export function WritingView() {
     clientsRef.current.get(activeName)?.stop();
   }, [activeName]);
 
-  // 上传到云端：把当前成稿（生成/微调后最新版）导出并上传 v-office 云存储
-  const handleUploadCloud = useCallback(
+  // 保存到我的文档：把当前成稿（生成/微调后最新版）导出并保存到 v-office 文档存储
+  const handleSaveToMyDocs = useCallback(
     async (): Promise<{ ok: boolean; message: string }> => {
       const name = activeName;
       const sessionId = name ? sessionsRef.current[name]?.sessionId : undefined;
@@ -881,10 +881,10 @@ export function WritingView() {
           | { error?: string; files?: { name: string; url: string; kind: string }[] }
           | null;
         if (!resp.ok) {
-          return { ok: false, message: String(data?.error ?? `上传失败（HTTP ${resp.status}）`) };
+          return { ok: false, message: String(data?.error ?? `保存失败（HTTP ${resp.status}）`) };
         }
         const n = data?.files?.length ?? 0;
-        return { ok: true, message: `已上传 ${n} 个文件到云端` };
+        return { ok: true, message: `已保存 ${n} 个文件到我的文档` };
       } catch (err) {
         return { ok: false, message: err instanceof Error ? err.message : "网络错误" };
       }
@@ -955,7 +955,7 @@ export function WritingView() {
           </div>
 
           <Segmented
-            options={vosMode ? ["本地", "云端文档"] : ["本地"]}
+            options={vosMode ? ["本地", "我的文档"] : ["本地"]}
             value={tab === "local" ? 0 : 1}
             onChange={(i) => setTab(i === 0 ? "local" : "kb")}
           />
@@ -1123,15 +1123,15 @@ export function WritingView() {
             </>
           )}
 
-          {/* 云端文档 tab：VOS 云端文件（与主页「最近」一致的空态与列表样式） */}
+          {/* 我的文档 tab：VOS 文件（与主页「最近」一致的空态与列表样式） */}
           {tab === "kb" && vosMode && (
             <div className="mt-4 flex-1 overflow-y-auto min-h-0">
-              {cloudFiles === null && (
+              {storedFiles === null && (
                 <div className="text-[13px] text-gray-300 py-4 text-center">
                   加载中…
                 </div>
               )}
-              {cloudFiles !== null && cloudFiles.length === 0 && (
+              {storedFiles !== null && storedFiles.length === 0 && (
                 <div className="flex flex-col items-center justify-center py-14 text-center">
                   <FolderOpen className="w-10 h-10 text-gray-200" strokeWidth={1.25} />
                   <div className="mt-3 text-[13.5px] text-gray-500">无最近文件</div>
@@ -1140,18 +1140,18 @@ export function WritingView() {
                   </div>
                 </div>
               )}
-              {cloudFiles !== null && cloudFiles.length > 0 && (
-                <CloudList
-                  files={cloudFiles}
+              {storedFiles !== null && storedFiles.length > 0 && (
+                <StoredFileList
+                  files={storedFiles}
                   selected={
                     material &&
                     material.status !== "error" &&
-                    cloudFiles.some((f) => f.name === material.name)
+                    storedFiles.some((f) => f.name === material.name)
                       ? material.name
                       : null
                   }
                   onSelect={(name) =>
-                    void selectMaterial(name, () => openCloudFile(name))
+                    void selectMaterial(name, () => openStoredFile(name))
                   }
                 />
               )}
@@ -1262,7 +1262,7 @@ export function WritingView() {
                 onBackToConfig={backToConfig}
                 onRevise={handleRevise}
                 onUndo={handleUndo}
-                onUploadCloud={handleUploadCloud}
+                onSaveToMyDocs={handleSaveToMyDocs}
                 onReset={() => handleReset(activeName)}
               />
             )}
@@ -1464,19 +1464,19 @@ function fmtTime(ts: number): string {
   return sameDay ? `${hh}:${mm}` : `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
-function CloudList({
+function StoredFileList({
   files,
   selected,
   onSelect,
 }: {
-  files: CloudFile[];
+  files: StoredFile[];
   selected: string | null;
   onSelect: (name: string) => void;
 }) {
   if (files.length === 0) {
     return (
       <div className="text-[13px] text-gray-300 py-4 text-center">
-        云端暂无文档
+        暂无文档
       </div>
     );
   }

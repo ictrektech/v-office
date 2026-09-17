@@ -45,7 +45,7 @@ const nextConfig: NextConfig = {
         destination: "http://localhost:3002/app/com.ictrek.hybrag/:path*",
       },
       {
-        // 本地 dev：云端文档接口转发到本地 storage 服务（server/main.py，
+        // 本地 dev：文档存储接口转发到本地 storage 服务（server/main.py，
         // V_OFFICE_AUTH_DISABLED=1 启动）。编辑器 doc↔docx 转换也走这里。
         source: "/api/com.ictrek.v-office/:path*",
         destination: "http://localhost:5000/:path*",

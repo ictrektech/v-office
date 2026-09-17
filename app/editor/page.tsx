@@ -37,7 +37,7 @@ import {
   isHybragInstalled,
   uploadKnowledgeFile,
 } from "@/utils/hybrag/client";
-import { renameCloudFile } from "@/utils/vos/storage";
+import { renameStoredFile } from "@/utils/vos/storage";
 import { sitePath } from "@/utils/site-path";
 import {
   getVOSAccessToken,
@@ -113,7 +113,7 @@ export default function Page() {
   const closeDocument = useCallback(async () => {
     const zh = language.toLowerCase().startsWith("zh");
     // 新建文档在退出时才弹框确认命名（对齐 WPS 等习惯）：编辑期间已用
-    // 默认名静默保存，这里确认后把云端文件重命名为正式名称。
+    // 默认名静默保存，这里确认后把文档重命名为正式名称。
     const untitledName = server.getUntitledSaveName();
     if (untitledName) {
       const extension =
@@ -128,7 +128,7 @@ export default function Page() {
           : `${name}.${extension}`;
         if (target !== untitledName) {
           try {
-            await renameCloudFile(untitledName, target);
+            await renameStoredFile(untitledName, target);
           } catch {
             toast.error(
               zh ? "重命名失败，请重试" : "Rename failed. Try again.",
@@ -601,7 +601,7 @@ export default function Page() {
 
       editingRef.current = editing;
 
-      // 判定必须以实际装载的文档为准：本地文件（拖拽 / 选择 / 最近 / 云端
+      // 判定必须以实际装载的文档为准：本地文件（拖拽 / 选择 / 最近 / 我的文档
       // 下载）走的是 server.open(file) + router.push("/editor")，URL 上不带
       // 任何参数，只认 searchParams 会永远命中不到。
       const document = server.getDocument();

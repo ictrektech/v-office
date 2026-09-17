@@ -19,7 +19,7 @@
 - 前端和外部 Agent 带 Bearer 令牌访问同域 API `/api/com.ictrek.v-office/api/v1`（Traefik 剥网关前缀后转发到存储服务）；存储服务每次请求调 VOS `/v1000/oauth2/userinfo` 校验令牌（带短 TTL 用户名缓存），取不到有效用户即 401。
 - VOS 自动分配 `VOS_APP_STORAGE_PATH`，安装页不再要求用户指定文档目录；每个 VOS 用户只访问其中 `documents/<用户名>/` 目录。该目录不会出现在 VOS 公共文件中，文件名仍经过 Office 后缀白名单与路径穿越校验。
 - 新文档第一次保存（Ctrl+S）时直接要求输入文件名，随后保存覆盖同一文件；上传失败时保持保存错误，不会改成浏览器下载。编辑器右上角提供关闭当前文档按钮。
-- 独立部署（非 VOS iframe）检测不到 `window.vos_platform`，云端入口自动隐藏，应用回到本地优先行为（IndexedDB / 本地文件句柄）。
+- 独立部署（非 VOS iframe）检测不到 `window.vos_platform`，「我的文档」入口自动隐藏，应用回到本地优先行为（IndexedDB / 本地文件句柄）。
 
 ## 安装配置
 
@@ -52,16 +52,16 @@
 - `next.config.ts`：新增 `basePath: process.env.NEXT_PUBLIC_BASE_PATH || ""`，用于 VOS 子路径部署；不设置该环境变量时行为与上游一致。
 - `Dockerfile`：builder stage 新增 `ARG NEXT_PUBLIC_BASE_PATH` 透传，并把 `NEXT_PUBLIC_APP_ROOT` 改为 `${NEXT_PUBLIC_BASE_PATH}/v${DS_VERSION}-${HASH}`；不传该参数时与上游产物一致。
 - `server/`：新增应用私有存储中的逐用户文档服务（仅 VOS 部署使用）。
-- `utils/vos/`：新增 VOS OIDC Fastpath 静默认证与云端存储客户端。
+- `utils/vos/`：新增 VOS OIDC Fastpath 静默认证与文档存储客户端。
 - `utils/editor/collabora.ts`：新增 Collabora（WOPI）客户端——Word 文档改用 Collabora 内核打开，本地文件先原样推入应用私有存储再换会话，取不到会话自动回退 OnlyOffice。
 - `collabora/`：新增 Collabora 镜像定义（上游 `collabora/code` + 固化的 `extra_params`）。
 - `server/main.py`：新增 WOPI host（`/api/v1/wopi/session` 签发一次性令牌、`/wopi/files/...` 读写文档）。
-- `components/main/open-view.tsx`：新增"云端文档"列表以及逐文件打开、下载、删除操作（VOS 模式才显示）。
+- `components/main/open-view.tsx`：新增"我的文档"列表以及逐文件打开、下载、删除操作（VOS 模式才显示）。
 - `components/main/api-guide-view.tsx`：新增 API 接入指南，包含版本化接口、认证说明和可复制的 Agent 调用示例。
 - `utils/editor/server.ts`：保存时 VOS 模式改为自动入云，新文档首次保存先命名；打开文档时保留转换前的原始字节，供 Collabora 内核前推入存储。
 - `app/editor/page.tsx`：新增首次保存命名对话框和关闭当前文档按钮。
 - `package.json`：新增 `js-sha256` 依赖（PKCE S256，兼容非 HTTPS 门户）。
-- `messages/*.json`：新增 `vosCloud*` 文案键（en/zh-CN/zh-TW 译文，其余 locale 暂用英文兜底）。
+- `messages/*.json`：新增 `myDocs*` 文案键（"我的文档"入口）（en/zh-CN/zh-TW 译文，其余 locale 暂用英文兜底）。
 - `ictrek.app/`、`UPSTREAM`、`.dockerignore`（排除 ictrek.app、UPSTREAM 与 server/）：ictrek 新增，上游合并时保留。
 
 ## VOS 子路径适配

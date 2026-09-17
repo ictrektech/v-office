@@ -75,12 +75,15 @@
   "uQDRsY": "稍後",
   "E3qn6j": "免費 Office 範本 — Word、Excel 和 PowerPoint | V-Office",
   "Lrib/G": "免費線上 Office 編輯器 — Word、Excel、PowerPoint | V-Office",
-  "vosCloudTitle": "云端文件",
-  "vosCloudUserHint": "已透過 VOS 登入 —— 正在使用應用程式私有儲存空間",
-  "vosCloudLoading": "正在加载云端文件…",
-  "vosCloudEmpty": "暂无云端文件",
-  "vosCloudEmptyHint": "在編輯器中保存的文件會寫入應用程式私有儲存空間",
-  "vosCloudOpenHint": "點擊開啟该云端文件",
-  "vosCloudDeleteHint": "從雲端刪除",
-  "vosAppVersionLabel": "VOS 應用版本"
+  "myDocsTitle": "我的文件",
+  "myDocsUserHint": "已透過 VOS 登入 · 文件儲存在你的專屬目錄，僅你可見",
+  "myDocsLoading": "正在載入你的文件…",
+  "myDocsEmpty": "暫無文件",
+  "myDocsEmptyHint": "在編輯器中儲存的文件會存到你的專屬目錄",
+  "myDocsOpenHint": "點擊開啟該文件",
+  "myDocsDeleteHint": "刪除該文件",
+  "vosAppVersionLabel": "VOS 應用版本",
+  "collaboraTitle": "由 Collabora 提供支援",
+  "collaboraDesc": "遇到複雜 Word 文件（如 WPS 匯出的表單類檔案）時，可切換到基於 LibreOffice 的 Collabora 核心渲染，相容性更強。",
+  "collaboraLink": "瞭解更多"
 }

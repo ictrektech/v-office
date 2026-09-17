@@ -11,7 +11,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
   Check,
   ChevronRight,
-  CloudUpload,
+  HardDrive,
   FileSpreadsheet,
   FileText,
   Loader2,
@@ -98,8 +98,8 @@ interface GenerateViewProps {
   onUndo: () => void;
   /** 重置：从 0 开始（清空生成流与成稿，保留材料与配置） */
   onReset: () => void;
-  /** 上传到云端：把当前成稿导出并上传 v-office 云存储（VOS 模式显示按钮） */
-  onUploadCloud: () => Promise<{ ok: boolean; message: string }>;
+  /** 保存到我的文档：把当前成稿导出并保存到 v-office 文档存储（VOS 模式显示按钮） */
+  onSaveToMyDocs: () => Promise<{ ok: boolean; message: string }>;
 }
 
 export function GenerateView({
@@ -117,7 +117,7 @@ export function GenerateView({
   onBackToConfig,
   onRevise,
   onUndo,
-  onUploadCloud,
+  onSaveToMyDocs,
   onReset,
 }: GenerateViewProps) {
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -234,7 +234,7 @@ export function GenerateView({
                 <ExportWord file={result.files.find((f) => f.kind === "docx")} />
                 <ExportPdf file={result.files.find((f) => f.kind === "docx")} />
                 <ExportExcel file={result.files.find((f) => f.kind === "xlsx")} />
-                <UploadCloudButton onUpload={onUploadCloud} />
+                <SaveToMyDocsButton onSave={onSaveToMyDocs} />
                 <button
                   disabled
                   className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-4 py-2 text-[14px] font-medium text-gray-300 cursor-not-allowed"
@@ -741,11 +741,11 @@ async function authedDownload(file: ResultFile): Promise<void> {
   downloadBlob(new Blob([await resp.arrayBuffer()]), file.name);
 }
 
-/** 上传到云端：把当前成稿（生成/微调后最新版）导出并上传 v-office 云存储（仅 VOS 模式显示） */
-function UploadCloudButton({
-  onUpload,
+/** 保存到我的文档：把当前成稿（生成/微调后最新版）导出并保存到 v-office 文档存储（仅 VOS 模式显示） */
+function SaveToMyDocsButton({
+  onSave,
 }: {
-  onUpload: () => Promise<{ ok: boolean; message: string }>;
+  onSave: () => Promise<{ ok: boolean; message: string }>;
 }) {
   const [vos, setVos] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -762,15 +762,15 @@ function UploadCloudButton({
     setDone(false);
     setFailed(null);
     try {
-      const r = await onUpload();
+      const r = await onSave();
       if (r.ok) {
         setDone(true);
         window.setTimeout(() => setDone(false), 2500);
       } else {
-        setFailed(r.message || "上传失败");
+        setFailed(r.message || "保存失败");
       }
     } catch (err) {
-      setFailed(err instanceof Error ? err.message : "上传失败");
+      setFailed(err instanceof Error ? err.message : "保存失败");
     } finally {
       setBusy(false);
     }
@@ -787,12 +787,12 @@ function UploadCloudButton({
             ? "border-gray-200 bg-gray-50 text-gray-500"
             : "border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:text-gray-900"
       }`}
-      title="把当前成稿导出并上传到云端文件"
+      title="把当前成稿导出并保存到「我的文档」"
     >
       <span className="flex w-6 h-6 rounded-lg bg-indigo-100 items-center justify-center text-indigo-500">
-        <CloudUpload className="w-3.5 h-3.5" strokeWidth={2} />
+        <HardDrive className="w-3.5 h-3.5" strokeWidth={2} />
       </span>
-      {busy ? "上传中…" : done ? "已上传云端" : failed ? "上传失败，点击重试" : "上传到云端"}
+      {busy ? "保存中…" : done ? "已保存" : failed ? "保存失败，点击重试" : "保存到我的文档"}
     </button>
   );
 }

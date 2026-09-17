@@ -111,7 +111,7 @@ export async function fetchCollaboraSession(
 /**
  * 把本地打开的文档原样推入 storage，供 Collabora 通过 WOPI 读取。
  *
- * 本地文件（拖拽/选择/最近/云端下载）只存在于浏览器内存里，而 Collabora 是
+ * 本地文件（拖拽/选择/最近/我的文档下载）只存在于浏览器内存里，而 Collabora 是
  * 服务端渲染，只能从 storage 取文件。因此换会话之前必须先落一份。
  *
  * 没部署存储服务（纯独立部署）时请求会失败，返回 false，调用方回退到原有
