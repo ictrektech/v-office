@@ -1,11 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Github, ShieldCheck, Heart } from "lucide-react";
+import { FileText, ShieldCheck, Heart } from "lucide-react";
 import { useExtracted } from "next-intl";
 import { usePageTitle } from "@/hooks/use-page-title";
-import { useAppStore } from "@/store";
-import { isDarkTheme } from "@/utils/utils";
 import { Logo } from "../svg";
 
 declare global {
@@ -14,13 +12,11 @@ declare global {
   }
 }
 
-const ORIGIN_REPO_URL = "https://github.com/ictrektech/v-office";
+const COLLABORA_URL = "https://www.collaboraonline.com/";
 
 export function AboutView() {
   const t = useExtracted();
   usePageTitle(t("About — V-Office"));
-  const { theme } = useAppStore();
-  const isDark = isDarkTheme(theme);
   // Version injected by the VOS container entrypoint (runtime-config.js);
   // empty on standalone deployments, where the row stays hidden.
   const [vosVersion, setVosVersion] = useState("");
@@ -52,43 +48,30 @@ export function AboutView() {
             </span>
           </p>
         )}
-
-        <div className="pt-6 flex justify-center">
-          <a
-            href="https://www.producthunt.com/products/serverless-web-office-by-ziziyi?embed=true&utm_source=badge-featured&utm_medium=badge&utm_campaign=badge-serverless-web-office-by-ziziyi"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <img
-              alt="Serverless Web Office by V-Office - Serverless Web Office: Private, In-Browser editing via WASM. | Product Hunt"
-              width="250"
-              height="54"
-              src={`https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1067951&theme=${
-                isDark ? "dark" : "light"
-              }&t=1769359248898`}
-            />
-          </a>
-        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-12">
         <div className="p-8 bg-white/5 dark:bg-white/5 border border-border dark:border-white/10 rounded-3xl hover:border-primary/50 dark:hover:border-primary/40 hover:shadow-lg hover:shadow-primary/5 transition-all group">
           <div className="w-12 h-12 bg-primary/10 dark:bg-primary/20 rounded-2xl flex items-center justify-center mb-6">
-            <Github className="w-6 h-6 text-primary" />
+            <FileText className="w-6 h-6 text-primary" />
           </div>
-          <h3 className="text-xl font-bold mb-3">{t("Open Source")}</h3>
+          <h3 className="text-xl font-bold mb-3">
+            {t({ id: "collaboraTitle", message: "Powered by Collabora" })}
+          </h3>
           <p className="text-text-secondary dark:text-slate-400 text-sm leading-relaxed mb-6">
-            {t(
-              "We believe in the power of community. The source code for this project is available on GitHub for everyone to view, contribute, and improve.",
-            )}
+            {t({
+              id: "collaboraDesc",
+              message:
+                "Complex Word documents — such as forms exported from WPS — can be rendered with the Collabora (LibreOffice) engine for stronger compatibility.",
+            })}
           </p>
           <a
-            href={ORIGIN_REPO_URL}
+            href={COLLABORA_URL}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center text-sm font-semibold text-primary hover:underline"
           >
-            {t("View on GitHub")}
+            {t({ id: "collaboraLink", message: "Learn more" })}
           </a>
         </div>
 
