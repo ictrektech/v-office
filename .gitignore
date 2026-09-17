@@ -58,3 +58,6 @@ next-env.d.ts
 # python bytecode (server/ 本地运行时生成)
 __pycache__/
 *.pyc
+
+# 文档/素材目录（使用文档、宣传稿件等，不进 git；同样已在 .dockerignore 中排除）
+/docs/
