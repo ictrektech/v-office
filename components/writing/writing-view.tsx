@@ -184,7 +184,6 @@ export function WritingView() {
   const [style, setStyle] = useState("");
   const [requirements, setRequirements] = useState("");
   const [lengthWords, setLengthWords] = useState("0");
-  const [selectedKBs, setSelectedKBs] = useState<string[]>([]);
 
   // ── 左栏 ──
   const [vosMode, setVosMode] = useState(false);
@@ -199,6 +198,8 @@ export function WritingView() {
   const [hkbFiles, setHkbFiles] = useState<KnowledgeFile[] | null>(null);
   const [hkbLoading, setHkbLoading] = useState(false);
   const [hkbFilesError, setHkbFilesError] = useState("");
+  /** 知识库文件本地过滤（库内文件可能很多，不依赖服务端搜索） */
+  const [hkbQuery, setHkbQuery] = useState("");
   const [localFiles, setLocalFiles] = useState<LocalMaterialRecord[]>([]);
   /** 服务端「最近使用」：当前用户有成稿的文档（入库，跨浏览器一致） */
   const [serverDocs, setServerDocs] = useState<MyWritingDoc[]>([]);
@@ -415,6 +416,7 @@ export function WritingView() {
     setHkbKb(kb);
     setHkbFiles(null);
     setHkbFilesError("");
+    setHkbQuery("");
     setHkbLoading(true);
     try {
       setHkbFiles(await listKnowledgeBaseFiles(kb.id));
@@ -429,6 +431,7 @@ export function WritingView() {
     setHkbKb(null);
     setHkbFiles(null);
     setHkbFilesError("");
+    setHkbQuery("");
   }, []);
 
   /** 选中知识库文件：下载原件 → 走统一材料通道上传解析 */
@@ -791,7 +794,6 @@ export function WritingView() {
         ...(style.trim() ? { style: style.trim() } : {}),
         ...(requirements.trim() ? { requirements: requirements.trim() } : {}),
         lengthWords: Math.max(0, parseInt(lengthWords, 10) || 0),
-        ...(selectedKBs.length ? { knowledgeBaseNames: selectedKBs } : {}),
       };
       configsRef.current.set(name, config);
 
@@ -814,7 +816,7 @@ export function WritingView() {
     } finally {
       patchSession(name, { starting: false });
     }
-  }, [activeName, docType, title, publisher, docNumber, audience, style, requirements, lengthWords, selectedKBs, agent, handleEvent, patchSession]);
+  }, [activeName, docType, title, publisher, docNumber, audience, style, requirements, lengthWords, agent, handleEvent, patchSession]);
 
   // 确保该文件的写作客户端可用：没有则用记录的 sessionId 自动重连。
   // 已有 client 但 WS 已断（服务重启/网络闪断）时必须丢弃重连，
@@ -976,6 +978,12 @@ export function WritingView() {
     0,
     materialTabs.findIndex((item) => item.id === tab),
   );
+
+  /** 知识库文件按关键词本地过滤（避免库内文件过多时无从下手） */
+  const hkbVisibleFiles = (hkbFiles ?? []).filter((file) => {
+    const q = hkbQuery.trim().toLowerCase();
+    return !q || knowledgeFileLabel(file).toLowerCase().includes(q);
+  });
 
   const canStart =
     serviceOk !== false &&
@@ -1229,42 +1237,60 @@ export function WritingView() {
             <div className="mt-4 flex-1 overflow-y-auto min-h-0">
               {!hkbKb ? (
                 <>
+                  <div className="mb-2 px-1.5 text-[11px] font-medium tracking-wide text-gray-400">
+                    选择知识库
+                  </div>
+
                   {kbList === null && (
-                    <div className="text-[13px] text-gray-300 py-4 text-center">
-                      加载中…
+                    <div className="flex items-center justify-center py-12">
+                      <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-gray-200 border-t-[#FF7A45]" />
                     </div>
                   )}
+
                   {kbList !== null && kbList.length === 0 && (
-                    <div className="flex flex-col items-center justify-center py-14 text-center">
-                      <FolderOpen className="w-10 h-10 text-gray-200" strokeWidth={1.25} />
-                      <div className="mt-3 text-[13.5px] text-gray-500">无可用知识库</div>
-                      <div className="mt-1 text-[12px] text-gray-300 leading-4">
-                        在 HybRAG 中创建知识库并上传文档后显示在此处
+                    <div className="flex flex-col items-center justify-center px-2 py-14 text-center">
+                      <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-b from-orange-50 to-orange-100/60 ring-1 ring-orange-200/50">
+                        <BookOpen className="h-6 w-6 text-[#FF7A45]/70" strokeWidth={1.6} />
+                      </span>
+                      <div className="mt-3.5 text-[13.5px] font-medium text-[#1D1D1F]">
+                        暂无知识库
+                      </div>
+                      <div className="mt-1 text-[12px] leading-5 text-gray-400">
+                        在 HybRAG 中创建知识库
+                        <br />
+                        并上传文档后显示在此处
                       </div>
                     </div>
                   )}
+
                   {kbList !== null && kbList.length > 0 && (
-                    <div className="flex flex-col gap-1">
-                      {kbList.map((kb) => (
+                    <div className="overflow-hidden rounded-2xl bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04),0_10px_28px_-16px_rgba(0,0,0,0.18)] ring-1 ring-black/5">
+                      {kbList.map((kb, i) => (
                         <button
                           key={kb.id}
                           onClick={() => void openKnowledgeBase(kb)}
-                          className="group flex items-center gap-2.5 rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-left transition-all hover:bg-white hover:shadow-sm"
+                          className={
+                            "group flex w-full items-center gap-3 px-3 py-2.5 text-left transition-all duration-150 hover:bg-gray-50/80 active:scale-[0.985] active:bg-gray-100 " +
+                            (i > 0 ? "border-t border-gray-100" : "")
+                          }
                         >
-                          <span className="flex w-7 h-7 shrink-0 items-center justify-center rounded-[7px] bg-gray-100 text-gray-500">
-                            <FolderOpen className="w-4 h-4" strokeWidth={1.75} />
+                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] bg-gradient-to-b from-[#FF9E73] to-[#F2653A] text-white shadow-[0_2px_6px_-1px_rgba(242,101,58,0.45)]">
+                            <BookOpen className="h-4 w-4" strokeWidth={1.9} />
                           </span>
-                          <span className="flex-1 min-w-0">
-                            <span className="block text-[13px] text-gray-600 truncate">
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[13.5px] font-medium text-[#1D1D1F]">
                               {kb.name}
                             </span>
-                            {typeof kb.knowledge_count === "number" && (
-                              <span className="block text-[11px] text-gray-300 mt-0.5">
-                                {kb.knowledge_count} 个文件
-                              </span>
-                            )}
+                            <span className="mt-0.5 block text-[11px] text-gray-400">
+                              {typeof kb.knowledge_count === "number"
+                                ? `${kb.knowledge_count} 个文件`
+                                : "知识库"}
+                            </span>
                           </span>
-                          <ChevronRight className="w-3.5 h-3.5 shrink-0 text-gray-300 group-hover:text-gray-500" />
+                          <ChevronRight
+                            className="h-4 w-4 shrink-0 text-gray-300 transition-all duration-150 group-hover:translate-x-0.5 group-hover:text-[#F2653A]"
+                            strokeWidth={2.2}
+                          />
                         </button>
                       ))}
                     </div>
@@ -1272,74 +1298,138 @@ export function WritingView() {
                 </>
               ) : (
                 <>
-                  <button
-                    onClick={backToKnowledgeBases}
-                    className="mb-2 inline-flex items-center gap-1 text-[12.5px] text-gray-400 hover:text-gray-700 transition-colors"
-                  >
-                    <ChevronLeft className="w-3.5 h-3.5" />
-                    全部知识库
-                  </button>
-                  <div className="mb-2 px-1 text-[12px] text-gray-400 truncate">
-                    {hkbKb.name}
+                  {/* 二级头部：返回 + 库名 + 文件数 */}
+                  <div className="mb-2.5 flex items-center gap-2.5">
+                    <button
+                      onClick={backToKnowledgeBases}
+                      aria-label="返回知识库列表"
+                      className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-500 transition-all duration-150 hover:bg-gray-200 hover:text-[#1D1D1F] active:scale-90"
+                    >
+                      <ChevronLeft className="h-4 w-4" strokeWidth={2.4} />
+                    </button>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[13.5px] font-semibold text-[#1D1D1F]">
+                        {hkbKb.name}
+                      </div>
+                      {!!hkbFiles?.length && (
+                        <div className="mt-0.5 text-[11px] text-gray-400">
+                          {hkbFiles.length} 个文件
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  {hkbLoading && (
-                    <div className="flex flex-col items-center justify-center py-10 text-center">
-                      <span className="inline-block w-5 h-5 rounded-full border-2 border-gray-200 border-t-primary animate-spin" />
-                      <div className="mt-3 text-[13px] text-gray-400">正在加载文件…</div>
+
+                  {/* 文件较多时给一个本地搜索，避免长列表无从下手 */}
+                  {!hkbLoading && !hkbFilesError && (hkbFiles?.length ?? 0) > 4 && (
+                    <div className="relative mb-2.5">
+                      <Search
+                        className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400"
+                        strokeWidth={2.2}
+                      />
+                      <input
+                        value={hkbQuery}
+                        onChange={(e) => setHkbQuery(e.target.value)}
+                        placeholder="搜索文件"
+                        className="w-full rounded-[10px] bg-gray-100 py-1.5 pl-8 pr-3 text-[12.5px] text-[#1D1D1F] outline-none transition-all placeholder:text-gray-400 focus:bg-white focus:ring-2 focus:ring-[#FF7A45]/25"
+                      />
                     </div>
                   )}
+
+                  {hkbLoading && (
+                    <div className="flex flex-col items-center justify-center py-12">
+                      <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-gray-200 border-t-[#FF7A45]" />
+                      <div className="mt-3 text-[12.5px] text-gray-400">正在加载文件…</div>
+                    </div>
+                  )}
+
                   {!hkbLoading && hkbFilesError && (
-                    <div className="flex flex-col items-center justify-center py-10 text-center">
-                      <div className="text-[13px] text-gray-400">加载失败</div>
-                      <div className="mt-1 px-4 text-[11.5px] leading-4 text-gray-300 break-all">
+                    <div className="flex flex-col items-center justify-center px-3 py-12 text-center">
+                      <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50 ring-1 ring-red-100">
+                        <X className="h-5 w-5 text-red-400" strokeWidth={2} />
+                      </span>
+                      <div className="mt-3 text-[13px] font-medium text-[#1D1D1F]">加载失败</div>
+                      <div className="mt-1 text-[11.5px] leading-4 text-gray-400 break-all">
                         {hkbFilesError}
                       </div>
                       <button
                         onClick={() => void openKnowledgeBase(hkbKb)}
-                        className="mt-3 text-[12.5px] text-primary hover:underline"
+                        className="mt-3.5 rounded-full bg-[#1D1D1F] px-4 py-1.5 text-[12px] font-medium text-white transition-all duration-150 hover:bg-black active:scale-95"
                       >
                         重试
                       </button>
                     </div>
                   )}
+
                   {!hkbLoading && !hkbFilesError && hkbFiles?.length === 0 && (
-                    <div className="flex flex-col items-center justify-center py-10 text-center">
-                      <FolderOpen className="w-9 h-9 text-gray-200" strokeWidth={1.25} />
-                      <div className="mt-3 text-[13px] text-gray-400">该知识库暂无文件</div>
+                    <div className="flex flex-col items-center justify-center px-2 py-12 text-center">
+                      <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gray-50 ring-1 ring-black/5">
+                        <BookOpen className="h-6 w-6 text-gray-300" strokeWidth={1.6} />
+                      </span>
+                      <div className="mt-3.5 text-[13.5px] font-medium text-[#1D1D1F]">
+                        该知识库暂无文件
+                      </div>
+                      <div className="mt-1 text-[12px] text-gray-400">
+                        在 HybRAG 中上传文档后即可引用
+                      </div>
                     </div>
                   )}
-                  {!hkbLoading && !hkbFilesError && !!hkbFiles?.length && (
-                    <div className="flex flex-col gap-0.5">
-                      {hkbFiles.map((file) => {
-                        const label = knowledgeFileLabel(file);
-                        const isActiveFile = material?.name === label;
-                        return (
-                          <button
-                            key={file.id}
-                            onClick={() => pickKnowledgeFile(file)}
-                            className={
-                              "flex items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors " +
-                              (isActiveFile ? "bg-gray-100" : "hover:bg-gray-50")
-                            }
-                          >
-                            <FileBadge name={label} size={24} />
-                            <span
+
+                  {!hkbLoading && !hkbFilesError && (hkbFiles?.length ?? 0) > 0 && (
+                    hkbVisibleFiles.length === 0 ? (
+                      <div className="py-10 text-center text-[12.5px] text-gray-400">
+                        没有匹配「{hkbQuery.trim()}」的文件
+                      </div>
+                    ) : (
+                      <div className="overflow-hidden rounded-2xl bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04),0_10px_28px_-16px_rgba(0,0,0,0.18)] ring-1 ring-black/5">
+                        {hkbVisibleFiles.map((file, i) => {
+                          const label = knowledgeFileLabel(file);
+                          const isActiveFile = material?.name === label;
+                          const parsing = !!file.status && file.status !== "completed";
+                          return (
+                            <button
+                              key={file.id}
+                              onClick={() => pickKnowledgeFile(file)}
                               className={
-                                "flex-1 text-[13px] truncate " +
-                                (isActiveFile ? "text-primary font-medium" : "text-gray-600")
+                                "group flex w-full items-center gap-3 px-3 py-2.5 text-left transition-all duration-150 active:scale-[0.985] " +
+                                (i > 0 ? "border-t border-gray-100 " : "") +
+                                (isActiveFile
+                                  ? "bg-[#FFF4EF]"
+                                  : "hover:bg-gray-50/80 active:bg-gray-100")
                               }
                             >
-                              {label}
-                            </span>
-                            {file.status && file.status !== "completed" && (
-                              <span className="shrink-0 text-[11px] text-gray-300">
-                                {file.status}
+                              <FileBadge name={label} size={28} />
+                              <span className="min-w-0 flex-1">
+                                <span
+                                  className={
+                                    "block truncate text-[13px] " +
+                                    (isActiveFile
+                                      ? "font-medium text-[#E8590C]"
+                                      : "text-[#1D1D1F]")
+                                  }
+                                >
+                                  {label}
+                                </span>
+                                {parsing && (
+                                  <span className="mt-0.5 block text-[11px] text-amber-500">
+                                    {file.status === "failed" ? "解析失败" : "解析中…"}
+                                  </span>
+                                )}
                               </span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
+                              {isActiveFile ? (
+                                <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-gradient-to-b from-[#FF9E73] to-[#F2653A] text-white shadow-[0_1px_4px_-1px_rgba(242,101,58,0.6)]">
+                                  <Check className="h-3 w-3" strokeWidth={3} />
+                                </span>
+                              ) : (
+                                <ChevronRight
+                                  className="h-4 w-4 shrink-0 text-gray-200 transition-all duration-150 group-hover:translate-x-0.5 group-hover:text-[#F2653A]"
+                                  strokeWidth={2.2}
+                                />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )
                   )}
                 </>
               )}
@@ -1416,13 +1506,6 @@ export function WritingView() {
             onRequirements={setRequirements}
             lengthWords={lengthWords}
             onLengthWords={setLengthWords}
-            kbList={kbList}
-            selectedKBs={selectedKBs}
-            onToggleKB={(name) =>
-              setSelectedKBs((prev) =>
-                prev.includes(name) ? prev.filter((k) => k !== name) : [...prev, name],
-              )
-            }
             canStart={canStart}
             starting={active?.starting ?? false}
             onStart={startWriting}
@@ -1803,9 +1886,6 @@ interface ConfigStepProps {
   onRequirements: (v: string) => void;
   lengthWords: string;
   onLengthWords: (v: string) => void;
-  kbList: KnowledgeBase[] | null;
-  selectedKBs: string[];
-  onToggleKB: (name: string) => void;
   canStart: boolean;
   starting: boolean;
   onStart: () => void;
@@ -1943,31 +2023,6 @@ function ConfigStep(p: ConfigStepProps) {
       {/* 基础信息 */}
       <section className="bg-white rounded-2xl border border-black/6 shadow-sm p-6">
         <SectionHeader icon={Settings2} title="基础信息" subtitle="补充公文的基础要素（可留空）" />
-
-        {p.kbList !== null && p.kbList.length > 0 && (
-          <div className="mb-4">
-            <label className="block text-[13px] text-gray-500 mb-2">引用知识库</label>
-            <div className="flex flex-wrap gap-2">
-              {p.kbList.map((kb) => {
-                const active = p.selectedKBs.includes(kb.name);
-                return (
-                  <button
-                    key={kb.id}
-                    onClick={() => p.onToggleKB(kb.name)}
-                    className={
-                      "rounded-full px-3.5 py-1.5 text-[13px] border transition-all " +
-                      (active
-                        ? "bg-[#FF7A45] text-white border-[#FF7A45]"
-                        : "bg-white text-gray-500 border-gray-200 hover:border-gray-400 hover:text-gray-700")
-                    }
-                  >
-                    {kb.name}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
           <div>
