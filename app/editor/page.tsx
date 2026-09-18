@@ -21,7 +21,6 @@ import { createFetchProxy } from "@/utils/editor/fetch";
 import { createXHRProxy } from "@/utils/editor/xhr";
 import { DocEditor } from "@/utils/editor/types";
 import { createExtensionLoader } from "@/utils/extension";
-import { convertDocBuffer } from "@/utils/editor/doc-convert";
 import {
   fetchCollaboraSession,
   fetchCollaboraStatus,
@@ -702,80 +701,90 @@ export default function Page() {
       onClose={() => setShowInstallHint(false)}
       onTryDirect={tryDirectRef.current || undefined}
     />
-    {vosMode && kbAvailable && (
-      <button
-        type="button"
-        onClick={() => setShowKbUpload(true)}
-        aria-label={
-          language.toLowerCase().startsWith("zh")
-            ? "上传到知识库"
-            : "Upload to knowledge base"
-        }
-        title={
-          language.toLowerCase().startsWith("zh")
-            ? "上传到知识库"
-            : "Upload to knowledge base"
-        }
-        className="fixed right-52 top-3 z-50 flex h-9 items-center gap-1.5 rounded-lg bg-background/90 px-3 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted"
-      >
-        <Upload className="h-4 w-4" />
-        <span className="text-sm font-medium">
-          {language.toLowerCase().startsWith("zh")
-            ? "上传到知识库"
-            : "Upload to KB"}
-        </span>
-      </button>
-    )}
-    {wordDoc && !collaboraUrl && (
-      <button
-        type="button"
-        onClick={() => handleSwitchEngine(true)}
-        disabled={switchingEngine}
-        aria-label={
-          language.toLowerCase().startsWith("zh")
-            ? "使用 Collabora 打开"
-            : "Open with Collabora"
-        }
-        title={
-          language.toLowerCase().startsWith("zh")
-            ? "使用 Collabora 打开：对复杂文档（如 WPS 表单类 Word）解析能力更强"
-            : "Open with Collabora: renders complex documents (e.g. WPS-style Word forms) more faithfully"
-        }
-        className="fixed right-64 top-3 z-50 flex h-9 items-center gap-1.5 rounded-lg bg-background/90 px-3 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted disabled:opacity-60"
-      >
-        <Layers className="h-4 w-4" />
-        <span className="text-sm font-medium">
-          {language.toLowerCase().startsWith("zh")
-            ? "使用 Collabora 打开"
-            : "Open with Collabora"}
-        </span>
-      </button>
-    )}
-    {collaboraUrl && (
-      <button
-        type="button"
-        onClick={() => handleSwitchEngine(false)}
-        disabled={switchingEngine}
-        aria-label={
-          language.toLowerCase().startsWith("zh")
-            ? "切换回 OnlyOffice"
-            : "Switch back to OnlyOffice"
-        }
-        title={
-          language.toLowerCase().startsWith("zh")
-            ? "切换回 OnlyOffice 内核"
-            : "Switch back to OnlyOffice"
-        }
-        className="fixed right-64 top-3 z-50 flex h-9 items-center gap-1.5 rounded-lg bg-background/90 px-3 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted disabled:opacity-60"
-      >
-        <RotateCcw className="h-4 w-4" />
-        <span className="text-sm font-medium">
-          {language.toLowerCase().startsWith("zh")
-            ? "切换回 OnlyOffice"
-            : "Back to OnlyOffice"}
-        </span>
-      </button>
-    )}
+    {/*
+      顶右操作按钮组（内核切换 / 上传知识库）。
+      这两个按钮各自写死 right 偏移时会互相压字：按钮带文字，宽度随语言变化
+      （中文「上传到知识库」vs 英文 "Upload to KB"），固定偏移无法预估实际宽度。
+      改成 flex 排布，整组锚在原知识库按钮的位置（right-52），
+      内核切换按钮排在前面 → 渲染在知识库按钮左侧，间距由 gap 保证。
+      关闭按钮仍单独用 right-40 定位，位置不变。
+    */}
+    <div className="fixed right-52 top-3 z-50 flex items-center gap-2">
+      {wordDoc && !collaboraUrl && (
+        <button
+          type="button"
+          onClick={() => handleSwitchEngine(true)}
+          disabled={switchingEngine}
+          aria-label={
+            language.toLowerCase().startsWith("zh")
+              ? "使用 Collabora 打开"
+              : "Open with Collabora"
+          }
+          title={
+            language.toLowerCase().startsWith("zh")
+              ? "使用 Collabora 打开：对复杂文档（如 WPS 表单类 Word）解析能力更强"
+              : "Open with Collabora: renders complex documents (e.g. WPS-style Word forms) more faithfully"
+          }
+          className="flex h-9 items-center gap-1.5 rounded-lg bg-background/90 px-3 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted disabled:opacity-60"
+        >
+          <Layers className="h-4 w-4" />
+          <span className="text-sm font-medium">
+            {language.toLowerCase().startsWith("zh")
+              ? "使用 Collabora 打开"
+              : "Open with Collabora"}
+          </span>
+        </button>
+      )}
+      {collaboraUrl && (
+        <button
+          type="button"
+          onClick={() => handleSwitchEngine(false)}
+          disabled={switchingEngine}
+          aria-label={
+            language.toLowerCase().startsWith("zh")
+              ? "切换回 OnlyOffice"
+              : "Switch back to OnlyOffice"
+          }
+          title={
+            language.toLowerCase().startsWith("zh")
+              ? "切换回 OnlyOffice 内核"
+              : "Switch back to OnlyOffice"
+          }
+          className="flex h-9 items-center gap-1.5 rounded-lg bg-background/90 px-3 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted disabled:opacity-60"
+        >
+          <RotateCcw className="h-4 w-4" />
+          <span className="text-sm font-medium">
+            {language.toLowerCase().startsWith("zh")
+              ? "切换回 OnlyOffice"
+              : "Back to OnlyOffice"}
+          </span>
+        </button>
+      )}
+      {vosMode && kbAvailable && (
+        <button
+          type="button"
+          onClick={() => setShowKbUpload(true)}
+          aria-label={
+            language.toLowerCase().startsWith("zh")
+              ? "上传到知识库"
+              : "Upload to knowledge base"
+          }
+          title={
+            language.toLowerCase().startsWith("zh")
+              ? "上传到知识库"
+              : "Upload to knowledge base"
+          }
+          className="flex h-9 items-center gap-1.5 rounded-lg bg-background/90 px-3 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted"
+        >
+          <Upload className="h-4 w-4" />
+          <span className="text-sm font-medium">
+            {language.toLowerCase().startsWith("zh")
+              ? "上传到知识库"
+              : "Upload to KB"}
+          </span>
+        </button>
+      )}
+    </div>
     <button
       type="button"
       onClick={closeDocument}
