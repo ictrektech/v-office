@@ -258,6 +258,65 @@ export async function listDocumentKnowledgeBases(): Promise<KnowledgeBase[]> {
   return list.filter((kb) => kb.type === "document" && !kb.is_temporary);
 }
 
+/** 知识库中的单个文件（WeKnora 的 "knowledge"） */
+export interface KnowledgeFile {
+  id: string;
+  /** 展示名（部分版本只在 title 上） */
+  title?: string;
+  /** 原始文件名（含扩展名） */
+  file_name?: string;
+  file_type?: string;
+  /** 解析状态：pending / parsing / completed / failed 等 */
+  status?: string;
+  enable_status?: string;
+}
+
+/** 文件名兜底取值：file_name 优先，其次 title，最后退到 id */
+export function knowledgeFileLabel(file: KnowledgeFile): string {
+  return file.file_name || file.title || file.id;
+}
+
+/** 列出某个知识库中的文件 */
+export async function listKnowledgeBaseFiles(
+  knowledgeBaseId: string,
+): Promise<KnowledgeFile[]> {
+  const response = await hybragRequest(
+    `/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/knowledge`,
+  );
+  if (!response.ok) {
+    throw new Error(`List knowledge base files failed: ${response.status}`);
+  }
+  const body = await response.json();
+  const list = Array.isArray(body?.data)
+    ? body.data
+    : Array.isArray(body?.knowledge)
+      ? body.knowledge
+      : [];
+  return list as KnowledgeFile[];
+}
+
+/**
+ * 下载知识库文件的原件（服务端 GET /knowledge/{id}/download）。
+ *
+ * 返回真实 `File`，可直接交给 uploadSourceFile 当参考材料——保真（不经过
+ * 解析后的纯文本），因此表格、公式、版式都不会丢。
+ */
+export async function downloadKnowledgeFile(
+  knowledgeId: string,
+  fileName: string,
+): Promise<File> {
+  const response = await hybragRequest(
+    `/knowledge/${encodeURIComponent(knowledgeId)}/download`,
+  );
+  if (!response.ok) {
+    throw new Error(`Download knowledge file failed: ${response.status}`);
+  }
+  const blob = await response.blob();
+  return new File([blob], fileName, {
+    type: blob.type || "application/octet-stream",
+  });
+}
+
 /** 默认 embedding 模型：Model Hub Ollama Embedding（列表异常时的兜底，优先精确匹配） */
 const DEFAULT_EMBEDDING_MODEL_ID = "model-hub-ollama-embedding";
 

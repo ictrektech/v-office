@@ -21,6 +21,8 @@ import {
   CalendarDays,
   Check,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   ClipboardList,
   FileCheck,
   FileInput,
@@ -61,7 +63,12 @@ import {
 import { isVOSMode } from "@/utils/vos/fastpath";
 import {
   listDocumentKnowledgeBases,
+  listKnowledgeBaseFiles,
+  downloadKnowledgeFile,
+  knowledgeFileLabel,
+  isHybragInstalled,
   type KnowledgeBase,
+  type KnowledgeFile,
 } from "@/utils/hybrag/client";
 import {
   saveLocalMaterial,
@@ -164,6 +171,9 @@ interface StreamBlock {
   content?: StreamBlock[];
 }
 
+/** 左栏「参考材料」来源页签 */
+type MaterialTab = "local" | "docs" | "hkb";
+
 export function WritingView() {
   // ── 配置态 ──
   const [docType, setDocType] = useState("政策解读材料");
@@ -181,7 +191,14 @@ export function WritingView() {
   const [storedFiles, setStoredFiles] = useState<StoredFile[] | null>(null);
   const [kbList, setKbList] = useState<KnowledgeBase[] | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [tab, setTab] = useState<"local" | "kb">("local");
+  const [tab, setTab] = useState<MaterialTab>("local");
+  /** hybrag 已安装才显示「知识库」入口（未安装时该页签整个隐藏） */
+  const [hybragOk, setHybragOk] = useState(false);
+  /** 知识库 tab 二级视图：已进入的知识库与它下面的文件 */
+  const [hkbKb, setHkbKb] = useState<KnowledgeBase | null>(null);
+  const [hkbFiles, setHkbFiles] = useState<KnowledgeFile[] | null>(null);
+  const [hkbLoading, setHkbLoading] = useState(false);
+  const [hkbFilesError, setHkbFilesError] = useState("");
   const [localFiles, setLocalFiles] = useState<LocalMaterialRecord[]>([]);
   /** 服务端「最近使用」：当前用户有成稿的文档（入库，跨浏览器一致） */
   const [serverDocs, setServerDocs] = useState<MyWritingDoc[]>([]);
@@ -223,6 +240,14 @@ export function WritingView() {
       listDocumentKnowledgeBases()
         .then((kbs) => setKbList(kbs))
         .catch(() => setKbList([]));
+      // 知识库材料入口：hybrag 未安装（网关 404）时该页签整个隐藏
+      isHybragInstalled()
+        .then((ok) => {
+          setHybragOk(ok);
+          // 若已停在该页签而服务消失（被卸载/重启），退回「本地」
+          if (!ok) setTab((cur) => (cur === "hkb" ? "local" : cur));
+        })
+        .catch(() => setHybragOk(false));
     })();
     listLocalMaterials()
       .then(setLocalFiles)
@@ -383,6 +408,36 @@ export function WritingView() {
       }
     },
     [],
+  );
+
+  /** 知识库 tab：进入某个知识库，拉取它下面的文件 */
+  const openKnowledgeBase = useCallback(async (kb: KnowledgeBase) => {
+    setHkbKb(kb);
+    setHkbFiles(null);
+    setHkbFilesError("");
+    setHkbLoading(true);
+    try {
+      setHkbFiles(await listKnowledgeBaseFiles(kb.id));
+    } catch (err) {
+      setHkbFilesError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setHkbLoading(false);
+    }
+  }, []);
+
+  const backToKnowledgeBases = useCallback(() => {
+    setHkbKb(null);
+    setHkbFiles(null);
+    setHkbFilesError("");
+  }, []);
+
+  /** 选中知识库文件：下载原件 → 走统一材料通道上传解析 */
+  const pickKnowledgeFile = useCallback(
+    (file: KnowledgeFile) => {
+      const label = knowledgeFileLabel(file);
+      void selectMaterial(label, () => downloadKnowledgeFile(file.id, label));
+    },
+    [selectMaterial],
   );
 
   /** 重置：从 0 开始——断开会话、清空生成流与成稿（保留材料与配置） */
@@ -911,6 +966,17 @@ export function WritingView() {
     );
   }, [activeName]);
 
+  /** 左栏页签：本地 /（VOS）我的文档 /（hybrag 已安装）知识库 */
+  const materialTabs: { id: MaterialTab; label: string }[] = [
+    { id: "local", label: "本地" },
+    ...(vosMode ? [{ id: "docs" as MaterialTab, label: "我的文档" }] : []),
+    ...(hybragOk ? [{ id: "hkb" as MaterialTab, label: "知识库" }] : []),
+  ];
+  const materialTabIndex = Math.max(
+    0,
+    materialTabs.findIndex((item) => item.id === tab),
+  );
+
   const canStart =
     serviceOk !== false &&
     Boolean(docType && title.trim()) &&
@@ -955,9 +1021,9 @@ export function WritingView() {
           </div>
 
           <Segmented
-            options={vosMode ? ["本地", "我的文档"] : ["本地"]}
-            value={tab === "local" ? 0 : 1}
-            onChange={(i) => setTab(i === 0 ? "local" : "kb")}
+            options={materialTabs.map((item) => item.label)}
+            value={materialTabIndex}
+            onChange={(i) => setTab(materialTabs[i]?.id ?? "local")}
           />
 
           {/* 本地 tab：上传区 + 最近使用 */}
@@ -1124,7 +1190,7 @@ export function WritingView() {
           )}
 
           {/* 我的文档 tab：VOS 文件（与主页「最近」一致的空态与列表样式） */}
-          {tab === "kb" && vosMode && (
+          {tab === "docs" && vosMode && (
             <div className="mt-4 flex-1 overflow-y-auto min-h-0">
               {storedFiles === null && (
                 <div className="text-[13px] text-gray-300 py-4 text-center">
@@ -1154,6 +1220,128 @@ export function WritingView() {
                     void selectMaterial(name, () => openStoredFile(name))
                   }
                 />
+              )}
+            </div>
+          )}
+
+          {/* 知识库 tab：hybrag 知识库 → 库内文件 → 选中即作为参考材料 */}
+          {tab === "hkb" && hybragOk && (
+            <div className="mt-4 flex-1 overflow-y-auto min-h-0">
+              {!hkbKb ? (
+                <>
+                  {kbList === null && (
+                    <div className="text-[13px] text-gray-300 py-4 text-center">
+                      加载中…
+                    </div>
+                  )}
+                  {kbList !== null && kbList.length === 0 && (
+                    <div className="flex flex-col items-center justify-center py-14 text-center">
+                      <FolderOpen className="w-10 h-10 text-gray-200" strokeWidth={1.25} />
+                      <div className="mt-3 text-[13.5px] text-gray-500">无可用知识库</div>
+                      <div className="mt-1 text-[12px] text-gray-300 leading-4">
+                        在 HybRAG 中创建知识库并上传文档后显示在此处
+                      </div>
+                    </div>
+                  )}
+                  {kbList !== null && kbList.length > 0 && (
+                    <div className="flex flex-col gap-1">
+                      {kbList.map((kb) => (
+                        <button
+                          key={kb.id}
+                          onClick={() => void openKnowledgeBase(kb)}
+                          className="group flex items-center gap-2.5 rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-left transition-all hover:bg-white hover:shadow-sm"
+                        >
+                          <span className="flex w-7 h-7 shrink-0 items-center justify-center rounded-[7px] bg-gray-100 text-gray-500">
+                            <FolderOpen className="w-4 h-4" strokeWidth={1.75} />
+                          </span>
+                          <span className="flex-1 min-w-0">
+                            <span className="block text-[13px] text-gray-600 truncate">
+                              {kb.name}
+                            </span>
+                            {typeof kb.knowledge_count === "number" && (
+                              <span className="block text-[11px] text-gray-300 mt-0.5">
+                                {kb.knowledge_count} 个文件
+                              </span>
+                            )}
+                          </span>
+                          <ChevronRight className="w-3.5 h-3.5 shrink-0 text-gray-300 group-hover:text-gray-500" />
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={backToKnowledgeBases}
+                    className="mb-2 inline-flex items-center gap-1 text-[12.5px] text-gray-400 hover:text-gray-700 transition-colors"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                    全部知识库
+                  </button>
+                  <div className="mb-2 px-1 text-[12px] text-gray-400 truncate">
+                    {hkbKb.name}
+                  </div>
+                  {hkbLoading && (
+                    <div className="flex flex-col items-center justify-center py-10 text-center">
+                      <span className="inline-block w-5 h-5 rounded-full border-2 border-gray-200 border-t-primary animate-spin" />
+                      <div className="mt-3 text-[13px] text-gray-400">正在加载文件…</div>
+                    </div>
+                  )}
+                  {!hkbLoading && hkbFilesError && (
+                    <div className="flex flex-col items-center justify-center py-10 text-center">
+                      <div className="text-[13px] text-gray-400">加载失败</div>
+                      <div className="mt-1 px-4 text-[11.5px] leading-4 text-gray-300 break-all">
+                        {hkbFilesError}
+                      </div>
+                      <button
+                        onClick={() => void openKnowledgeBase(hkbKb)}
+                        className="mt-3 text-[12.5px] text-primary hover:underline"
+                      >
+                        重试
+                      </button>
+                    </div>
+                  )}
+                  {!hkbLoading && !hkbFilesError && hkbFiles?.length === 0 && (
+                    <div className="flex flex-col items-center justify-center py-10 text-center">
+                      <FolderOpen className="w-9 h-9 text-gray-200" strokeWidth={1.25} />
+                      <div className="mt-3 text-[13px] text-gray-400">该知识库暂无文件</div>
+                    </div>
+                  )}
+                  {!hkbLoading && !hkbFilesError && !!hkbFiles?.length && (
+                    <div className="flex flex-col gap-0.5">
+                      {hkbFiles.map((file) => {
+                        const label = knowledgeFileLabel(file);
+                        const isActiveFile = material?.name === label;
+                        return (
+                          <button
+                            key={file.id}
+                            onClick={() => pickKnowledgeFile(file)}
+                            className={
+                              "flex items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors " +
+                              (isActiveFile ? "bg-gray-100" : "hover:bg-gray-50")
+                            }
+                          >
+                            <FileBadge name={label} size={24} />
+                            <span
+                              className={
+                                "flex-1 text-[13px] truncate " +
+                                (isActiveFile ? "text-primary font-medium" : "text-gray-600")
+                              }
+                            >
+                              {label}
+                            </span>
+                            {file.status && file.status !== "completed" && (
+                              <span className="shrink-0 text-[11px] text-gray-300">
+                                {file.status}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
