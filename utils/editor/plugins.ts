@@ -65,11 +65,3 @@ export const featuredPlugins = [
 export function getPluginConfigUrl(name: string) {
   return `${pluginsBase}/${name}/config.json`;
 }
-
-export function getPluginsData(list: string[]) {
-  return {
-    url: "",
-    pluginsData: list.map(getPluginConfigUrl),
-    autostart: [],
-  };
-}

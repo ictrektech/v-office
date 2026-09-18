@@ -59,7 +59,6 @@ async function initX2t(): Promise<void> {
     console.error("[x2t.worker] mkdir error:", err);
   }
 
-  console.log("[x2t.worker] Initialized successfully");
 }
 
 /**

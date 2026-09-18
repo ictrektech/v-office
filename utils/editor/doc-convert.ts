@@ -19,17 +19,6 @@ const STORAGE_API =
 export type ConvertTarget = "docx" | "doc" | "pdf";
 
 /**
- * 兜底 PDF（"预览不可用"提示页）：转换服务失败时返回它代替原文档，
- * 保证编辑器拿到的一定是合法 PDF（pdf 渲染管线不受 doc 错位问题影响）。
- */
-export const FALLBACK_PREVIEW_PDF = Uint8Array.from(
-  atob(
-    "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA1OTUgODQyXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCAxMjAgPj4Kc3RyZWFtCkJUIC9GMSAxNiBUZiA2MCA3NjAgVGQgKERvY3VtZW50IHByZXZpZXcgdW5hdmFpbGFibGUuKSBUaiAwIC0zMCBUZCAoU3RvcmFnZSBjb252ZXJ0IHNlcnZpY2UgZXJyb3IgLSBwbGVhc2UgcmV0cnkuKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyNDEgMDAwMDAgbiAKMDAwMDAwMDQxMiAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDYgL1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjQ4MgolJUVPRg==",
-  ),
-  (c) => c.charCodeAt(0),
-);
-
-/**
  * 转换文档字节。失败抛错，由调用方决定提示方式
  * （打开失败 → 编辑器加载错误；保存失败 → 保存错误弹窗）。
  */

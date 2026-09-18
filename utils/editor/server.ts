@@ -374,8 +374,6 @@ export class EditorServer {
   }
 
   handleConnect({ socket }: { socket: MockSocket }) {
-    console.log("connect: ", socket);
-
     this.socket = socket;
     const { send, sessionId, client } = this;
 
@@ -422,8 +420,7 @@ export class EditorServer {
     });
   }
 
-  handleDisconnect({ socket }: { socket: MockSocket }) {
-    console.log("disconnect: ", socket);
+  handleDisconnect() {
     this.socket = null;
   }
 
@@ -432,13 +429,10 @@ export class EditorServer {
       console.error("Socket is not connected");
       return;
     }
-    console.log("[ws] >> ", ...msg);
     this.socket.server.emit("message", ...msg);
   }
 
-  async handleMessage(msg: Record<string, string>, ...args: unknown[]) {
-    console.log("[ws] << ", msg, args);
-
+  async handleMessage(msg: Record<string, string>) {
     const { send, sessionId, participants, user, client } = this;
     const type =
       typeof msg === "object" && msg && "type" in msg ? msg.type : null;
@@ -549,13 +543,10 @@ export class EditorServer {
     const u = new URL(req.url);
 
     const { id: key, send } = this;
-    // console.log("[msg] server: ", u, key);
 
     if (u.pathname.endsWith("/downloadas/" + key)) {
       const cmd = JSON.parse(u.searchParams.get("cmd") || "{}");
       const buffer = await req.arrayBuffer();
-
-      console.log("downloadAs -> ", cmd, buffer);
 
       let formatTo = cmd.outputformat;
       if (!formatTo && this.fileType === "pdf") {

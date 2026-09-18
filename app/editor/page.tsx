@@ -21,7 +21,7 @@ import { createFetchProxy } from "@/utils/editor/fetch";
 import { createXHRProxy } from "@/utils/editor/xhr";
 import { DocEditor } from "@/utils/editor/types";
 import { createExtensionLoader } from "@/utils/extension";
-import { convertDocBuffer, FALLBACK_PREVIEW_PDF } from "@/utils/editor/doc-convert";
+import { convertDocBuffer } from "@/utils/editor/doc-convert";
 import {
   fetchCollaboraSession,
   fetchCollaboraStatus,
@@ -503,48 +503,29 @@ export default function Page() {
           },
         },
         events: {
-          onAppReady: async (e: unknown) => {
-            console.log("App ready", e, editor);
+          onAppReady: async () => {
             onAppReady();
           },
-          onDocumentReady: (e: unknown) => {
-            console.log("Document ready", e);
-          },
+          onDocumentReady: () => {},
           onDocumentStateChange: (e: { data: boolean; target: unknown }) => {
-            console.log("Document state change", e);
             if (e.data) {
               isDirty.current = true;
               editVersionRef.current += 1;
             }
           },
-          onRequestOpen: (e: unknown) => {
-            console.log("onRequestOpen", e);
-          },
-          onError: (e: unknown) => {
-            console.log("Error", e);
-          },
-          onInfo: (e: unknown) => {
-            console.log("Info", e);
-          },
-          onWarning: (e: unknown) => {
-            console.log("onWarning", e);
-          },
-          onRequestSaveAs: (e: unknown) => {
-            console.log("onRequestSaveAs", e);
-          },
-          onSaveDocument: (e: unknown) => {
-            console.log("onSaveDocument", e);
+          onRequestOpen: () => {},
+          onError: () => {},
+          onInfo: () => {},
+          onWarning: () => {},
+          onRequestSaveAs: () => {},
+          onSaveDocument: () => {
             isDirty.current = false;
           },
-          onDownloadAs: (e: unknown) => {
-            console.log("onDownloadAs", e);
-          },
-          onSave: (e: unknown) => {
-            console.log("onSave", e);
+          onDownloadAs: () => {},
+          onSave: () => {
             isDirty.current = false;
           },
-          writeFile: async (e: unknown) => {
-            console.log("writeFile", e);
+          writeFile: async () => {
             isDirty.current = false;
           },
         },

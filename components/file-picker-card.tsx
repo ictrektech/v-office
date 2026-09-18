@@ -137,8 +137,8 @@ export function FilePickerCard({
             return;
           }
         }
-      } catch (err) {
-        console.log("Could not get FileSystemHandle from drag:", err);
+      } catch {
+        // 拿不到 handle（浏览器不支持或权限被拒），走下方常规文件回退
       }
     }
 
@@ -192,9 +192,8 @@ export function FilePickerCard({
           onFileSelect(file);
         }
       }
-    } catch (err) {
+    } catch {
       // User cancelled or error occurred
-      console.log("File picker cancelled or error:", err);
     }
   };
 

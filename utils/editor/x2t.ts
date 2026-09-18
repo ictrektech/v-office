@@ -69,7 +69,6 @@ export class X2tConverter {
 
     // Skip ready message
     if (type === "ready") {
-      console.log("[X2tConverter] Worker ready");
       return;
     }
 
@@ -116,7 +115,6 @@ export class X2tConverter {
         this.worker.onmessage = this.handleWorkerMessage;
         this.worker.onerror = this.handleWorkerError;
 
-        console.log("[X2tConverter] Worker created");
         resolve();
       } catch (err) {
         this.initPromise = null;
@@ -175,7 +173,6 @@ export class X2tConverter {
       this.worker.terminate();
       this.worker = null;
       this.initPromise = null;
-      console.log("[X2tConverter] Worker terminated");
     }
   }
 

@@ -15,7 +15,3 @@ export function getTemplates(): Template[] {
 export function getRecommendedTemplates(count = 4): Template[] {
   return getTemplates().slice(0, count);
 }
-
-export function getCategories(): string[] {
-  return Array.from(new Set(getTemplates().map((t) => t.category)));
-}

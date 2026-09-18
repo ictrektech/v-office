@@ -138,12 +138,6 @@ export async function removeRecentFile(path: string): Promise<void> {
   await db.delete(STORE_NAME, path);
 }
 
-// Clear all recent files
-export async function clearRecentFiles(): Promise<void> {
-  const db = await getDB();
-  await db.clear(STORE_NAME);
-}
-
 // Request permission and get file from handle
 export async function openRecentFile(
   record: RecentFileRecord

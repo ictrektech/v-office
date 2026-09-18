@@ -168,24 +168,6 @@ export async function listLocalMaterials(): Promise<LocalMaterialRecord[]> {
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-/** 按文件名取回完整记录（含 File 与会话映射） */
-export async function loadLocalMaterialRecord(
-  name: string,
-): Promise<(LocalMaterialRecord & { file: File }) | null> {
-  const db = await getDB();
-  const v = await db.get(STORE, name);
-  if (!v) return null;
-  return {
-    file: v.file,
-    name: v.file.name,
-    type: v.file.type,
-    size: v.file.size,
-    updatedAt: v.updatedAt,
-    sessionId: v.sessionId,
-    config: v.config,
-  };
-}
-
 /** 按文件名取回 File（点击历史项时重新作为材料） */
 export async function loadLocalMaterial(name: string): Promise<File> {
   const db = await getDB();
