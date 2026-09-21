@@ -392,48 +392,61 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
         return response.json()["accessToken"]
 
     async def test_reports_resolved_authorized_roots(self) -> None:
-        """源列表直接给出已解析的授权目录，前端不必自己穿平台内部路径。"""
+        """源列表直接给出已解析的授权入口，前端不必自己穿平台内部路径。"""
         sources = (await self.client.get("/api/v1/sources")).json()["sources"]
 
         self.assertEqual(
             [root["name"] for root in sources[0]["roots"]],
-            ["公共目录", "我的数据"],
+            ["公共目录", "用户数据（alice）"],
         )
         self.assertEqual(
             [root["path"] for root in sources[0]["roots"]],
             ["volumes/wr/public", "volumes/wr/users/alice/data"],
         )
 
-    async def test_collapses_scaffolding_to_the_authorized_folder(self) -> None:
-        """授权 .../public/media_video 时，只显示 media_video 里的可打开文档。
-
-        public 与存储空间 ID 都只是平台脚手架，不该出现在用户的文档列表里。
-        """
-        media_video = (
-            Path(self.temp_dir.name)
-            / "exposed-authorize-subdir"
-            / "volumes"
-            / "01M31B5XDFHPXSKCBSXAZVZA83"
-            / "public"
-            / "media_video"
-        )
+    async def test_exposes_public_and_user_data_as_entries(self) -> None:
+        """入口按平台语义给出「公共目录」与「用户数据」，不含 volumes 等脚手架层。"""
+        base = Path(self.temp_dir.name) / "exposed-two-entries"
+        space = base / "volumes" / "01M31B5XDFHPXSKCBSXAZVZA83"
+        media_video = space / "public" / "media_video"
         media_video.mkdir(parents=True)
         (media_video / "课件.pptx").write_bytes(b"deck")
         (media_video / "setup.exe").write_bytes(b"x")
-        main.SHARED_ROOT = media_video.parent.parent.parent.parent
+        (space / "users" / "admin" / "data").mkdir(parents=True)
+        main.SHARED_ROOT = base
 
-        sources = (await self.client.get("/api/v1/sources")).json()["sources"]
+        with patch.object(main, "current_username", AsyncMock(return_value="admin")):
+            sources = (await self.client.get("/api/v1/sources")).json()["sources"]
         roots = sources[0]["roots"]
-        entries = (
+
+        self.assertEqual(
+            [root["name"] for root in roots],
+            ["公共目录", "用户数据（admin）"],
+        )
+        self.assertEqual(
+            [root["path"] for root in roots],
+            [
+                "volumes/01M31B5XDFHPXSKCBSXAZVZA83/public",
+                "volumes/01M31B5XDFHPXSKCBSXAZVZA83/users/admin/data",
+            ],
+        )
+
+        # 公共目录的下一层就是用户自己的目录结构，再进去只列可编辑文档
+        public = (
             await self.client.get(
-                "/api/v1/sources/shared/entries",
-                params={"path": roots[0]["path"]},
+                "/api/v1/sources/shared/entries", params={"path": roots[0]["path"]}
             )
         ).json()
+        self.assertEqual([entry["name"] for entry in public["entries"]], ["media_video"])
 
-        self.assertEqual([root["name"] for root in roots], ["media_video"])
+        detail = (
+            await self.client.get(
+                "/api/v1/sources/shared/entries",
+                params={"path": f"{roots[0]['path']}/media_video"},
+            )
+        ).json()
         self.assertEqual(
-            [entry["name"] for entry in entries["entries"]], ["课件.pptx"]
+            [entry["name"] for entry in detail["entries"]], ["课件.pptx"]
         )
 
     async def test_deduplicates_the_volumes_alias_of_the_same_space(self) -> None:
@@ -452,8 +465,9 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
 
         sources = (await self.client.get("/api/v1/sources")).json()["sources"]
 
+        # 直挂路径与 volumes 别名软链指向同一目录：只保留一个入口，不重复
         self.assertEqual(
-            [root["name"] for root in sources[0]["roots"]], ["media_video"]
+            [root["name"] for root in sources[0]["roots"]], ["公共目录"]
         )
 
     async def test_keeps_a_folder_that_has_multiple_branches(self) -> None:

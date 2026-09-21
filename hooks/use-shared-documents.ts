@@ -97,8 +97,7 @@ export function useSharedDocuments(language: string) {
           const key = `${source.id}:${root.path}`;
           try {
             const listing = await browseSharedSource(source.id, root.path);
-            // 空目录不占页签，避免空的「我的数据」这类壳干扰
-            if (listing.entries.length === 0) continue;
+            // 空目录同样保留页签：「公共目录 / 用户数据」是用户预期的固定入口
             cache[key] = listing.entries;
             found.push({
               key,

@@ -374,10 +374,9 @@ BROWSABLE_SUFFIXES = frozenset(
 # 单次列目录的条目上限：NAS 上动辄数万文件的目录会把响应和前端一起拖死
 MAX_SOURCE_ENTRIES = 3000
 
-# 授权目录解析：扫描挂载锚点（public / users/<用户>/data）的最大深度（覆盖
-# volumes/<空间>/users/<用户>/data），以及穿过中间脚手架层的最大层数
+# 授权目录解析：扫描挂载锚点（public / users/<用户>/data）的最大深度
+# （覆盖 volumes/<空间>/users/<用户>/data 这类层级）
 MAX_ROOT_SCAN_DEPTH = 6
-MAX_ROOT_DESCEND = 6
 
 # 浏览时统一跳过的系统目录（NAS / 共享盘常见）
 SOURCE_SKIP_NAMES = frozenset(
@@ -396,6 +395,7 @@ def _find_anchors(root: Path, max_depth: int) -> tuple[list[Path], list[Path]]:
     """
     public_dirs: list[Path] = []
     user_dirs: list[Path] = []
+    seen: set[str] = set()
     stack: list[tuple[Path, int]] = [(root, 0)]
     while stack:
         current, depth = stack.pop()
@@ -413,78 +413,51 @@ def _find_anchors(root: Path, max_depth: int) -> tuple[list[Path], list[Path]]:
                     continue
             except OSError:
                 continue
-            if child.name == "public":
-                public_dirs.append(child)
-                continue
-            if child.name == "data" and child.parent.parent.name == "users":
-                user_dirs.append(child)
+            if child.name == "public" or (
+                child.name == "data" and child.parent.parent.name == "users"
+            ):
+                # 同一目录可能经直挂路径与 volumes/<别名> 软链各命中一次，
+                # 按真实路径去重，避免"单用户"判断被同一个目录凑成两个
+                try:
+                    identity = str(child.resolve())
+                except OSError:
+                    identity = str(child)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                if child.name == "public":
+                    public_dirs.append(child)
+                else:
+                    user_dirs.append(child)
                 continue
             stack.append((child, depth + 1))
     return public_dirs, user_dirs
 
 
-def _has_openable_file(directory: Path) -> bool:
-    try:
-        entries = list(directory.iterdir())
-    except OSError:
-        return False
-    for entry in entries:
-        try:
-            if entry.is_file() and entry.suffix.lower() in BROWSABLE_SUFFIXES:
-                return True
-        except OSError:
-            continue
-    return False
-
-
-def _authorized_dir(directory: Path) -> Path:
-    """穿过"没有可打开文档、且只有一个子目录"的中间层。
-
-    平台按 /share/<存储空间>/public/<用户挑的目录> 的结构挂载，用户要看到的是
-    他挑的那层目录里的文档，而不是 public、存储空间 ID 这类脚手架层级。因此
-    当某一层没有任何可打开的文档、又只有一条向下的路时，就继续往下走。
-    """
-    current = directory
-    for _ in range(MAX_ROOT_DESCEND):
-        try:
-            children = [
-                child
-                for child in current.iterdir()
-                if child.is_dir() and not child.name.startswith(".")
-            ]
-        except OSError:
-            return current
-        if len(children) != 1 or _has_openable_file(current):
-            return current
-        current = children[0]
-    return current
-
-
 def _shared_roots(username: str) -> list[dict]:
-    """解析「数据访问授权」真正挂进来的目录，作为可直接浏览的根。
+    """解析「数据访问授权」挂进来的目录，作为可直接浏览的入口。
 
-    先按平台布局定位挂载锚点（`public` / `users/<用户名>/data`），再穿过中间
-    脚手架层，得到用户实际授权的那层目录；目录名沿用用户自己的命名（如
-    media_video），不向用户暴露 volumes/<随机ID> 这类内部路径。
+    平台按 /share/<存储空间>/{public, users/<用户>/data} 的结构挂载授权目录：
+      public            —— 公共目录（空间内所有用户可见）
+      users/<用户>/data —— 用户数据（当前用户私有）
+    这两类目录直接作为入口（与平台侧授权语义一致），不把 volumes/<随机ID>
+    这类脚手架路径暴露给用户。
     """
     roots: list[dict] = []
     seen: set[str] = set()
 
     def add(path: Path, label: str) -> None:
-        effective = _authorized_dir(path)
-        rel = _source_relpath(SHARED_ROOT, effective)
-        # 按真实路径去重：平台同时挂了 /exposed/<空间> 和 /exposed/volumes/<别名>
-        # （软链指向同一目录），否则同一批文档会重复出现在列表里
+        rel = _source_relpath(SHARED_ROOT, path)
+        # 按真实路径去重：平台同时挂了 /exposed/<空间> 与 /exposed/volumes/<别名>
+        # （软链指向同一目录），否则同一目录会出现两个入口
         try:
-            identity = str(effective.resolve())
+            identity = str(path.resolve())
         except OSError:
             identity = rel
         if identity in seen:
             return
         seen.add(identity)
-        # 穿过脚手架时用用户自己的目录名；没穿过则用默认标签（公共目录 / 我的数据）
-        name = effective.name if effective != path else label
-        roots.append({"name": name, "path": rel})
+        roots.append({"name": label, "path": rel})
 
     if not SHARED_ROOT.is_dir():
         return roots
@@ -497,11 +470,11 @@ def _shared_roots(username: str) -> list[dict]:
     own = [p for p in user_dirs if p.parent.name == username]
     if own:
         for path in own:
-            add(path, "我的数据")
+            add(path, f"用户数据（{username}）")
     elif len(user_dirs) == 1:
         # 单用户设备上 OIDC 用户名与目录名可能不一致：只有一个用户数据目录时
         # 直接采用它，多用户时宁可不显示也不越权。
-        add(user_dirs[0], "我的数据")
+        add(user_dirs[0], f"用户数据（{user_dirs[0].parent.name}）")
 
     if not roots:
         # 非平台标准布局：/exposed 下的一级目录即为已授权目录

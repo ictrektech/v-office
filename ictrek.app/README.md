@@ -58,7 +58,7 @@
 - `collabora/`：新增 Collabora 镜像定义（上游 `collabora/code` + 固化的 `extra_params`）。
 - `server/main.py`：新增 WOPI host（`/api/v1/wopi/session` 签发一次性令牌、`/wopi/files/...` 读写文档）。
 - `server/main.py`：新增共享源接口——`GET /api/v1/sources` 列源（含解析后的授权目录 `roots`）、`GET /api/v1/sources/{s}/entries` 列目录、`GET|PUT /api/v1/sources/{s}/file` 读/写文档（PUT 即"编辑原文档"，写回共享盘原路径）；带路径穿越与软链逃逸校验，只收 Office/PDF 后缀，可用 `V_OFFICE_SHARED_ROOT` 改挂载点、`V_OFFICE_SHARED_WRITABLE=0` 强制只读。
-- `server/main.py`：授权目录解析——按 `public` / `users/<用户名>/data` 锚点定位挂载点，再穿过"无可打开文档且只有一条向下的路"的中间脚手架层，得到用户实际授权的目录（如 `media_video`），不向界面暴露 `volumes/<随机ID>` 等平台内部路径。
+- `server/main.py`：授权目录解析——按平台语义把挂载点解析成「公共目录」（`public`）与「用户数据（<用户名>）」（`users/<用户名>/data`）两个入口，并按真实路径去重（平台同时挂 `<空间>` 与 `volumes/<别名>` 软链）；界面不出现 `volumes/<随机ID>` 等平台内部路径。
 - `server/main.py`：WOPI 令牌支持共享源（令牌里带 `s` 源标识，`name` 即源内相对路径），Word 文档由 Collabora 通过 WOPI 直接读写共享盘上的原文件；`/wopi/files/{name:path}` 承接多级路径。
 - `utils/vos/storage.ts`：新增共享源客户端（`listSharedSources` / `browseSharedSource` / `openSharedDocument` / `saveSharedDocument`）。
 - `hooks/use-shared-documents.ts`：新增共享目录页签数据源——每个授权目录（目录名即页签名，如 media_video；NAS 同理）一个页签，管理其内容的逐层进入与返回；完全空的授权目录不占页签。
