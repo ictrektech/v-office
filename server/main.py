@@ -473,9 +473,15 @@ def _shared_roots(username: str) -> list[dict]:
     def add(path: Path, label: str) -> None:
         effective = _authorized_dir(path)
         rel = _source_relpath(SHARED_ROOT, effective)
-        if rel in seen:
+        # 按真实路径去重：平台同时挂了 /exposed/<空间> 和 /exposed/volumes/<别名>
+        # （软链指向同一目录），否则同一批文档会重复出现在列表里
+        try:
+            identity = str(effective.resolve())
+        except OSError:
+            identity = rel
+        if identity in seen:
             return
-        seen.add(rel)
+        seen.add(identity)
         # 穿过脚手架时用用户自己的目录名；没穿过则用默认标签（公共目录 / 我的数据）
         name = effective.name if effective != path else label
         roots.append({"name": name, "path": rel})

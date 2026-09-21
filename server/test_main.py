@@ -436,6 +436,26 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
             [entry["name"] for entry in entries["entries"]], ["课件.pptx"]
         )
 
+    async def test_deduplicates_the_volumes_alias_of_the_same_space(self) -> None:
+        """平台同时挂 /exposed/<空间> 与 /exposed/volumes/<别名>（软链）时不重复列。"""
+        base = Path(self.temp_dir.name) / "exposed-with-alias"
+        space = base / "01M31B5XDFHPXSKCBSXAZVZA83"
+        media_video = space / "public" / "media_video"
+        media_video.mkdir(parents=True)
+        (media_video / "借用协议模版.docx").write_bytes(b"doc")
+        (base / "volumes").mkdir()
+        try:
+            (base / "volumes" / "vos_workspace").symlink_to(space)
+        except OSError as exc:  # pragma: no cover - 不支持软链的平台跳过
+            self.skipTest(f"symlinks unavailable: {exc}")
+        main.SHARED_ROOT = base
+
+        sources = (await self.client.get("/api/v1/sources")).json()["sources"]
+
+        self.assertEqual(
+            [root["name"] for root in sources[0]["roots"]], ["media_video"]
+        )
+
     async def test_keeps_a_folder_that_has_multiple_branches(self) -> None:
         """授权目录下确实有多条分支时不折叠，让用户自己逐层进入。"""
         public = (
