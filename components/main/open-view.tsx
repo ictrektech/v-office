@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
@@ -69,6 +69,11 @@ export function OpenView({
   const [storedState, setStoredState] = useState<"checking" | "off" | "ready">(
     "checking",
   );
+  // 供 visibilitychange 监听读取最新判定（避免把 handler 挂到每次 state 变化上）
+  const storedStateRef = useRef(storedState);
+  useEffect(() => {
+    storedStateRef.current = storedState;
+  }, [storedState]);
   const [loadingStoredFile, setLoadingStoredFile] = useState<string | null>(null);
   const [downloadingStoredFile, setDownloadingStoredFile] = useState<
     string | null
@@ -77,10 +82,12 @@ export function OpenView({
     null,
   );
 
-  const router = useRouter();
+    const router = useRouter();
   const server = useAppStore((state) => state.server);
   const language = useResolvedLanguage();
   const zh = language.toLowerCase().startsWith("zh");
+  // VOS 镜像在构建期写入了 basePath：用它区分"独立部署"与"VOS 部署但没拿到登录态"
+  const isVOSDeployment = Boolean(process.env.NEXT_PUBLIC_BASE_PATH);
 
   // 平台「数据访问授权」挂进来的目录（公共目录 / 我的数据 / NAS）里的文档，
   // 与私有文档并列显示在同一个列表里。
@@ -104,6 +111,22 @@ export function OpenView({
   useEffect(() => {
     loadRecentFiles();
     initStoredFiles();
+  }, []);
+
+  // 页面重新可见时若仍判定为"无存储"，再探一次：门户注入令牌较晚、storage
+  // 刚重启完等场景都能自动恢复，不需要用户刷新整页
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (
+        document.visibilityState === "visible" &&
+        storedStateRef.current === "off"
+      ) {
+        void initStoredFiles();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () =>
+      document.removeEventListener("visibilitychange", handleVisibility);
   }, []);
 
   const loadRecentFiles = async () => {
@@ -158,19 +181,25 @@ export function OpenView({
   };
 
   const initStoredFiles = async () => {
-    try {
-      const user = await whoAmI();
-      if (!user) {
-        setStoredState("off");
-        return;
+    // 失败一次就永久隐藏「我的文档」会让用户以为功能没了：门户注入令牌可能
+    // 晚于首屏、storage 容器也可能刚好在重启，这里多探几次再判定不可用。
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const user = await whoAmI();
+        if (user) {
+          setStoredUser(user);
+          setStoredFiles(await listStoredFiles());
+          setStoredState("ready");
+          return;
+        }
+      } catch (error) {
+        console.error("Documents unavailable:", error);
       }
-      setStoredUser(user);
-      setStoredFiles(await listStoredFiles());
-      setStoredState("ready");
-    } catch (error) {
-      console.error("Documents unavailable:", error);
-      setStoredState("off");
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
     }
+    setStoredState("off");
   };
 
   const handleStoredFileClick = async (file: StoredFile) => {
@@ -766,6 +795,15 @@ export function OpenView({
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-bold">{t("Recent")}</h2>
           </div>
+        {/* VOS 镜像但拿不到登录态：最常见原因是页面被当成顶层页面打开
+            （新标签页/直接访问 URL），此时门户不会注入免登录桥。 */}
+        {isVOSDeployment && (
+          <p className="mb-3 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+            {zh
+              ? "未获取到 VOS 登录态，暂时只能打开本地文件。请从 VOS 门户侧边栏打开 V-Office（在新标签页直接打开本页会失去免登录与「我的文档」）。"
+              : "No VOS session detected, so only local files are available. Open V-Office from the VOS portal sidebar — opening this page directly in a new tab loses silent sign-in and My Documents."}
+          </p>
+        )}
         {isLoading ? (
           <div className="bg-card/50 border border-border rounded-xl overflow-hidden shadow-sm p-12 flex items-center justify-center">
             <div className="text-center text-text-secondary">
