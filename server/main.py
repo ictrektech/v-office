@@ -374,6 +374,11 @@ BROWSABLE_SUFFIXES = frozenset(
 # 单次列目录的条目上限：NAS 上动辄数万文件的目录会把响应和前端一起拖死
 MAX_SOURCE_ENTRIES = 3000
 
+# 授权目录解析：扫描挂载锚点（public / users/<用户>/data）的最大深度（覆盖
+# volumes/<空间>/users/<用户>/data），以及穿过中间脚手架层的最大层数
+MAX_ROOT_SCAN_DEPTH = 6
+MAX_ROOT_DESCEND = 6
+
 # 浏览时统一跳过的系统目录（NAS / 共享盘常见）
 SOURCE_SKIP_NAMES = frozenset(
     {
@@ -383,8 +388,141 @@ SOURCE_SKIP_NAMES = frozenset(
 )
 
 
-def _document_sources() -> list[dict]:
-    """当前可用的只读文档源。目录不存在即视为未部署，前端据此隐藏入口。"""
+def _find_anchors(root: Path, max_depth: int) -> tuple[list[Path], list[Path]]:
+    """在限定的脚手架层数内找出挂载锚点：public 目录与 users/<用户>/data 目录。
+
+    命中锚点后不再深入该子树——授权目录里可能有成千上万个目录，逐层扫整棵树
+    在 NAS/共享盘上会很慢，而脚手架层只有固定几层。
+    """
+    public_dirs: list[Path] = []
+    user_dirs: list[Path] = []
+    stack: list[tuple[Path, int]] = [(root, 0)]
+    while stack:
+        current, depth = stack.pop()
+        if depth >= max_depth:
+            continue
+        try:
+            children = sorted(current.iterdir(), key=lambda p: p.name.lower())
+        except OSError:
+            continue
+        for child in children:
+            if child.name.startswith(".") or child.name in SOURCE_SKIP_NAMES:
+                continue
+            try:
+                if not child.is_dir():
+                    continue
+            except OSError:
+                continue
+            if child.name == "public":
+                public_dirs.append(child)
+                continue
+            if child.name == "data" and child.parent.parent.name == "users":
+                user_dirs.append(child)
+                continue
+            stack.append((child, depth + 1))
+    return public_dirs, user_dirs
+
+
+def _has_openable_file(directory: Path) -> bool:
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return False
+    for entry in entries:
+        try:
+            if entry.is_file() and entry.suffix.lower() in BROWSABLE_SUFFIXES:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _authorized_dir(directory: Path) -> Path:
+    """穿过"没有可打开文档、且只有一个子目录"的中间层。
+
+    平台按 /share/<存储空间>/public/<用户挑的目录> 的结构挂载，用户要看到的是
+    他挑的那层目录里的文档，而不是 public、存储空间 ID 这类脚手架层级。因此
+    当某一层没有任何可打开的文档、又只有一条向下的路时，就继续往下走。
+    """
+    current = directory
+    for _ in range(MAX_ROOT_DESCEND):
+        try:
+            children = [
+                child
+                for child in current.iterdir()
+                if child.is_dir() and not child.name.startswith(".")
+            ]
+        except OSError:
+            return current
+        if len(children) != 1 or _has_openable_file(current):
+            return current
+        current = children[0]
+    return current
+
+
+def _shared_roots(username: str) -> list[dict]:
+    """解析「数据访问授权」真正挂进来的目录，作为可直接浏览的根。
+
+    先按平台布局定位挂载锚点（`public` / `users/<用户名>/data`），再穿过中间
+    脚手架层，得到用户实际授权的那层目录；目录名沿用用户自己的命名（如
+    media_video），不向用户暴露 volumes/<随机ID> 这类内部路径。
+    """
+    roots: list[dict] = []
+    seen: set[str] = set()
+
+    def add(path: Path, label: str) -> None:
+        effective = _authorized_dir(path)
+        rel = _source_relpath(SHARED_ROOT, effective)
+        if rel in seen:
+            return
+        seen.add(rel)
+        # 穿过脚手架时用用户自己的目录名；没穿过则用默认标签（公共目录 / 我的数据）
+        name = effective.name if effective != path else label
+        roots.append({"name": name, "path": rel})
+
+    if not SHARED_ROOT.is_dir():
+        return roots
+
+    public_dirs, user_dirs = _find_anchors(SHARED_ROOT, MAX_ROOT_SCAN_DEPTH)
+
+    for path in public_dirs:
+        add(path, "公共目录")
+
+    own = [p for p in user_dirs if p.parent.name == username]
+    if own:
+        for path in own:
+            add(path, "我的数据")
+    elif len(user_dirs) == 1:
+        # 单用户设备上 OIDC 用户名与目录名可能不一致：只有一个用户数据目录时
+        # 直接采用它，多用户时宁可不显示也不越权。
+        add(user_dirs[0], "我的数据")
+
+    if not roots:
+        # 非平台标准布局：/exposed 下的一级目录即为已授权目录
+        try:
+            first = [
+                child
+                for child in sorted(SHARED_ROOT.iterdir())
+                if child.is_dir() and not child.name.startswith(".")
+            ]
+        except OSError:
+            first = []
+        if len(first) == 1 and first[0].name == "volumes":
+            try:
+                first = [
+                    child
+                    for child in sorted(first[0].iterdir())
+                    if child.is_dir() and not child.name.startswith(".")
+                ]
+            except OSError:
+                first = []
+        for path in first:
+            add(path, path.name)
+    return roots
+
+
+def _document_sources(username: str) -> list[dict]:
+    """当前可用的文档源。目录不存在即视为未部署，前端据此隐藏相关内容。"""
     sources: list[dict] = []
     if SHARED_ROOT.is_dir():
         sources.append(
@@ -393,6 +531,7 @@ def _document_sources() -> list[dict]:
                 "name": "共享目录",
                 "kind": "shared",
                 "readOnly": not SHARED_WRITABLE,
+                "roots": _shared_roots(username),
             }
         )
     if NAS_ROOT.is_dir():
@@ -402,6 +541,7 @@ def _document_sources() -> list[dict]:
                 "name": "NAS",
                 "kind": "nas",
                 "readOnly": not SHARED_WRITABLE,
+                "roots": [{"name": "NAS", "path": ""}],
             }
         )
     return sources
@@ -469,9 +609,9 @@ def _source_entry(root: Path, child: Path) -> Optional[dict]:
 
 @app.get("/api/v1/sources")
 async def list_sources(request: Request) -> JSONResponse:
-    """列出可浏览的只读文档源（共享目录 / NAS）。"""
-    await current_username(request)
-    return JSONResponse({"sources": _document_sources()})
+    """列出可浏览的文档源（共享目录 / NAS）及其解析后的授权目录。"""
+    username = await current_username(request)
+    return JSONResponse({"sources": _document_sources(username)})
 
 
 @app.get("/api/v1/sources/{source}/entries")

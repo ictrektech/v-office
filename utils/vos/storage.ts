@@ -20,12 +20,20 @@ export interface StoredFile {
   modified: number;
 }
 
-/** 只读文档源：VOS 授权目录（shared）或宿主挂载的 NAS 目录（nas）。 */
+/** 源里一个可直接浏览的已授权目录（服务端已解析，不含平台内部路径层级） */
+export interface SharedSourceRoot {
+  name: string;
+  /** 源内相对路径；空串代表源根 */
+  path: string;
+}
+
+/** 文档源：平台「数据访问授权」挂进来的目录（shared）或宿主挂载的 NAS 目录（nas）。 */
 export interface SharedSource {
   id: string;
   name: string;
   kind: string;
   readOnly: boolean;
+  roots?: SharedSourceRoot[];
 }
 
 /** 只读文档源里的一个条目（子目录，或编辑器可打开的文档）。 */

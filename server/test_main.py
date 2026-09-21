@@ -391,6 +391,70 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         return response.json()["accessToken"]
 
+    async def test_reports_resolved_authorized_roots(self) -> None:
+        """源列表直接给出已解析的授权目录，前端不必自己穿平台内部路径。"""
+        sources = (await self.client.get("/api/v1/sources")).json()["sources"]
+
+        self.assertEqual(
+            [root["name"] for root in sources[0]["roots"]],
+            ["公共目录", "我的数据"],
+        )
+        self.assertEqual(
+            [root["path"] for root in sources[0]["roots"]],
+            ["volumes/wr/public", "volumes/wr/users/alice/data"],
+        )
+
+    async def test_collapses_scaffolding_to_the_authorized_folder(self) -> None:
+        """授权 .../public/media_video 时，只显示 media_video 里的可打开文档。
+
+        public 与存储空间 ID 都只是平台脚手架，不该出现在用户的文档列表里。
+        """
+        media_video = (
+            Path(self.temp_dir.name)
+            / "exposed-authorize-subdir"
+            / "volumes"
+            / "01M31B5XDFHPXSKCBSXAZVZA83"
+            / "public"
+            / "media_video"
+        )
+        media_video.mkdir(parents=True)
+        (media_video / "课件.pptx").write_bytes(b"deck")
+        (media_video / "setup.exe").write_bytes(b"x")
+        main.SHARED_ROOT = media_video.parent.parent.parent.parent
+
+        sources = (await self.client.get("/api/v1/sources")).json()["sources"]
+        roots = sources[0]["roots"]
+        entries = (
+            await self.client.get(
+                "/api/v1/sources/shared/entries",
+                params={"path": roots[0]["path"]},
+            )
+        ).json()
+
+        self.assertEqual([root["name"] for root in roots], ["media_video"])
+        self.assertEqual(
+            [entry["name"] for entry in entries["entries"]], ["课件.pptx"]
+        )
+
+    async def test_keeps_a_folder_that_has_multiple_branches(self) -> None:
+        """授权目录下确实有多条分支时不折叠，让用户自己逐层进入。"""
+        public = (
+            Path(self.temp_dir.name)
+            / "exposed-multi-branch"
+            / "volumes"
+            / "space"
+            / "public"
+        )
+        (public / "电影").mkdir(parents=True)
+        (public / "电视剧").mkdir(parents=True)
+        main.SHARED_ROOT = public.parent.parent.parent
+
+        sources = (await self.client.get("/api/v1/sources")).json()["sources"]
+
+        self.assertEqual(
+            [root["name"] for root in sources[0]["roots"]], ["公共目录"]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

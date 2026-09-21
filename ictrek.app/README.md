@@ -57,11 +57,12 @@
 - `utils/editor/collabora.ts`：新增 Collabora（WOPI）客户端——Word 文档改用 Collabora 内核打开，本地文件先原样推入应用私有存储再换会话，取不到会话自动回退 OnlyOffice。
 - `collabora/`：新增 Collabora 镜像定义（上游 `collabora/code` + 固化的 `extra_params`）。
 - `server/main.py`：新增 WOPI host（`/api/v1/wopi/session` 签发一次性令牌、`/wopi/files/...` 读写文档）。
-- `server/main.py`：新增共享源接口——`GET /api/v1/sources` 列源、`GET /api/v1/sources/{s}/entries` 列目录、`GET|PUT /api/v1/sources/{s}/file` 读/写文档（PUT 即"编辑原文档"，写回共享盘原路径）；带路径穿越与软链逃逸校验，只收 Office/PDF 后缀，可用 `V_OFFICE_SHARED_ROOT` 改挂载点、`V_OFFICE_SHARED_WRITABLE=0` 强制只读。
+- `server/main.py`：新增共享源接口——`GET /api/v1/sources` 列源（含解析后的授权目录 `roots`）、`GET /api/v1/sources/{s}/entries` 列目录、`GET|PUT /api/v1/sources/{s}/file` 读/写文档（PUT 即"编辑原文档"，写回共享盘原路径）；带路径穿越与软链逃逸校验，只收 Office/PDF 后缀，可用 `V_OFFICE_SHARED_ROOT` 改挂载点、`V_OFFICE_SHARED_WRITABLE=0` 强制只读。
+- `server/main.py`：授权目录解析——按 `public` / `users/<用户名>/data` 锚点定位挂载点，再穿过"无可打开文档且只有一条向下的路"的中间脚手架层，得到用户实际授权的目录（如 `media_video`），不向界面暴露 `volumes/<随机ID>` 等平台内部路径。
 - `server/main.py`：WOPI 令牌支持共享源（令牌里带 `s` 源标识，`name` 即源内相对路径），Word 文档由 Collabora 通过 WOPI 直接读写共享盘上的原文件；`/wopi/files/{name:path}` 承接多级路径。
 - `utils/vos/storage.ts`：新增共享源客户端（`listSharedSources` / `browseSharedSource` / `openSharedDocument` / `saveSharedDocument`）。
-- `components/shared-source-browser.tsx`：新增共享目录列表视图（面包屑、逐层进入、打开或下载原文件），嵌在「我的文档」区块内。
-- `components/main/open-view.tsx`：新增"我的文档"列表以及逐文件打开、下载、删除操作（VOS 模式才显示）；同一区块内新增按源切换的页签，把共享目录（平台授权目录 / NAS）里的文件与私有文档并列显示（storage 报告存在已挂载源时才显示）。
+- `hooks/use-shared-documents.ts`：新增共享目录列表数据源——把各授权目录（公共目录 / 我的数据 / NAS）的一级内容合并成一份列表，并管理授权目录内部的逐层进入与返回。
+- `components/main/open-view.tsx`：新增"我的文档"列表以及逐文件打开、下载、删除操作（VOS 模式才显示）；授权目录里的文档与私有文档并列显示在同一列表（不再有独立页签或弹窗），列表为空时提示共享目录里的文档也会出现在这里。
 - `components/main/api-guide-view.tsx`：新增 API 接入指南，包含版本化接口、认证说明和可复制的 Agent 调用示例。
 - `utils/editor/server.ts`：保存时 VOS 模式改为自动入云，新文档首次保存先命名；打开共享源文档时记录保存落点，保存写回原文件；打开文档时保留转换前的原始字节，供 Collabora 内核前推入存储。
 - `app/editor/page.tsx`：新增首次保存命名对话框和关闭当前文档按钮。

@@ -13,6 +13,8 @@ import {
   Loader2,
   Pencil,
   PenLine,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { useExtracted } from "next-intl";
 import { cn } from "@/lib/utils";
@@ -22,9 +24,12 @@ import { DocumentIcon } from "@/components/document-icon";
 import { getDocConfig } from "@/lib/document-types";
 import type { Template } from "@/utils/templates";
 import { usePageTitle } from "@/hooks/use-page-title";
+import {
+  useSharedDocuments,
+  type SharedDocumentRow,
+} from "@/hooks/use-shared-documents";
 import { useAppStore, useResolvedLanguage } from "@/store";
 import DocumentNameDialog from "@/components/document-name-dialog";
-import { SharedSourceBrowser } from "@/components/shared-source-browser";
 import { sitePath } from "@/utils/site-path";
 import {
   getRecentFiles,
@@ -40,10 +45,8 @@ import {
   openStoredFile,
   deleteStoredFile,
   renameStoredFile,
-  listSharedSources,
+  openSharedDocument,
   whoAmI,
-  type SharedSource,
-  type SharedTarget,
   type StoredFile,
 } from "@/utils/vos/storage";
 
@@ -74,24 +77,30 @@ export function OpenView({
     null,
   );
 
-  // Shared folders (platform-authorized dirs / host NAS). Hidden when the
-  // storage service reports no mounted source. activeSourceId 为 null 时显示
-  // 用户私有目录，否则在同一个区块里显示对应共享源的内容。
-  const [sharedSources, setSharedSources] = useState<SharedSource[]>([]);
-  const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
-  const activeSource =
-    sharedSources.find((source) => source.id === activeSourceId) ?? null;
-
   const router = useRouter();
   const server = useAppStore((state) => state.server);
   const language = useResolvedLanguage();
   const zh = language.toLowerCase().startsWith("zh");
 
+  // 平台「数据访问授权」挂进来的目录（公共目录 / 我的数据 / NAS）里的文档，
+  // 与私有文档并列显示在同一个列表里。
+  const {
+    rows: sharedRows,
+    loading: sharedLoading,
+    error: sharedError,
+    nav: sharedNav,
+    crumbs: sharedCrumbs,
+    busyKey: sharedBusyKey,
+    setBusyKey: setSharedBusyKey,
+    enterFolder: enterSharedFolder,
+    goBack: leaveSharedFolder,
+    downloadFile: downloadSharedFile,
+  } = useSharedDocuments(language);
+
   // Load recent files on mount
   useEffect(() => {
     loadRecentFiles();
     initStoredFiles();
-    initSharedSources();
   }, []);
 
   const loadRecentFiles = async () => {
@@ -232,22 +241,24 @@ export function OpenView({
     setRenamingStoredFile(null);
   };
 
-  const initSharedSources = async () => {
-    try {
-      setSharedSources(await listSharedSources());
-    } catch {
-      // 未挂载共享目录，或不在 VOS 部署下：静默隐藏入口
-      setSharedSources([]);
-    }
-  };
-
   /**
-   * 打开共享目录里的文档。文档先整份下载到浏览器，再交给编辑器；同时记录
-   * 保存落点，保存时写回共享盘上的原文件（编辑原文档）。
+   * 打开授权目录里的文档：整份下载到浏览器交给编辑器，同时记下保存落点，
+   * 保存时写回共享盘上的原文件（即编辑原文档）。
    */
-  const handleSharedFileOpen = async (file: File, target: SharedTarget) => {
-    await server.open(file, { sharedTarget: target });
-    router.push("/editor");
+  const openSharedRow = async (row: SharedDocumentRow) => {
+    if (sharedBusyKey) return;
+    setSharedBusyKey(row.key);
+    try {
+      const file = await openSharedDocument(row.sourceId, row.path);
+      await server.open(file, {
+        sharedTarget: { source: row.sourceId, path: row.path },
+      });
+      router.push("/editor");
+    } catch (error) {
+      console.error("Failed to open shared document:", error);
+    } finally {
+      setSharedBusyKey(null);
+    }
   };
 
   const handleFileSelectWithHandle = async (
@@ -268,6 +279,10 @@ export function OpenView({
     await server.open(file);
     router.push("/editor");
   };
+
+  // 有多个授权目录时逐行标出来源（如 media_video）；只有一个时不必打扰
+  const showSourceLabel =
+    new Set(sharedRows.map((row) => row.label)).size > 1;
 
   const newDocTypes = [
     {
@@ -408,15 +423,15 @@ export function OpenView({
         </div>
       </section>
 
-      {/* Document surface: private app storage and shared folders (platform
-          authorized dirs / host NAS) live in this one block, switched by tabs. */}
+      {/* 文档列表：用户私有文档 + 平台「数据访问授权」挂进来的目录里的文档，
+          在同一个列表里显示；进入授权目录的子目录时给出返回入口。 */}
       {storedState !== "off" && (
         <section>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-bold">
               {t({ id: "myDocsTitle", message: "My Documents" })}
             </h2>
-            {activeSource === null && storedUser && (
+            {storedUser && (
               <span
                 className="inline-flex items-center gap-1.5 text-xs text-text-secondary"
                 title={t({
@@ -428,87 +443,34 @@ export function OpenView({
                 {storedUser}
               </span>
             )}
-            {activeSource && (
-              <span className="inline-flex items-center gap-1.5 text-xs text-text-secondary">
-                <HardDrive className="w-3.5 h-3.5" />
-                {activeSource.kind === "nas"
-                  ? "NAS"
-                  : zh
-                    ? "共享目录"
-                    : "Shared folder"}
-                <span className="opacity-70">
-                  {activeSource.readOnly
-                    ? zh
-                      ? "· 只读"
-                      : "· read-only"
-                    : zh
-                      ? "· 保存写回原文件"
-                      : "· saves in place"}
-                </span>
-              </span>
-            )}
           </div>
 
-          {/* Source tabs: private storage first, then every mounted shared folder */}
-          {sharedSources.length > 0 && (
-            <div className="mb-3 flex flex-wrap items-center gap-2">
+          {/* 在授权目录的子目录里：返回上一级 + 当前位置 */}
+          {sharedNav && (
+            <div className="mb-3 flex flex-wrap items-center gap-1.5 text-xs text-text-secondary">
               <button
                 type="button"
-                onClick={() => setActiveSourceId(null)}
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
-                  activeSource === null
-                    ? "bg-primary/10 text-primary"
-                    : "text-text-secondary hover:bg-muted",
-                )}
+                onClick={() => void leaveSharedFolder()}
+                className="inline-flex items-center gap-1 rounded-lg bg-muted px-2.5 py-1.5 font-medium text-foreground transition-colors hover:bg-sidebar-hover"
               >
-                <HardDrive className="h-3.5 w-3.5" />
-                {zh ? "我的文档" : "My Documents"}
+                <ChevronLeft className="h-3.5 w-3.5" />
+                {zh ? "返回" : "Back"}
               </button>
-              {sharedSources.map((source) => (
-                <button
-                  key={source.id}
-                  type="button"
-                  onClick={() => setActiveSourceId(source.id)}
-                  title={
-                    source.readOnly
-                      ? zh
-                        ? "该目录为只读，只能打开与下载"
-                        : "Read-only: open and download only"
-                      : zh
-                        ? "打开即可编辑，保存写回共享盘上的原文件"
-                        : "Open to edit; saving writes back to the original file"
-                  }
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
-                    activeSourceId === source.id
-                      ? "bg-primary/10 text-primary"
-                      : "text-text-secondary hover:bg-muted",
-                  )}
-                >
-                  {source.kind === "nas" ? (
-                    <HardDrive className="h-3.5 w-3.5" />
-                  ) : (
-                    <FolderOpen className="h-3.5 w-3.5" />
-                  )}
-                  {source.kind === "nas"
-                    ? "NAS"
-                    : zh
-                      ? "共享目录"
-                      : "Shared folder"}
-                </button>
+              {sharedCrumbs.map((crumb) => (
+                <span key={crumb.path} className="flex items-center gap-1.5">
+                  <span className="opacity-40">/</span>
+                  <span className="max-w-[14rem] truncate">{crumb.name}</span>
+                </span>
               ))}
             </div>
           )}
 
-          {activeSource ? (
-            <SharedSourceBrowser
-              key={activeSource.id}
-              language={language}
-              source={activeSource}
-              onOpen={handleSharedFileOpen}
-            />
-          ) : storedState === "checking" ? (
+          {sharedError && (
+            <p className="mb-3 text-xs text-red-500">{sharedError}</p>
+          )}
+
+          {storedState === "checking" ||
+          (sharedLoading && sharedRows.length === 0) ? (
             <div className="bg-card/50 border border-border rounded-xl overflow-hidden shadow-sm p-12 flex items-center justify-center">
               <div className="text-center text-text-secondary">
                 <HardDrive className="w-8 h-8 mx-auto mb-2 animate-pulse" />
@@ -520,7 +482,7 @@ export function OpenView({
                 </p>
               </div>
             </div>
-          ) : storedFiles.length === 0 ? (
+          ) : storedFiles.length === 0 && sharedRows.length === 0 ? (
             <div className="bg-card/50 border border-border rounded-xl overflow-hidden shadow-sm p-12 flex items-center justify-center">
               <div className="text-center text-text-secondary">
                 <HardDrive className="w-12 h-12 mx-auto mb-3 opacity-40" />
@@ -534,9 +496,15 @@ export function OpenView({
                       "Documents saved in the editor are stored in your private directory",
                   })}
                 </p>
+                <p className="mt-1 text-[10px] opacity-80">
+                  {zh
+                    ? "平台「数据访问授权」里授权的共享目录（如 media_video）中，Word / Excel / PPT / PDF 也会列在这里"
+                    : "Word / Excel / PPT / PDF files from folders granted under Data Access Authorization (e.g. media_video) are listed here as well"}
+                </p>
               </div>
             </div>
           ) : (
+            <>
             <div className="">
               {storedFiles.map((file) => (
                 <div
@@ -631,6 +599,93 @@ export function OpenView({
                 </div>
               ))}
             </div>
+
+            {/* 平台「数据访问授权」挂进来的目录里的内容：目录可逐层进入，
+                文档点开即编辑，保存写回共享盘上的原文件 */}
+            {sharedRows.map((row) => (
+              <div
+                key={row.key}
+                onClick={() =>
+                  row.isDir
+                    ? void enterSharedFolder(row)
+                    : void openSharedRow(row)
+                }
+                className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-sidebar-hover border-b border-border last:border-0 transition-colors group cursor-pointer"
+                title={
+                  row.isDir
+                    ? zh
+                      ? "进入该文件夹"
+                      : "Open this folder"
+                    : zh
+                      ? "点击打开并编辑原文档"
+                      : "Click to open and edit the original"
+                }
+              >
+                <div className="flex min-w-0 items-center gap-4">
+                  {row.isDir ? (
+                    <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" />
+                  ) : (
+                    <DocumentIcon
+                      type={row.name.split(".").pop()?.toLowerCase() || ""}
+                      size="sm"
+                    />
+                  )}
+                  <div className="min-w-0 text-left">
+                    <p className="truncate font-semibold text-sm">
+                      {row.name}
+                    </p>
+                    <p className="text-[10px] text-text-secondary">
+                      {[
+                        row.isDir
+                          ? zh
+                            ? "文件夹"
+                            : "Folder"
+                          : formatFileSize(row.size),
+                        showSourceLabel ? row.label : null,
+                        row.isDir
+                          ? null
+                          : formatRelativeTime(row.modified * 1000),
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </p>
+                  </div>
+                </div>
+                <div className="ml-4 flex shrink-0 items-center gap-2">
+                  {row.isDir ? (
+                    <ChevronRight className="h-4 w-4 text-text-secondary" />
+                  ) : (
+                    <>
+                      <span className="inline-flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-2 text-xs font-medium text-primary transition-colors group-hover:bg-primary/15">
+                        {sharedBusyKey === row.key ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <FolderOpen className="h-4 w-4" />
+                        )}
+                        {zh ? "打开" : "Open"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void downloadSharedFile(row);
+                        }}
+                        disabled={sharedBusyKey !== null}
+                        title={zh ? "下载原文件" : "Download original"}
+                        className="rounded-lg bg-muted p-2 text-foreground transition-colors hover:bg-sidebar-hover disabled:opacity-50"
+                      >
+                        {sharedBusyKey === row.key ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Download className="h-4 w-4" />
+                        )}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+            </>
           )}
         </section>
       )}
