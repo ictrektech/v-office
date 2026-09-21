@@ -85,6 +85,9 @@ export function OpenView({
   // 平台「数据访问授权」挂进来的目录（公共目录 / 我的数据 / NAS）里的文档，
   // 与私有文档并列显示在同一个列表里。
   const {
+    tabs: sharedTabs,
+    activeTab: sharedTab,
+    selectTab: selectSharedTab,
     rows: sharedRows,
     loading: sharedLoading,
     error: sharedError,
@@ -280,10 +283,6 @@ export function OpenView({
     router.push("/editor");
   };
 
-  // 有多个授权目录时逐行标出来源（如 media_video）；只有一个时不必打扰
-  const showSourceLabel =
-    new Set(sharedRows.map((row) => row.label)).size > 1;
-
   const newDocTypes = [
     {
       type: "docx",
@@ -423,8 +422,9 @@ export function OpenView({
         </div>
       </section>
 
-      {/* 文档列表：用户私有文档 + 平台「数据访问授权」挂进来的目录里的文档，
-          在同一个列表里显示；进入授权目录的子目录时给出返回入口。 */}
+      {/* 文档列表：一个页签 = 我的文档（私有目录）或一个已授权的共享目录
+          （平台「数据访问授权」挂进来的目录，页签名即目录名）；进入共享目录
+          的子目录时给出返回入口。 */}
       {storedState !== "off" && (
         <section>
           <div className="flex items-center justify-between mb-4">
@@ -444,6 +444,46 @@ export function OpenView({
               </span>
             )}
           </div>
+
+          {/* 页签：我的文档 + 每个已授权的共享目录（目录名即页签名） */}
+          {sharedTabs.length > 0 && (
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => selectSharedTab(null)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+                  sharedTab === null
+                    ? "bg-primary/10 text-primary"
+                    : "text-text-secondary hover:bg-muted",
+                )}
+              >
+                <HardDrive className="h-3.5 w-3.5" />
+                {zh ? "我的文档" : "My Documents"}
+              </button>
+              {sharedTabs.map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => selectSharedTab(tab)}
+                  title={
+                    zh
+                      ? "打开即可编辑，保存写回该目录里的原文件"
+                      : "Open to edit; saving writes back to the original file"
+                  }
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+                    sharedTab?.key === tab.key
+                      ? "bg-primary/10 text-primary"
+                      : "text-text-secondary hover:bg-muted",
+                  )}
+                >
+                  <FolderOpen className="h-3.5 w-3.5" />
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* 在授权目录的子目录里：返回上一级 + 当前位置 */}
           {sharedNav && (
@@ -469,8 +509,7 @@ export function OpenView({
             <p className="mb-3 text-xs text-red-500">{sharedError}</p>
           )}
 
-          {storedState === "checking" ||
-          (sharedLoading && sharedRows.length === 0) ? (
+          {sharedTab !== null && sharedLoading && sharedRows.length === 0 ? (
             <div className="bg-card/50 border border-border rounded-xl overflow-hidden shadow-sm p-12 flex items-center justify-center">
               <div className="text-center text-text-secondary">
                 <HardDrive className="w-8 h-8 mx-auto mb-2 animate-pulse" />
@@ -482,29 +521,58 @@ export function OpenView({
                 </p>
               </div>
             </div>
-          ) : storedFiles.length === 0 && sharedRows.length === 0 ? (
+          ) : sharedTab === null && storedState === "checking" ? (
+            <div className="bg-card/50 border border-border rounded-xl overflow-hidden shadow-sm p-12 flex items-center justify-center">
+              <div className="text-center text-text-secondary">
+                <HardDrive className="w-8 h-8 mx-auto mb-2 animate-pulse" />
+                <p className="text-sm">
+                  {t({
+                    id: "myDocsLoading",
+                    message: "Loading your documents...",
+                  })}
+                </p>
+              </div>
+            </div>
+          ) : (sharedTab === null
+              ? storedFiles.length === 0
+              : sharedRows.length === 0) ? (
             <div className="bg-card/50 border border-border rounded-xl overflow-hidden shadow-sm p-12 flex items-center justify-center">
               <div className="text-center text-text-secondary">
                 <HardDrive className="w-12 h-12 mx-auto mb-3 opacity-40" />
                 <p className="text-sm font-medium mb-1">
-                  {t({ id: "myDocsEmpty", message: "No documents yet" })}
+                  {sharedTab === null
+                    ? t({ id: "myDocsEmpty", message: "No documents yet" })
+                    : zh
+                      ? "该目录下没有可打开的文档"
+                      : "No openable documents here"}
                 </p>
                 <p className="text-xs">
-                  {t({
-                    id: "myDocsEmptyHint",
-                    message:
-                      "Documents saved in the editor are stored in your private directory",
-                  })}
+                  {sharedTab === null
+                    ? t({
+                        id: "myDocsEmptyHint",
+                        message:
+                          "Documents saved in the editor are stored in your private directory",
+                      })
+                    : zh
+                      ? "只显示 Word / Excel / PPT / PDF"
+                      : "Only Word / Excel / PPT / PDF files are listed"}
                 </p>
-                <p className="mt-1 text-[10px] opacity-80">
-                  {zh
-                    ? "平台「数据访问授权」里授权的共享目录（如 media_video）中，Word / Excel / PPT / PDF 也会列在这里"
-                    : "Word / Excel / PPT / PDF files from folders granted under Data Access Authorization (e.g. media_video) are listed here as well"}
-                </p>
+                {sharedTab === null && sharedTabs.length > 0 && (
+                  <p className="mt-1 text-[10px] opacity-80">
+                    {zh
+                      ? `平台授权目录（${sharedTabs
+                          .map((tab) => tab.label)
+                          .join("、")}）里的文档在对应页签中`
+                      : `Documents from authorized folders (${sharedTabs
+                          .map((tab) => tab.label)
+                          .join(", ")}) are under their own tabs`}
+                  </p>
+                )}
               </div>
             </div>
           ) : (
             <>
+            {sharedTab === null && (
             <div className="">
               {storedFiles.map((file) => (
                 <div
@@ -599,10 +667,12 @@ export function OpenView({
                 </div>
               ))}
             </div>
+            )}
 
-            {/* 平台「数据访问授权」挂进来的目录里的内容：目录可逐层进入，
-                文档点开即编辑，保存写回共享盘上的原文件 */}
-            {sharedRows.map((row) => (
+            {/* 授权目录（页签）里的内容：目录可逐层进入，文档点开即编辑，
+                保存写回共享盘上的原文件 */}
+            {sharedTab !== null &&
+              sharedRows.map((row) => (
               <div
                 key={row.key}
                 onClick={() =>
@@ -641,7 +711,6 @@ export function OpenView({
                             ? "文件夹"
                             : "Folder"
                           : formatFileSize(row.size),
-                        showSourceLabel ? row.label : null,
                         row.isDir
                           ? null
                           : formatRelativeTime(row.modified * 1000),
