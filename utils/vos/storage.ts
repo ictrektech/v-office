@@ -20,6 +20,32 @@ export interface StoredFile {
   modified: number;
 }
 
+/** 只读文档源：VOS 授权目录（shared）或宿主挂载的 NAS 目录（nas）。 */
+export interface SharedSource {
+  id: string;
+  name: string;
+  kind: string;
+  readOnly: boolean;
+}
+
+/** 只读文档源里的一个条目（子目录，或编辑器可打开的文档）。 */
+export interface SharedEntry {
+  name: string;
+  /** 相对源根的路径，作为打开/下载的凭据 */
+  path: string;
+  isDir: boolean;
+  size: number;
+  modified: number;
+}
+
+export interface SharedListing {
+  source: string;
+  path: string;
+  parent: string;
+  entries: SharedEntry[];
+  truncated: boolean;
+}
+
 export class StorageUnavailableError extends Error {
   constructor(message = "Storage unavailable outside VOS") {
     super(message);
@@ -140,5 +166,81 @@ export async function renameStoredFile(
       throw new Error("A file with that name already exists");
     }
     throw new Error(`Rename file failed: ${response.status}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 只读共享源（/exposed 授权目录、NAS 挂载目录）
+//
+// 这些目录由宿主侧挂载进容器，服务端只允许列目录与取文件。文档打开后由
+// 编辑器正常加载，保存时仍写入用户私有目录，不会回写共享盘。
+// ---------------------------------------------------------------------------
+
+export async function listSharedSources(): Promise<SharedSource[]> {
+  const response = await request("/sources");
+  if (!response.ok) {
+    throw new Error(`List sources failed: ${response.status}`);
+  }
+  const data = await response.json();
+  return Array.isArray(data?.sources) ? data.sources : [];
+}
+
+export async function browseSharedSource(
+  source: string,
+  path = "",
+): Promise<SharedListing> {
+  const query = path ? `?path=${encodeURIComponent(path)}` : "";
+  const response = await request(
+    `/sources/${encodeURIComponent(source)}/entries${query}`,
+  );
+  if (!response.ok) {
+    throw new Error(`Browse source failed: ${response.status}`);
+  }
+  return (await response.json()) as SharedListing;
+}
+
+/** 把共享源里的文档下载成 File，交给编辑器打开。 */
+export async function openSharedDocument(
+  source: string,
+  path: string,
+): Promise<File> {
+  const response = await request(
+    `/sources/${encodeURIComponent(source)}/file?path=${encodeURIComponent(path)}`,
+  );
+  if (!response.ok) {
+    throw new Error(`Open shared document failed: ${response.status}`);
+  }
+  const blob = await response.blob();
+  const name = path.split("/").pop() || "document";
+  return new File([blob], name);
+}
+
+/** 编辑器的保存落点：共享源 + 源内相对路径（即"编辑原文档"）。 */
+export interface SharedTarget {
+  source: string;
+  path: string;
+}
+
+/**
+ * 把编辑后的文档写回共享源，覆盖共享盘上的原文件。
+ *
+ * 保存失败（目录只读、权限不足）抛出异常，由编辑器把保存状态标记为错误，
+ * 不会静默改成浏览器下载——否则用户会以为已经存回原文件了。
+ */
+export async function saveSharedDocument(
+  source: string,
+  path: string,
+  data: Uint8Array | ArrayBuffer,
+): Promise<void> {
+  const response = await request(
+    `/sources/${encodeURIComponent(source)}/file?path=${encodeURIComponent(path)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: new Blob([data as ArrayBuffer]),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Save shared document failed: ${response.status}`);
   }
 }

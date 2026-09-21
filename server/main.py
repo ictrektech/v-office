@@ -9,6 +9,10 @@ Serves a minimal REST API for the VOS deployment of V-Office:
     PUT    /api/v1/files/{name}           create or overwrite one document
     PATCH  /api/v1/files/{name}           rename one document
     DELETE /api/v1/files/{name}           delete one document
+    GET    /api/v1/sources                list browsable sources (shared / NAS)
+    GET    /api/v1/sources/{s}/entries    list one directory of a shared source
+    GET    /api/v1/sources/{s}/file       download one document from a shared source
+    PUT    /api/v1/sources/{s}/file       write an edited document back (edit in place)
 
 Every request (except /healthz and /client-log) must carry a VOS OIDC Fastpath
 access token as `Authorization: Bearer <token>`. The token is verified against
@@ -330,6 +334,276 @@ async def rename_file(
 
 
 # ============================================================================
+# 共享文档源（只读浏览）
+#
+# 「哪些目录能被应用访问」由平台侧的「数据访问授权」决定（公共目录 / 用户数据
+# 目录），VOS 把授权结果注入 VOS_APP_EXPOSED_PATH 并只读挂到容器内 /exposed：
+#     /exposed/volumes/<工作区>/public                 公共目录
+#     /exposed/volumes/<工作区>/users/<用户名>/data     用户数据目录
+# 应用这一侧不提供任何授权配置，只负责"把已挂载的目录列出来、把选中的文件给
+# 编辑器"——平台不会替应用列目录，也不会知道怎么把 pptx 交给编辑器渲染。
+#
+# 这些源一律只读。共享盘通常是多应用共用的权威数据，误写不可逆；用户在编辑器
+# 里「保存」时写入的仍是自己的私有目录（DATA_ROOT/<user>），与既有保存链路
+# 完全一致，因此本模块只提供列目录与取文件两个动作。
+# ============================================================================
+
+# 平台授权目录的挂载点（VOS 注入 VOS_APP_EXPOSED_PATH 后由 compose 挂到此路径）
+SHARED_ROOT = Path(os.environ.get("V_OFFICE_SHARED_ROOT", "/exposed"))
+# 独立部署（非 VOS）自挂目录的逃生口，默认 /nas 不存在时不产生任何源；
+# VOS 部署无需设置，NAS 目录也走平台的「数据访问授权」。
+NAS_ROOT = Path(os.environ.get("V_OFFICE_NAS_ROOT", "/nas"))
+
+# 是否允许把编辑后的文档写回共享源（默认允许）。共享源是否真的可写还取决于
+# 平台授权时的「访问权限」（读写）与 compose 的挂载参数；设为 0/false 可在应用
+# 侧强制退回只读：写接口一律 403，源列表也标记为只读。
+SHARED_WRITABLE = os.environ.get("V_OFFICE_SHARED_WRITABLE", "1").lower() not in (
+    "0",
+    "false",
+    "no",
+)
+
+# 能在浏览列表里出现并可直接打开的扩展名（与编辑器内核能力对齐）
+BROWSABLE_SUFFIXES = frozenset(
+    {
+        ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+        ".odt", ".ods", ".odp", ".rtf", ".csv", ".txt", ".md", ".pdf",
+    }
+)
+
+# 单次列目录的条目上限：NAS 上动辄数万文件的目录会把响应和前端一起拖死
+MAX_SOURCE_ENTRIES = 3000
+
+# 浏览时统一跳过的系统目录（NAS / 共享盘常见）
+SOURCE_SKIP_NAMES = frozenset(
+    {
+        "lost+found", "System Volume Information", "$RECYCLE.Bin",
+        "@eaDir", "#recycle", "node_modules",
+    }
+)
+
+
+def _document_sources() -> list[dict]:
+    """当前可用的只读文档源。目录不存在即视为未部署，前端据此隐藏入口。"""
+    sources: list[dict] = []
+    if SHARED_ROOT.is_dir():
+        sources.append(
+            {
+                "id": "shared",
+                "name": "共享目录",
+                "kind": "shared",
+                "readOnly": not SHARED_WRITABLE,
+            }
+        )
+    if NAS_ROOT.is_dir():
+        sources.append(
+            {
+                "id": "nas",
+                "name": "NAS",
+                "kind": "nas",
+                "readOnly": not SHARED_WRITABLE,
+            }
+        )
+    return sources
+
+
+def source_root(source: str) -> Path:
+    """把源标识解析为已存在、已解析软链的根目录。"""
+    if source == "shared":
+        root = SHARED_ROOT
+    elif source == "nas":
+        root = NAS_ROOT
+    else:
+        raise HTTPException(status_code=404, detail="unknown source")
+    try:
+        resolved = root.resolve(strict=True)
+    except OSError:
+        raise HTTPException(status_code=404, detail="source unavailable")
+    if not resolved.is_dir():
+        raise HTTPException(status_code=404, detail="source unavailable")
+    return resolved
+
+
+def source_target(source: str, rel: str) -> Path:
+    """把源内相对路径解析为绝对路径，并确保解析（含软链）后仍在源根内。"""
+    root = source_root(source)
+    cleaned = (rel or "").strip().replace("\\", "/").lstrip("/")
+    if cleaned in ("", "."):
+        return root
+    target = (root / cleaned).resolve()
+    if target != root and root not in target.parents:
+        raise HTTPException(status_code=400, detail="path escapes source root")
+    return target
+
+
+def _source_relpath(root: Path, path: Path) -> str:
+    if path == root:
+        return ""
+    return path.relative_to(root).as_posix()
+
+
+def _source_entry(root: Path, child: Path) -> Optional[dict]:
+    """构造一个条目；目录照收，文件仅收可打开的文档类型，其余返回 None。"""
+    try:
+        stat = child.stat()  # 跟随软链：坏链/无权限在此返回 None
+    except OSError:
+        return None
+    if child.is_dir():
+        return {
+            "name": child.name,
+            "path": _source_relpath(root, child),
+            "isDir": True,
+            "size": 0,
+            "modified": int(stat.st_mtime),
+        }
+    if child.suffix.lower() not in BROWSABLE_SUFFIXES:
+        return None
+    return {
+        "name": child.name,
+        "path": _source_relpath(root, child),
+        "isDir": False,
+        "size": stat.st_size,
+        "modified": int(stat.st_mtime),
+    }
+
+
+@app.get("/api/v1/sources")
+async def list_sources(request: Request) -> JSONResponse:
+    """列出可浏览的只读文档源（共享目录 / NAS）。"""
+    await current_username(request)
+    return JSONResponse({"sources": _document_sources()})
+
+
+@app.get("/api/v1/sources/{source}/entries")
+async def list_source_entries(
+    source: str, request: Request, path: str = ""
+) -> JSONResponse:
+    """列出某个文档源下的一级内容（子目录 + 可打开的文档）。"""
+    await current_username(request)
+    root = source_root(source)
+    directory = source_target(source, path)
+    if not directory.is_dir():
+        raise HTTPException(status_code=404, detail="directory not found")
+
+    try:
+        children = sorted(directory.iterdir(), key=lambda p: p.name.lower())
+    except OSError as exc:
+        raise HTTPException(status_code=403, detail=f"cannot read directory: {exc}")
+
+    entries: list[dict] = []
+    truncated = False
+    for child in children:
+        if len(entries) >= MAX_SOURCE_ENTRIES:
+            truncated = True
+            break
+        name = child.name
+        if name.startswith(".") or name in SOURCE_SKIP_NAMES:
+            continue
+        # 软链解析后再判归属：防止 <共享目录>/link -> /etc 之类的越权导航
+        try:
+            resolved_child = child.resolve()
+        except OSError:
+            continue
+        if resolved_child != root and root not in resolved_child.parents:
+            continue
+        entry = _source_entry(root, child)
+        if entry is None:
+            continue
+        entries.append(entry)
+
+    # 目录在前、其余按名称排序，和常见文件浏览器一致
+    entries.sort(key=lambda item: (not item["isDir"], item["name"].lower()))
+
+    rel = _source_relpath(root, directory)
+    parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
+    return JSONResponse(
+        {
+            "source": source,
+            "path": rel,
+            "parent": parent,
+            "entries": entries,
+            "truncated": truncated,
+        }
+    )
+
+
+@app.get("/api/v1/sources/{source}/file")
+async def get_source_file(source: str, request: Request, path: str) -> FileResponse:
+    """下载（打开）源里的一个文档，供浏览器端编辑器加载。"""
+    await current_username(request)
+    if not path:
+        raise HTTPException(status_code=400, detail="missing path")
+    target = source_target(source, path)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    if target.suffix.lower() not in BROWSABLE_SUFFIXES:
+        raise HTTPException(status_code=400, detail="unsupported file type")
+    return FileResponse(
+        target, filename=target.name, media_type="application/octet-stream"
+    )
+
+
+def _require_writable(source: str) -> None:
+    """写入前的准入检查：应用侧开关 + 源必须存在。"""
+    if not SHARED_WRITABLE:
+        raise HTTPException(status_code=403, detail="shared source is read-only")
+    source_root(source)
+
+
+def _atomic_write(target: Path, body: bytes) -> None:
+    """同目录临时文件 + os.replace 落盘，避免写到一半把原文档截断。
+
+    共享盘（SMB/NFS）可能是只读挂载或权限不足，这类错误统一折算成 403，
+    让前端能明确提示"该目录不可写"而不是笼统的 500。
+    """
+    tmp = target.with_name(target.name + ".v-office-tmp")
+    try:
+        tmp.write_bytes(body)
+        os.replace(tmp, target)
+    except OSError as exc:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        LOG.warning("shared write failed at %s: %s", target, exc)
+        raise HTTPException(status_code=403, detail="shared source is not writable")
+
+
+@app.put("/api/v1/sources/{source}/file")
+async def put_source_file(source: str, request: Request, path: str) -> JSONResponse:
+    """把编辑后的文档写回共享源——即"编辑 NAS 上的原文档"。
+
+    覆盖已有文件；文件不存在时作为新文档创建（父目录必须已存在）。写回始终
+    落在原路径上，因此共享盘上的文件名/位置保持不变。
+    """
+    await current_username(request)
+    if not path:
+        raise HTTPException(status_code=400, detail="missing path")
+    _require_writable(source)
+
+    target = source_target(source, path)
+    if target.suffix.lower() not in BROWSABLE_SUFFIXES:
+        raise HTTPException(status_code=400, detail="unsupported file type")
+    if target.exists() and not target.is_file():
+        raise HTTPException(status_code=400, detail="target is not a file")
+    if not target.parent.is_dir():
+        raise HTTPException(status_code=404, detail="directory not found")
+
+    length = request.headers.get("Content-Length")
+    if length and length.isdigit() and int(length) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="file too large")
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="empty body")
+    if len(body) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="file too large")
+
+    _atomic_write(target, body)
+    LOG.info("shared saved %s (%d bytes)", target, len(body))
+    return JSONResponse({"status": "ok", "path": path, "size": len(body)})
+
+
+# ============================================================================
 # WOPI host —— Collabora Online 集成
 #
 # Collabora 不接触用户凭证：前端先向本服务换取一个短时效 access_token，
@@ -436,16 +710,19 @@ def _wopi_sig(payload: bytes) -> str:
     )
 
 
-def issue_wopi_token(username: str, name: str, can_write: bool = True) -> str:
-    body = json.dumps(
-        {
-            "u": username,
-            "n": name,
-            "w": can_write,
-            "e": int(time.time()) + WOPI_TOKEN_TTL,
-        },
-        separators=(",", ":"),
-    ).encode("utf-8")
+def issue_wopi_token(
+    username: str, name: str, can_write: bool = True, source: str = ""
+) -> str:
+    payload = {
+        "u": username,
+        "n": name,
+        "w": can_write,
+        "e": int(time.time()) + WOPI_TOKEN_TTL,
+    }
+    # s 非空表示这是共享源里的文档，name 即源内相对路径；缺省是应用私有存储
+    if source:
+        payload["s"] = source
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     return f"{_b64e(body)}.{_wopi_sig(body)}"
 
 
@@ -476,6 +753,23 @@ def _wopi_identity(request: Request, name: str) -> dict:
     if data.get("n") != name:
         raise HTTPException(status_code=403, detail="token does not match file")
     return data
+
+
+def _wopi_target(data: dict, name: str) -> Path:
+    """按令牌解析文档落点：共享源走源内相对路径，否则走用户私有目录。"""
+    source = str(data.get("s") or "")
+    if source:
+        return source_target(source, name)
+    return safe_target(str(data["u"]), name)
+
+
+def _wopi_can_write(data: dict) -> bool:
+    if not data.get("w", True):
+        return False
+    # 共享源还要看应用侧开关：只读模式下即便令牌允许写入也拒绝
+    if data.get("s") and not SHARED_WRITABLE:
+        return False
+    return True
 
 
 async def _collabora_editor_url(wopi_src: str, token: str) -> str:
@@ -551,73 +845,78 @@ async def wopi_status() -> JSONResponse:
 
 
 @app.post("/api/v1/wopi/session")
-async def wopi_session(request: Request, name: str) -> JSONResponse:
-    """前端调用：为一个文档换取 Collabora 编辑器地址与 access_token。"""
-    username = await current_username(request)
-    target = safe_target(username, name)
-    if not target.is_file():
-        raise HTTPException(status_code=404, detail="file not found")
+async def wopi_session(
+    request: Request, name: str = "", source: str = "", path: str = ""
+) -> JSONResponse:
+    """前端调用：为一个文档换取 Collabora 编辑器地址与 access_token。
 
-    can_write = request.query_params.get("edit", "1") not in ("0", "false")
-    token = issue_wopi_token(username, name, can_write)
-    wopi_src = f"{WOPI_PUBLIC_BASE.rstrip('/')}/wopi/files/{quote(name, safe='')}"
+    不带 source：应用私有存储里的文档，name 为文件名。
+    带 source/path：共享源（平台授权目录 / NAS）里的文档，path 为源内相对路径，
+    此时 Collabora 通过 WOPI 直接读写**原文件**，保存即写回共享盘。
+    """
+    username = await current_username(request)
+    want_write = request.query_params.get("edit", "1") not in ("0", "false")
+
+    if source:
+        if not path:
+            raise HTTPException(status_code=400, detail="missing path")
+        target = source_target(source, path)
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="file not found")
+        if target.suffix.lower() not in BROWSABLE_SUFFIXES:
+            raise HTTPException(status_code=400, detail="unsupported file type")
+        doc_name = path
+        can_write = want_write and SHARED_WRITABLE
+        token = issue_wopi_token(username, doc_name, can_write, source)
+    else:
+        if not name:
+            raise HTTPException(status_code=400, detail="missing name")
+        target = safe_target(username, name)
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="file not found")
+        doc_name = name
+        can_write = want_write
+        token = issue_wopi_token(username, doc_name, can_write)
+
+    # 共享源的相对路径保留正斜杠（{name:path} 路由可接住多级路径），
+    # 私有文件名照旧整体转义。
+    safe_for_url = "/" if source else ""
+    wopi_src = (
+        f"{WOPI_PUBLIC_BASE.rstrip('/')}/wopi/files/"
+        f"{quote(doc_name, safe=safe_for_url)}"
+    )
     editor_url = await _collabora_editor_url(wopi_src, token)
-    LOG.info("wopi session for %s (%s)", name, username)
+    LOG.info("wopi session for %s (%s, source=%s)", doc_name, username, source or "-")
     return JSONResponse(
         {
             "editorUrl": editor_url,
             "wopiSrc": wopi_src,
             "accessToken": token,
-            "name": name,
+            "name": doc_name,
             "canWrite": can_write,
         }
     )
 
 
-@app.get("/wopi/files/{name}")
-async def wopi_check_file_info(name: str, request: Request) -> JSONResponse:
-    data = _wopi_identity(request, name)
-    username = str(data["u"])
-    target = safe_target(username, name)
-    if not target.is_file():
-        raise HTTPException(status_code=404, detail="file not found")
-    stat = target.stat()
-    return JSONResponse(
-        {
-            "BaseFileName": name,
-            "Size": stat.st_size,
-            "Version": str(int(stat.st_mtime)),
-            "OwnerId": username,
-            "UserId": username,
-            "UserFriendlyName": username,
-            "UserCanWrite": bool(data.get("w", True)),
-            "UserCanRename": False,
-            "SupportsUpdate": True,
-            "SupportsLocks": True,
-            "SupportsExtendedLockLength": True,
-            "SupportsGetLock": True,
-            "PostMessageOrigin": "*",
-        }
-    )
-
-
-@app.get("/wopi/files/{name}/contents")
+# 注意路由顺序：`{name:path}` 会吞掉多级路径，因此带 /contents 的两条必须
+# 声明在"仅 {name:path}"的 CheckFileInfo / 锁操作之前。
+@app.get("/wopi/files/{name:path}/contents")
 async def wopi_get_contents(name: str, request: Request) -> FileResponse:
     data = _wopi_identity(request, name)
-    target = safe_target(str(data["u"]), name)
+    target = _wopi_target(data, name)
     if not target.is_file():
         raise HTTPException(status_code=404, detail="file not found")
     return FileResponse(target, media_type="application/octet-stream")
 
 
-@app.post("/wopi/files/{name}/contents")
+@app.post("/wopi/files/{name:path}/contents")
 async def wopi_put_contents(name: str, request: Request) -> Response:
     data = _wopi_identity(request, name)
-    if not data.get("w", True):
+    if not _wopi_can_write(data):
         raise HTTPException(status_code=403, detail="read-only token")
 
     username = str(data["u"])
-    key = f"{username}/{name}"
+    key = f"{data.get('s') or 'private'}/{username}/{name}"
     lock = request.headers.get("X-WOPI-Lock", "")
     current = _wopi_locks.get(key, "")
     # 已被别人持锁且锁不一致 → 按 WOPI 规范回 409 并带上当前锁
@@ -628,26 +927,58 @@ async def wopi_put_contents(name: str, request: Request) -> Response:
             headers={"X-WOPI-Lock": current},
         )
 
-    target = safe_target(username, name)
+    target = _wopi_target(data, name)
     length = request.headers.get("Content-Length")
     if length and length.isdigit() and int(length) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file too large")
     body = await request.body()
     if not body:
         raise HTTPException(status_code=400, detail="empty body")
-    tmp = target.with_name(target.name + ".tmp")
-    tmp.write_bytes(body)
-    os.replace(tmp, target)
+    if len(body) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="file too large")
+    if data.get("s"):
+        _atomic_write(target, body)
+    else:
+        tmp = target.with_name(target.name + ".tmp")
+        tmp.write_bytes(body)
+        os.replace(tmp, target)
     LOG.info("wopi saved %s for %s (%d bytes)", name, username, len(body))
     return Response(status_code=200)
 
 
-@app.post("/wopi/files/{name}")
+@app.get("/wopi/files/{name:path}")
+async def wopi_check_file_info(name: str, request: Request) -> JSONResponse:
+    data = _wopi_identity(request, name)
+    username = str(data["u"])
+    target = _wopi_target(data, name)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    stat = target.stat()
+    return JSONResponse(
+        {
+            "BaseFileName": name.rsplit("/", 1)[-1],
+            "Size": stat.st_size,
+            "Version": str(int(stat.st_mtime)),
+            "OwnerId": username,
+            "UserId": username,
+            "UserFriendlyName": username,
+            "UserCanWrite": _wopi_can_write(data),
+            "UserCanRename": False,
+            "SupportsUpdate": True,
+            "SupportsLocks": True,
+            "SupportsExtendedLockLength": True,
+            "SupportsGetLock": True,
+            "PostMessageOrigin": "*",
+        }
+    )
+
+
+@app.post("/wopi/files/{name:path}")
 async def wopi_file_operations(name: str, request: Request) -> Response:
     """WOPI 锁操作：通过 X-WOPI-Override 区分 LOCK/UNLOCK/REFRESH_LOCK/GET_LOCK。"""
     data = _wopi_identity(request, name)
     username = str(data["u"])
-    key = f"{username}/{name}"
+    key = f"{data.get('s') or 'private'}/{username}/{name}"
     override = request.headers.get("X-WOPI-Override", "").upper()
     client_lock = request.headers.get("X-WOPI-Lock", "")
     current = _wopi_locks.get(key, "")

@@ -14,7 +14,12 @@ import { convertDocBuffer } from "./doc-convert";
 import { stripHeaderFooterFloats } from "./docx-fix";
 import { allPlugins, featuredPlugins, getPluginConfigUrl } from "./plugins";
 import { isVOSMode } from "@/utils/vos/fastpath";
-import { saveStoredFile, clientLog } from "@/utils/vos/storage";
+import {
+  saveStoredFile,
+  saveSharedDocument,
+  clientLog,
+  type SharedTarget,
+} from "@/utils/vos/storage";
 
 // AI 助手插件统一走 VOS 网关形态路径（本地 dev 由 next.config.ts rewrite 映射到
 // public/ai-assistant 镜像副本，VOS 由平台网关路由到 agentic-search 应用）。
@@ -74,6 +79,13 @@ export class EditorServer {
    */
   private originalData: ArrayBuffer | null = null;
   private originalName = "";
+  /**
+   * 打开共享源（平台授权目录 / NAS）里的文档时记录的保存落点。
+   *
+   * 非空表示"编辑的是共享盘上的原文件"：保存直接写回该路径，而不是写进
+   * 用户私有目录（Collabora 会话同样按它走 WOPI 直接编辑原文件）。
+   */
+  private sharedTarget: SharedTarget | null = null;
   /** 新建文档在编辑期间静默保存用的默认文件名（退出时 UI 据此弹框改名） */
   private untitledSavedAs: string | null = null;
   private requestFileName:
@@ -108,7 +120,16 @@ export class EditorServer {
 
   async open(
     file: File,
-    { fileType, fileName }: { fileType?: string; fileName?: string } = {},
+    {
+      fileType,
+      fileName,
+      sharedTarget,
+    }: {
+      fileType?: string;
+      fileName?: string;
+      /** 共享源文档：保存时写回该路径（编辑原文档） */
+      sharedTarget?: SharedTarget | null;
+    } = {},
   ) {
     const title = fileName || file.name;
     this.fileType = fileType || getFileExt(file.name) || "docx";
@@ -116,6 +137,7 @@ export class EditorServer {
     this.id = randomId();
     this.title = title;
     this.isNewDocument = false;
+    this.sharedTarget = sharedTarget ?? null;
     const buffer = await file.arrayBuffer();
     this.originalData = buffer;
     this.originalName = title;
@@ -135,6 +157,7 @@ export class EditorServer {
     this.isNewDocument = true;
     this.originalData = null;
     this.originalName = "";
+    this.sharedTarget = null;
     const documentType = getDocumentType(this.fileType);
 
     let binData: Uint8Array | null = null;
@@ -185,6 +208,7 @@ export class EditorServer {
     this.id = randomId();
     this.title = title;
     this.isNewDocument = false;
+    this.sharedTarget = null;
     this.loadPromise = this.loadDocument(() => loader(url), this.fileType);
 
     return {
@@ -224,6 +248,16 @@ export class EditorServer {
   getOriginalDocument(): { name: string; data: ArrayBuffer } | null {
     if (!this.originalData || !this.originalName) return null;
     return { name: this.originalName, data: this.originalData };
+  }
+
+  /**
+   * 当前文档的共享源落点（非空表示编辑的是共享盘上的原文件）。
+   *
+   * 编辑器页据此决定 Collabora 会话参数：共享源文档不再往私有存储推副本，
+   * 而是让 Collabora 通过 WOPI 直接读写原文件。
+   */
+  getSharedTarget(): SharedTarget | null {
+    return this.sharedTarget;
   }
 
   private async loadDocument(
@@ -636,6 +670,25 @@ export class EditorServer {
           this.exportFileName = null;
           resolver({ fileName: exportedName, data: finalOutput });
           return { status: "ok" };
+        }
+
+        // 共享源文档（平台授权目录 / NAS）：保存写回原路径，即"编辑共享盘上的
+        // 原文件"。写入失败（目录只读、权限不足）保持错误状态，不改走浏览器
+        // 下载，否则用户会误以为已经存回原文件。
+        if (vosMode && this.sharedTarget) {
+          const { source, path } = this.sharedTarget;
+          clientLog(
+            `shared-save-begin: ${source}:${path} (${finalOutput.byteLength} bytes)`,
+          );
+          try {
+            await saveSharedDocument(source, path, finalOutput);
+            clientLog(`shared-save-ok: ${path}`);
+            return { status: "ok" };
+          } catch (error) {
+            clientLog(`shared-save-failed: ${path} :: ${error}`);
+            console.error("Failed to save document back to shared source", error);
+            return { status: "error" };
+          }
         }
 
         // VOS deployment: persist directly into the private app storage.

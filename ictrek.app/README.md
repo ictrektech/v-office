@@ -9,7 +9,7 @@
 ## 应用形态
 
 - `v-office-web`：纯前端静态服务。Next.js 静态导出 + OnlyOffice 前端资源（fonts / sdkjs / web-apps / sdkjs-plugins），Caddy 在容器内 80 端口提供静态服务，无状态。Excel / PPT 以及新建文档仍由它内置的 OnlyOffice 内核渲染。
-- `v-office-storage`：应用私有文档存储服务（FastAPI，见 fork 内 `server/`）。校验 VOS OIDC Fastpath 令牌后，只读写 `${VOS_APP_STORAGE_PATH}/documents/<用户名>/` 中的文档；同时充当 Collabora 的 WOPI host（`/wopi/files/...`）。
+- `v-office-storage`：应用私有文档存储服务（FastAPI，见 fork 内 `server/`）。校验 VOS OIDC Fastpath 令牌后，只读写 `${VOS_APP_STORAGE_PATH}/documents/<用户名>/` 中的文档；同时充当 Collabora 的 WOPI host（`/wopi/files/...`），并按平台的「数据访问授权」浏览/编辑已挂载的共享目录 `/exposed`（公共目录 / 用户数据目录，保存直接写回原文件）。
 - `v-office-collabora`：Word 文档（doc/docx）的编辑器内核（Collabora Online / LibreOffice 内核，见 fork 内 `collabora/`）。WPS 导出的复杂表单类文档在 OnlyOffice 内核下会出现表格错位、页眉浮动对象被当成正文环绕障碍，改用它渲染；它通过 WOPI 直接读写 storage，不接触用户凭证。
 - `amd` / `arm` 两个 profile，安装时由 VOS 为每个 profile 各选择三个镜像（web + storage + collabora）。
 
@@ -27,6 +27,7 @@
 - `VOS_OIDC_USERINFO_URL`（默认 `http://172.17.0.1:8105/v1000/oauth2/userinfo`）：存储服务校验令牌的 VOS 地址，默认适配 VOS backend host 网络 `SITE_PORT=8105` 部署，一般不改。
 - `V_OFFICE_WOPI_SECRET`：存储服务为 Collabora 签发 WOPI access_token 的 HMAC 密钥，只在本服务内校验（Collabora 只回传令牌、不解析）。留空用镜像内的开发默认值，生产部署建议填一段随机字符串。
 - Collabora 相关地址无需配置，由 compose 固定：storage 的 `V_OFFICE_WOPI_PUBLIC_BASE` 与 Collabora 的 `aliasgroup1` 都取服务别名 `http://v-office-storage:5000`（两者必须一致），下发给浏览器的 `V_OFFICE_COLLABORA_URL` 取相对路径 `/app/com.ictrek.v-office/cool`。
+- 共享目录无需配置：授权在平台侧完成（应用管理页的「数据访问授权」，可选「公共目录」或「用户数据」，访问权限选「读写」），VOS 把授权结果注入 `VOS_APP_EXPOSED_PATH`，compose 以读写方式挂到 storage 容器的 `/exposed:rslave`；应用只负责列出、打开并写回其中的文档，不参与授权决策。要让共享盘只读，把挂载改成 `:rslave,ro` 或设 `V_OFFICE_SHARED_WRITABLE=0`，此时保存会报错且不改动原文件。目录未授权、未挂载时首页不显示该入口。
 
 ## 目录结构
 
@@ -56,9 +57,13 @@
 - `utils/editor/collabora.ts`：新增 Collabora（WOPI）客户端——Word 文档改用 Collabora 内核打开，本地文件先原样推入应用私有存储再换会话，取不到会话自动回退 OnlyOffice。
 - `collabora/`：新增 Collabora 镜像定义（上游 `collabora/code` + 固化的 `extra_params`）。
 - `server/main.py`：新增 WOPI host（`/api/v1/wopi/session` 签发一次性令牌、`/wopi/files/...` 读写文档）。
-- `components/main/open-view.tsx`：新增"我的文档"列表以及逐文件打开、下载、删除操作（VOS 模式才显示）。
+- `server/main.py`：新增共享源接口——`GET /api/v1/sources` 列源、`GET /api/v1/sources/{s}/entries` 列目录、`GET|PUT /api/v1/sources/{s}/file` 读/写文档（PUT 即"编辑原文档"，写回共享盘原路径）；带路径穿越与软链逃逸校验，只收 Office/PDF 后缀，可用 `V_OFFICE_SHARED_ROOT` 改挂载点、`V_OFFICE_SHARED_WRITABLE=0` 强制只读。
+- `server/main.py`：WOPI 令牌支持共享源（令牌里带 `s` 源标识，`name` 即源内相对路径），Word 文档由 Collabora 通过 WOPI 直接读写共享盘上的原文件；`/wopi/files/{name:path}` 承接多级路径。
+- `utils/vos/storage.ts`：新增共享源客户端（`listSharedSources` / `browseSharedSource` / `openSharedDocument` / `saveSharedDocument`）。
+- `components/shared-source-browser.tsx`：新增共享目录列表视图（面包屑、逐层进入、打开或下载原文件），嵌在「我的文档」区块内。
+- `components/main/open-view.tsx`：新增"我的文档"列表以及逐文件打开、下载、删除操作（VOS 模式才显示）；同一区块内新增按源切换的页签，把共享目录（平台授权目录 / NAS）里的文件与私有文档并列显示（storage 报告存在已挂载源时才显示）。
 - `components/main/api-guide-view.tsx`：新增 API 接入指南，包含版本化接口、认证说明和可复制的 Agent 调用示例。
-- `utils/editor/server.ts`：保存时 VOS 模式改为自动入云，新文档首次保存先命名；打开文档时保留转换前的原始字节，供 Collabora 内核前推入存储。
+- `utils/editor/server.ts`：保存时 VOS 模式改为自动入云，新文档首次保存先命名；打开共享源文档时记录保存落点，保存写回原文件；打开文档时保留转换前的原始字节，供 Collabora 内核前推入存储。
 - `app/editor/page.tsx`：新增首次保存命名对话框和关闭当前文档按钮。
 - `package.json`：新增 `js-sha256` 依赖（PKCE S256，兼容非 HTTPS 门户）。
 - `messages/*.json`：新增 `myDocs*` 文案键（"我的文档"入口）（en/zh-CN/zh-TW 译文，其余 locale 暂用英文兜底）。

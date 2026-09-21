@@ -65,6 +65,10 @@ x-v-office-storage-base: &v-office-storage-base
     DATA_ROOT: /data
     VOS_APP_VERSION: "__APP_VERSION__"
     VOS_OIDC_USERINFO_URL: ${VOS_OIDC_USERINFO_URL:-http://172.17.0.1:8105/v1000/oauth2/userinfo}
+    # --- 共享文档源（授权与挂载都由平台负责，见下方 volumes）---
+    # 平台「数据访问授权」里授权的公共目录 / 用户数据目录，VOS 注入
+    # VOS_APP_EXPOSED_PATH 并挂到容器内 /exposed。
+    V_OFFICE_SHARED_ROOT: /exposed
     # --- WOPI host（Collabora 集成）---
     # Collabora 回调本服务读写文档的地址；必须与 Collabora 的 aliasgroup1
     # 完全一致，否则 Collabora 会以「不在白名单」拒绝打开文档。用服务别名
@@ -82,7 +86,13 @@ x-v-office-storage-base: &v-office-storage-base
     # 生产建议在安装配置里显式填写——固定值可让重启不影响在途编辑会话。
     V_OFFICE_WOPI_SECRET: ${V_OFFICE_WOPI_SECRET:-}
   volumes:
+    # 应用私有存储：每个用户读写自己名下的 documents/<用户名>/
     - ${VOS_APP_STORAGE_PATH}/documents:/data
+    # 平台「数据访问授权」里授权的目录，VOS 注入 VOS_APP_EXPOSED_PATH。其下
+    # volumes/<工作区>/public 是公共目录，volumes/<工作区>/users/<用户>/data
+    # 是用户数据目录。读写挂载：编辑器保存时直接写回共享盘上的原文件；
+    # 想退回只读，把下面的 :rslave 改成 :rslave,ro（或设 V_OFFICE_SHARED_WRITABLE=0）。
+    - ${VOS_APP_EXPOSED_PATH:-/nonexistent}:/exposed:rslave
   labels:
     - "traefik.enable=true"
     - "traefik.docker.network=vos_default"

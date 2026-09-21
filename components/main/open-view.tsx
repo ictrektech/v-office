@@ -24,6 +24,7 @@ import type { Template } from "@/utils/templates";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { useAppStore, useResolvedLanguage } from "@/store";
 import DocumentNameDialog from "@/components/document-name-dialog";
+import { SharedSourceBrowser } from "@/components/shared-source-browser";
 import { sitePath } from "@/utils/site-path";
 import {
   getRecentFiles,
@@ -39,7 +40,10 @@ import {
   openStoredFile,
   deleteStoredFile,
   renameStoredFile,
+  listSharedSources,
   whoAmI,
+  type SharedSource,
+  type SharedTarget,
   type StoredFile,
 } from "@/utils/vos/storage";
 
@@ -70,14 +74,24 @@ export function OpenView({
     null,
   );
 
+  // Shared folders (platform-authorized dirs / host NAS). Hidden when the
+  // storage service reports no mounted source. activeSourceId 为 null 时显示
+  // 用户私有目录，否则在同一个区块里显示对应共享源的内容。
+  const [sharedSources, setSharedSources] = useState<SharedSource[]>([]);
+  const [activeSourceId, setActiveSourceId] = useState<string | null>(null);
+  const activeSource =
+    sharedSources.find((source) => source.id === activeSourceId) ?? null;
+
   const router = useRouter();
   const server = useAppStore((state) => state.server);
   const language = useResolvedLanguage();
+  const zh = language.toLowerCase().startsWith("zh");
 
   // Load recent files on mount
   useEffect(() => {
     loadRecentFiles();
     initStoredFiles();
+    initSharedSources();
   }, []);
 
   const loadRecentFiles = async () => {
@@ -216,6 +230,24 @@ export function OpenView({
       ),
     );
     setRenamingStoredFile(null);
+  };
+
+  const initSharedSources = async () => {
+    try {
+      setSharedSources(await listSharedSources());
+    } catch {
+      // 未挂载共享目录，或不在 VOS 部署下：静默隐藏入口
+      setSharedSources([]);
+    }
+  };
+
+  /**
+   * 打开共享目录里的文档。文档先整份下载到浏览器，再交给编辑器；同时记录
+   * 保存落点，保存时写回共享盘上的原文件（编辑原文档）。
+   */
+  const handleSharedFileOpen = async (file: File, target: SharedTarget) => {
+    await server.open(file, { sharedTarget: target });
+    router.push("/editor");
   };
 
   const handleFileSelectWithHandle = async (
@@ -376,14 +408,15 @@ export function OpenView({
         </div>
       </section>
 
-      {/* My Documents (VOS deployment: private app storage) */}
+      {/* Document surface: private app storage and shared folders (platform
+          authorized dirs / host NAS) live in this one block, switched by tabs. */}
       {storedState !== "off" && (
         <section>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-bold">
               {t({ id: "myDocsTitle", message: "My Documents" })}
             </h2>
-            {storedUser && (
+            {activeSource === null && storedUser && (
               <span
                 className="inline-flex items-center gap-1.5 text-xs text-text-secondary"
                 title={t({
@@ -395,8 +428,87 @@ export function OpenView({
                 {storedUser}
               </span>
             )}
+            {activeSource && (
+              <span className="inline-flex items-center gap-1.5 text-xs text-text-secondary">
+                <HardDrive className="w-3.5 h-3.5" />
+                {activeSource.kind === "nas"
+                  ? "NAS"
+                  : zh
+                    ? "共享目录"
+                    : "Shared folder"}
+                <span className="opacity-70">
+                  {activeSource.readOnly
+                    ? zh
+                      ? "· 只读"
+                      : "· read-only"
+                    : zh
+                      ? "· 保存写回原文件"
+                      : "· saves in place"}
+                </span>
+              </span>
+            )}
           </div>
-          {storedState === "checking" ? (
+
+          {/* Source tabs: private storage first, then every mounted shared folder */}
+          {sharedSources.length > 0 && (
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setActiveSourceId(null)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+                  activeSource === null
+                    ? "bg-primary/10 text-primary"
+                    : "text-text-secondary hover:bg-muted",
+                )}
+              >
+                <HardDrive className="h-3.5 w-3.5" />
+                {zh ? "我的文档" : "My Documents"}
+              </button>
+              {sharedSources.map((source) => (
+                <button
+                  key={source.id}
+                  type="button"
+                  onClick={() => setActiveSourceId(source.id)}
+                  title={
+                    source.readOnly
+                      ? zh
+                        ? "该目录为只读，只能打开与下载"
+                        : "Read-only: open and download only"
+                      : zh
+                        ? "打开即可编辑，保存写回共享盘上的原文件"
+                        : "Open to edit; saving writes back to the original file"
+                  }
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+                    activeSourceId === source.id
+                      ? "bg-primary/10 text-primary"
+                      : "text-text-secondary hover:bg-muted",
+                  )}
+                >
+                  {source.kind === "nas" ? (
+                    <HardDrive className="h-3.5 w-3.5" />
+                  ) : (
+                    <FolderOpen className="h-3.5 w-3.5" />
+                  )}
+                  {source.kind === "nas"
+                    ? "NAS"
+                    : zh
+                      ? "共享目录"
+                      : "Shared folder"}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {activeSource ? (
+            <SharedSourceBrowser
+              key={activeSource.id}
+              language={language}
+              source={activeSource}
+              onOpen={handleSharedFileOpen}
+            />
+          ) : storedState === "checking" ? (
             <div className="bg-card/50 border border-border rounded-xl overflow-hidden shadow-sm p-12 flex items-center justify-center">
               <div className="text-center text-text-secondary">
                 <HardDrive className="w-8 h-8 mx-auto mb-2 animate-pulse" />

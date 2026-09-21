@@ -18,6 +18,7 @@
  */
 
 import { getVOSAccessToken, clearVOSAuthCache } from "@/utils/vos/fastpath";
+import type { SharedTarget } from "@/utils/vos/storage";
 
 const STORAGE_API =
   process.env.NEXT_PUBLIC_STORAGE_API || "/api/com.ictrek.v-office/api/v1";
@@ -74,12 +75,17 @@ export interface CollaboraSession {
 export async function fetchCollaboraSession(
   name: string,
   edit = true,
+  sharedTarget?: SharedTarget | null,
   retry = true,
 ): Promise<CollaboraSession | null> {
   const token = await getVOSAccessToken();
-  const url =
-    `${STORAGE_API}/wopi/session?name=${encodeURIComponent(name)}` +
-    `&edit=${edit ? 1 : 0}`;
+  const params = [`name=${encodeURIComponent(name)}`, `edit=${edit ? 1 : 0}`];
+  if (sharedTarget) {
+    // 共享源文档：storage 按 source+path 解析原文件并签发对应 WOPI 令牌
+    params.push(`source=${encodeURIComponent(sharedTarget.source)}`);
+    params.push(`path=${encodeURIComponent(sharedTarget.path)}`);
+  }
+  const url = `${STORAGE_API}/wopi/session?${params.join("&")}`;
 
   let resp: Response;
   try {
@@ -96,7 +102,7 @@ export async function fetchCollaboraSession(
 
   if (resp.status === 401 && retry) {
     clearVOSAuthCache();
-    return fetchCollaboraSession(name, edit, false);
+    return fetchCollaboraSession(name, edit, sharedTarget, false);
   }
   if (!resp.ok) return null;
 

@@ -113,5 +113,284 @@ class MountedDirectoryContractTest(unittest.IsolatedAsyncioTestCase):
         )
 
 
+class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
+    """只读共享源（/exposed、NAS 挂载目录）的浏览与打开契约。"""
+
+    async def asyncSetUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        base = Path(self.temp_dir.name)
+
+        main.DATA_ROOT = base / "data"
+        main.DATA_ROOT.mkdir()
+        main.AUTH_DISABLED = True
+
+        self._original_roots = (main.SHARED_ROOT, main.NAS_ROOT)
+        self.addCleanup(self._restore_roots)
+        self._original_writable = main.SHARED_WRITABLE
+        self.addCleanup(self._restore_shared_writable)
+
+        # 模拟 VOS 授权目录：workspace 下 public（公共）+ users/<用户>/data（私人）
+        self.shared_root = base / "exposed"
+        workspace = self.shared_root / "volumes" / "wr"
+        (workspace / "public").mkdir(parents=True)
+        (workspace / "users" / "alice" / "data").mkdir(parents=True)
+        (self.shared_root / "lost+found").mkdir()
+        main.SHARED_ROOT = self.shared_root
+        main.NAS_ROOT = base / "nas-unmounted"
+
+        public = workspace / "public"
+        (public / "report.pptx").write_bytes(b"deck")
+        (public / "budget.xlsx").write_bytes(b"sheet")
+        (public / "notes.txt").write_bytes(b"notes")
+        (public / "secret.exe").write_bytes(b"nope")
+        (public / ".hidden.docx").write_bytes(b"hidden")
+        (workspace / "users" / "alice" / "data" / "private-notes.docx").write_bytes(b"priv")
+
+        transport = httpx.ASGITransport(app=main.app)
+        self.client = httpx.AsyncClient(transport=transport, base_url="http://test")
+        self.addAsyncCleanup(self.client.aclose)
+
+    def _restore_roots(self) -> None:
+        main.SHARED_ROOT, main.NAS_ROOT = self._original_roots
+
+    def _restore_shared_writable(self) -> None:
+        main.SHARED_WRITABLE = self._original_writable
+
+    async def test_browses_the_vos_workspace_layout(self) -> None:
+        sources = await self.client.get("/api/v1/sources")
+        root_entries = await self.client.get("/api/v1/sources/shared/entries")
+        public_entries = await self.client.get(
+            "/api/v1/sources/shared/entries",
+            params={"path": "volumes/wr/public"},
+        )
+        user_entries = await self.client.get(
+            "/api/v1/sources/shared/entries",
+            params={"path": "volumes/wr/users/alice/data"},
+        )
+
+        self.assertEqual(
+            [source["id"] for source in sources.json()["sources"]], ["shared"]
+        )
+        # 默认允许写回（编辑原文档）；只读开关的用例见 test_read_only_mode_*
+        self.assertFalse(sources.json()["sources"][0]["readOnly"])
+        # lost+found 属系统目录，不入列表
+        self.assertEqual(
+            [entry["name"] for entry in root_entries.json()["entries"]], ["volumes"]
+        )
+        self.assertEqual(
+            [entry["name"] for entry in public_entries.json()["entries"]],
+            ["budget.xlsx", "notes.txt", "report.pptx"],
+        )
+        self.assertEqual(public_entries.json()["path"], "volumes/wr/public")
+        self.assertEqual(public_entries.json()["parent"], "volumes/wr")
+        self.assertEqual(
+            [entry["name"] for entry in user_entries.json()["entries"]],
+            ["private-notes.docx"],
+        )
+
+    async def test_entries_expose_directory_metadata(self) -> None:
+        entries = (
+            await self.client.get(
+                "/api/v1/sources/shared/entries",
+                params={"path": "volumes/wr"},
+            )
+        ).json()["entries"]
+
+        self.assertEqual([entry["name"] for entry in entries], ["public", "users"])
+        self.assertTrue(all(entry["isDir"] for entry in entries))
+        self.assertEqual(
+            [entry["path"] for entry in entries],
+            ["volumes/wr/public", "volumes/wr/users"],
+        )
+
+    async def test_opens_a_document_and_rejects_everything_else(self) -> None:
+        opened = await self.client.get(
+            "/api/v1/sources/shared/file",
+            params={"path": "volumes/wr/public/report.pptx"},
+        )
+        traversal = await self.client.get(
+            "/api/v1/sources/shared/file", params={"path": "../../../etc/passwd"}
+        )
+        unsupported = await self.client.get(
+            "/api/v1/sources/shared/file",
+            params={"path": "volumes/wr/public/secret.exe"},
+        )
+        missing = await self.client.get(
+            "/api/v1/sources/shared/file",
+            params={"path": "volumes/wr/public/missing.pptx"},
+        )
+        no_path = await self.client.get("/api/v1/sources/shared/file")
+        empty_path = await self.client.get(
+            "/api/v1/sources/shared/file", params={"path": ""}
+        )
+
+        self.assertEqual(opened.status_code, 200)
+        self.assertEqual(opened.content, b"deck")
+        self.assertEqual(traversal.status_code, 400)
+        self.assertEqual(unsupported.status_code, 400)
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(no_path.status_code, 422)  # 缺少必填 path
+        self.assertEqual(empty_path.status_code, 400)
+
+    async def test_directory_traversal_is_rejected_for_listing(self) -> None:
+        escaped = await self.client.get(
+            "/api/v1/sources/shared/entries", params={"path": "../.."}
+        )
+        unknown_source = await self.client.get("/api/v1/sources/nas/entries")
+
+        self.assertEqual(escaped.status_code, 400)
+        # NAS 未挂载：源不可用（前端因此不会展示入口）
+        self.assertEqual(unknown_source.status_code, 404)
+
+    async def test_symlinks_escaping_the_root_are_hidden(self) -> None:
+        outside = Path(self.temp_dir.name) / "outside"
+        outside.mkdir()
+        (outside / "leak.docx").write_bytes(b"leak")
+        link = self.shared_root / "escape"
+        try:
+            link.symlink_to(outside, target_is_directory=True)
+        except OSError as exc:  # pragma: no cover - 平台不支持软链时跳过
+            self.skipTest(f"symlinks unavailable: {exc}")
+
+        entries = (await self.client.get("/api/v1/sources/shared/entries")).json()
+        opened = await self.client.get(
+            "/api/v1/sources/shared/file", params={"path": "escape/leak.docx"}
+        )
+
+        self.assertEqual([entry["name"] for entry in entries["entries"]], ["volumes"])
+        self.assertEqual(opened.status_code, 400)
+
+    async def test_no_sources_when_nothing_is_mounted(self) -> None:
+        main.SHARED_ROOT = Path(self.temp_dir.name) / "absent"
+
+        sources = await self.client.get("/api/v1/sources")
+
+        self.assertEqual(sources.json()["sources"], [])
+
+    async def test_writes_an_edited_document_back_to_the_shared_file(self) -> None:
+        public = self.shared_root / "volumes" / "wr" / "public"
+        report = public / "report.pptx"
+
+        saved = await self.client.put(
+            "/api/v1/sources/shared/file",
+            params={"path": "volumes/wr/public/report.pptx"},
+            content=b"edited-deck",
+        )
+        read_back = await self.client.get(
+            "/api/v1/sources/shared/file",
+            params={"path": "volumes/wr/public/report.pptx"},
+        )
+        created = await self.client.put(
+            "/api/v1/sources/shared/file",
+            params={"path": "volumes/wr/public/new-deck.pptx"},
+            content=b"fresh",
+        )
+        unsupported = await self.client.put(
+            "/api/v1/sources/shared/file",
+            params={"path": "volumes/wr/public/secret.exe"},
+            content=b"x",
+        )
+        traversal = await self.client.put(
+            "/api/v1/sources/shared/file",
+            params={"path": "../../escape.pptx"},
+            content=b"x",
+        )
+        empty = await self.client.put(
+            "/api/v1/sources/shared/file",
+            params={"path": "volumes/wr/public/report.pptx"},
+            content=b"",
+        )
+
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(report.read_bytes(), b"edited-deck")
+        self.assertEqual(read_back.content, b"edited-deck")
+        self.assertEqual(created.status_code, 200)
+        self.assertTrue((public / "new-deck.pptx").is_file())
+        self.assertEqual(unsupported.status_code, 400)
+        self.assertEqual(traversal.status_code, 400)
+        self.assertEqual(empty.status_code, 400)
+        # 非法的空写入不得破坏原文件
+        self.assertEqual(report.read_bytes(), b"edited-deck")
+
+    async def test_read_only_mode_refuses_writes(self) -> None:
+        report = self.shared_root / "volumes" / "wr" / "public" / "report.pptx"
+        main.SHARED_WRITABLE = False
+
+        sources = await self.client.get("/api/v1/sources")
+        blocked = await self.client.put(
+            "/api/v1/sources/shared/file",
+            params={"path": "volumes/wr/public/report.pptx"},
+            content=b"nope",
+        )
+
+        self.assertTrue(sources.json()["sources"][0]["readOnly"])
+        self.assertEqual(blocked.status_code, 403)
+        self.assertEqual(report.read_bytes(), b"deck")
+
+    async def test_collabora_wopi_edits_the_shared_original(self) -> None:
+        report = self.shared_root / "volumes" / "wr" / "public" / "report.pptx"
+        token = await self._shared_wopi_token("volumes/wr/public/report.pptx")
+
+        info = await self.client.get(
+            "/wopi/files/volumes/wr/public/report.pptx",
+            params={"access_token": token},
+        )
+        contents = await self.client.get(
+            "/wopi/files/volumes/wr/public/report.pptx/contents",
+            params={"access_token": token},
+        )
+        saved = await self.client.post(
+            "/wopi/files/volumes/wr/public/report.pptx/contents",
+            params={"access_token": token},
+            content=b"collabora-edited",
+        )
+        mismatched = await self.client.get(
+            "/wopi/files/volumes/wr/public/budget.xlsx",
+            params={"access_token": token},
+        )
+
+        self.assertEqual(info.status_code, 200)
+        self.assertEqual(info.json()["BaseFileName"], "report.pptx")
+        self.assertTrue(info.json()["UserCanWrite"])
+        self.assertEqual(contents.content, b"deck")
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(report.read_bytes(), b"collabora-edited")
+        # 令牌绑定具体文件：换成同目录另一个文件必须被拒
+        self.assertEqual(mismatched.status_code, 403)
+
+    async def test_read_only_wopi_token_cannot_overwrite_the_original(self) -> None:
+        report = self.shared_root / "volumes" / "wr" / "public" / "report.pptx"
+        token = await self._shared_wopi_token("volumes/wr/public/report.pptx", edit=False)
+
+        info = await self.client.get(
+            "/wopi/files/volumes/wr/public/report.pptx",
+            params={"access_token": token},
+        )
+        blocked = await self.client.post(
+            "/wopi/files/volumes/wr/public/report.pptx/contents",
+            params={"access_token": token},
+            content=b"nope",
+        )
+
+        self.assertFalse(info.json()["UserCanWrite"])
+        self.assertEqual(blocked.status_code, 403)
+        self.assertEqual(report.read_bytes(), b"deck")
+
+    async def _shared_wopi_token(self, path: str, edit: bool = True) -> str:
+        """换一份共享源的 WOPI 令牌；Collabora discovery 在单测里用桩替代。"""
+        with patch.object(
+            main,
+            "_collabora_editor_url",
+            AsyncMock(return_value="http://collabora/editor"),
+        ):
+            response = await self.client.post(
+                "/api/v1/wopi/session",
+                params={"source": "shared", "path": path, "edit": "1" if edit else "0"},
+            )
+        self.assertEqual(response.status_code, 200)
+        return response.json()["accessToken"]
+
+
 if __name__ == "__main__":
     unittest.main()

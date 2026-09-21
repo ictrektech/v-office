@@ -610,11 +610,20 @@ export default function Page() {
             document.title;
           // 本地文件只在浏览器内存里，Collabora 服务端取不到，先原样推一份
           // 到 storage；?url= 指向存储时文件本来就在，不必重复上传。
-          const ready = original
-            ? await pushDocumentToStorage(original.name, original.data)
-            : Boolean(fileUrl);
+          // 共享源（平台授权目录 / NAS）文档本来就在服务端：不推副本，让
+          // Collabora 通过 WOPI 直接读写原文件，保存即写回共享盘。
+          const sharedTarget = server.getSharedTarget();
+          const ready = sharedTarget
+            ? true
+            : original
+              ? await pushDocumentToStorage(original.name, original.data)
+              : Boolean(fileUrl);
           const session = ready
-            ? await fetchCollaboraSession(name, editingRef.current)
+            ? await fetchCollaboraSession(
+                name,
+                editingRef.current,
+                sharedTarget,
+              )
             : null;
           if (session) {
             // 销毁已有 OnlyOffice 实例，避免事件监听残留
