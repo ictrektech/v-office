@@ -374,6 +374,10 @@ BROWSABLE_SUFFIXES = frozenset(
 # 单次列目录的条目上限：NAS 上动辄数万文件的目录会把响应和前端一起拖死
 MAX_SOURCE_ENTRIES = 3000
 
+# 递归遍历（NAS 数据里的「公共」/「用户」分类）：最大深度与单次返回文档数
+MAX_WALK_DEPTH = 8
+MAX_WALK_DOCUMENTS = 3000
+
 # 授权目录解析：扫描挂载锚点（public / users/<用户>/data）的最大深度
 # （覆盖 volumes/<空间>/users/<用户>/data 这类层级）
 MAX_ROOT_SCAN_DEPTH = 6
@@ -465,16 +469,16 @@ def _shared_roots(username: str) -> list[dict]:
     public_dirs, user_dirs = _find_anchors(SHARED_ROOT, MAX_ROOT_SCAN_DEPTH)
 
     for path in public_dirs:
-        add(path, "公共目录")
+        add(path, "公共")
 
     own = [p for p in user_dirs if p.parent.name == username]
     if own:
         for path in own:
-            add(path, f"用户数据（{username}）")
+            add(path, f"用户（{username}）")
     elif len(user_dirs) == 1:
         # 单用户设备上 OIDC 用户名与目录名可能不一致：只有一个用户数据目录时
         # 直接采用它，多用户时宁可不显示也不越权。
-        add(user_dirs[0], f"用户数据（{user_dirs[0].parent.name}）")
+        add(user_dirs[0], f"用户（{user_dirs[0].parent.name}）")
 
     if not roots:
         # 非平台标准布局：/exposed 下的一级目录即为已授权目录
@@ -659,6 +663,89 @@ async def get_source_file(source: str, request: Request, path: str) -> FileRespo
         raise HTTPException(status_code=400, detail="unsupported file type")
     return FileResponse(
         target, filename=target.name, media_type="application/octet-stream"
+    )
+
+
+@app.get("/api/v1/sources/{source}/documents")
+async def list_source_documents(
+    source: str, request: Request, path: str = ""
+) -> JSONResponse:
+    """递归遍历一个授权目录，平铺返回其中所有可打开的文档。
+
+    挂载进来的盘里，文档常埋在多级子目录里（如 A/B/C/…），让用户一层层点进去
+    很费劲。这里一次遍历到底，返回每个文档的源内路径与所在子目录，前端直接
+    平铺展示；点开编辑、保存写回原路径。
+
+    安全与成本：深度上限 MAX_WALK_DEPTH，文档数上限 MAX_WALK_DOCUMENTS（超出
+    截断并置 truncated=true）；跳过隐藏目录与系统目录；软链解析后越出授权根
+    目录的一律不遍历。
+    """
+    await current_username(request)
+    root = source_root(source)
+    directory = source_target(source, path)
+    if not directory.is_dir():
+        raise HTTPException(status_code=404, detail="directory not found")
+
+    documents: list[dict] = []
+    truncated = False
+    stack: list[tuple[Path, int]] = [(directory, 0)]
+    while stack and not truncated:
+        current, depth = stack.pop()
+        if depth > MAX_WALK_DEPTH:
+            continue
+        try:
+            children = sorted(current.iterdir(), key=lambda p: p.name.lower())
+        except OSError:
+            continue
+        for child in children:
+            name = child.name
+            if name.startswith(".") or name in SOURCE_SKIP_NAMES:
+                continue
+            try:
+                resolved = child.resolve()
+            except OSError:
+                continue
+            # 软链解析后必须仍在授权根目录内，避免顺着链接遍历到盘外
+            if resolved != root and root not in resolved.parents:
+                continue
+            try:
+                is_dir = child.is_dir()
+            except OSError:
+                continue
+            if is_dir:
+                stack.append((child, depth + 1))
+                continue
+            if child.suffix.lower() not in BROWSABLE_SUFFIXES:
+                continue
+            if len(documents) >= MAX_WALK_DOCUMENTS:
+                truncated = True
+                break
+            try:
+                stat = child.stat()
+            except OSError:
+                continue
+            documents.append(
+                {
+                    "name": name,
+                    "path": _source_relpath(root, child),
+                    "folder": (
+                        ""
+                        if child.parent == directory
+                        else _source_relpath(directory, child.parent)
+                    ),
+                    "size": stat.st_size,
+                    "modified": int(stat.st_mtime),
+                }
+            )
+
+    documents.sort(key=lambda item: (item["name"].lower(), item["path"]))
+    return JSONResponse(
+        {
+            "source": source,
+            "path": _source_relpath(root, directory),
+            "documents": documents,
+            "truncated": truncated,
+        }
     )
 
 

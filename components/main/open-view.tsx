@@ -13,8 +13,7 @@ import {
   Loader2,
   Pencil,
   PenLine,
-  ChevronLeft,
-  ChevronRight,
+  RotateCcw,
 } from "lucide-react";
 import { useExtracted } from "next-intl";
 import { cn } from "@/lib/utils";
@@ -25,9 +24,9 @@ import { getDocConfig } from "@/lib/document-types";
 import type { Template } from "@/utils/templates";
 import { usePageTitle } from "@/hooks/use-page-title";
 import {
-  useSharedDocuments,
-  type SharedDocumentRow,
-} from "@/hooks/use-shared-documents";
+  useNasDocuments,
+  type NasDocument,
+} from "@/hooks/use-nas-documents";
 import { useAppStore, useResolvedLanguage } from "@/store";
 import DocumentNameDialog from "@/components/document-name-dialog";
 import { sitePath } from "@/utils/site-path";
@@ -89,23 +88,22 @@ export function OpenView({
   // VOS 镜像在构建期写入了 basePath：用它区分"独立部署"与"VOS 部署但没拿到登录态"
   const isVOSDeployment = Boolean(process.env.NEXT_PUBLIC_BASE_PATH);
 
-  // 平台「数据访问授权」挂进来的目录（公共目录 / 我的数据 / NAS）里的文档，
-  // 与私有文档并列显示在同一个列表里。
+  // 「NAS 数据」页签：平台授权挂进来的每个目录是一个分类（公共 / 用户），
+  // 点分类就递归遍历该目录，把里面所有可打开的文档平铺出来。
   const {
-    tabs: sharedTabs,
-    activeTab: sharedTab,
-    selectTab: selectSharedTab,
-    rows: sharedRows,
-    loading: sharedLoading,
-    error: sharedError,
-    nav: sharedNav,
-    crumbs: sharedCrumbs,
-    busyKey: sharedBusyKey,
-    setBusyKey: setSharedBusyKey,
-    enterFolder: enterSharedFolder,
-    goBack: leaveSharedFolder,
-    downloadFile: downloadSharedFile,
-  } = useSharedDocuments(language);
+    categories: nasCategories,
+    activeCategory: nasCategory,
+    selectCategory: selectNasCategory,
+    documents: nasDocuments,
+    scanning: nasScanning,
+    error: nasError,
+    truncated: nasTruncated,
+    busyKey: nasBusyKey,
+    setBusyKey: setNasBusyKey,
+    downloadDocument: downloadNasDocument,
+    rescan: rescanNas,
+  } = useNasDocuments(language);
+  const [view, setView] = useState<"mine" | "nas">("mine");
 
   // Load recent files on mount
   useEffect(() => {
@@ -274,22 +272,22 @@ export function OpenView({
   };
 
   /**
-   * 打开授权目录里的文档：整份下载到浏览器交给编辑器，同时记下保存落点，
-   * 保存时写回共享盘上的原文件（即编辑原文档）。
+   * 打开 NAS 数据里的文档：整份下载到浏览器交给编辑器，同时记下保存落点，
+   * 保存时写回盘上的原文件（即编辑原文档）。
    */
-  const openSharedRow = async (row: SharedDocumentRow) => {
-    if (sharedBusyKey) return;
-    setSharedBusyKey(row.key);
+  const openNasDocument = async (doc: NasDocument) => {
+    if (nasBusyKey) return;
+    setNasBusyKey(doc.key);
     try {
-      const file = await openSharedDocument(row.sourceId, row.path);
+      const file = await openSharedDocument(doc.sourceId, doc.path);
       await server.open(file, {
-        sharedTarget: { source: row.sourceId, path: row.path },
+        sharedTarget: { source: doc.sourceId, path: doc.path },
       });
       router.push("/editor");
     } catch (error) {
-      console.error("Failed to open shared document:", error);
+      console.error("Failed to open NAS document:", error);
     } finally {
-      setSharedBusyKey(null);
+      setNasBusyKey(null);
     }
   };
 
@@ -451,16 +449,20 @@ export function OpenView({
         </div>
       </section>
 
-      {/* 文档列表：一个页签 = 我的文档（私有目录）或一个已授权的共享目录
-          （平台「数据访问授权」挂进来的目录，页签名即目录名）；进入共享目录
-          的子目录时给出返回入口。 */}
+      {/* 文档区：两个页签
+          「我的文档」用户自己创建 / 上传的文档（应用私有目录）；
+          「NAS 数据」平台授权挂进来的盘，进去后按分类（公共 / 用户）递归遍历。 */}
       {storedState !== "off" && (
         <section>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-bold">
-              {t({ id: "myDocsTitle", message: "My Documents" })}
+              {view === "mine"
+                ? t({ id: "myDocsTitle", message: "My Documents" })
+                : zh
+                  ? "NAS 数据"
+                  : "NAS data"}
             </h2>
-            {storedUser && (
+            {view === "mine" && storedUser && (
               <span
                 className="inline-flex items-center gap-1.5 text-xs text-text-secondary"
                 title={t({
@@ -472,17 +474,33 @@ export function OpenView({
                 {storedUser}
               </span>
             )}
+            {view === "nas" && (
+              <button
+                type="button"
+                onClick={() => rescanNas()}
+                disabled={nasScanning}
+                title={
+                  zh ? "重新遍历当前分类" : "Rescan the current category"
+                }
+                className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:bg-muted disabled:opacity-50"
+              >
+                <RotateCcw
+                  className={cn("h-3.5 w-3.5", nasScanning && "animate-spin")}
+                />
+                {zh ? "重新扫描" : "Rescan"}
+              </button>
+            )}
           </div>
 
-          {/* 页签：我的文档 + 每个已授权的共享目录（目录名即页签名） */}
-          {sharedTabs.length > 0 && (
+          {/* 一级页签：我的文档 / NAS 数据 */}
+          {nasCategories.length > 0 && (
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={() => selectSharedTab(null)}
+                onClick={() => setView("mine")}
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
-                  sharedTab === null
+                  view === "mine"
                     ? "bg-primary/10 text-primary"
                     : "text-text-secondary hover:bg-muted",
                 )}
@@ -490,55 +508,155 @@ export function OpenView({
                 <HardDrive className="h-3.5 w-3.5" />
                 {zh ? "我的文档" : "My Documents"}
               </button>
-              {sharedTabs.map((tab) => (
+              <button
+                type="button"
+                onClick={() => setView("nas")}
+                title={
+                  zh
+                    ? "平台授权挂进来的盘，点开后遍历其中可编辑的文档"
+                    : "Mounted drives from Data Access Authorization; scans for editable documents"
+                }
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+                  view === "nas"
+                    ? "bg-primary/10 text-primary"
+                    : "text-text-secondary hover:bg-muted",
+                )}
+              >
+                <FolderOpen className="h-3.5 w-3.5" />
+                {zh ? "NAS 数据" : "NAS data"}
+              </button>
+            </div>
+          )}
+
+          {/* NAS 数据内的分类：公共 / 用户（<用户名>） */}
+          {view === "nas" && (
+            <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-border pb-2">
+              {nasCategories.map((category) => (
                 <button
-                  key={tab.key}
+                  key={category.key}
                   type="button"
-                  onClick={() => selectSharedTab(tab)}
-                  title={
-                    zh
-                      ? "打开即可编辑，保存写回该目录里的原文件"
-                      : "Open to edit; saving writes back to the original file"
-                  }
+                  onClick={() => selectNasCategory(category)}
                   className={cn(
                     "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
-                    sharedTab?.key === tab.key
+                    nasCategory?.key === category.key
                       ? "bg-primary/10 text-primary"
                       : "text-text-secondary hover:bg-muted",
                   )}
                 >
                   <FolderOpen className="h-3.5 w-3.5" />
-                  {tab.label}
+                  {category.label}
                 </button>
               ))}
+              {nasScanning && (
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-text-secondary" />
+              )}
             </div>
           )}
 
-          {/* 在授权目录的子目录里：返回上一级 + 当前位置 */}
-          {sharedNav && (
-            <div className="mb-3 flex flex-wrap items-center gap-1.5 text-xs text-text-secondary">
-              <button
-                type="button"
-                onClick={() => void leaveSharedFolder()}
-                className="inline-flex items-center gap-1 rounded-lg bg-muted px-2.5 py-1.5 font-medium text-foreground transition-colors hover:bg-sidebar-hover"
-              >
-                <ChevronLeft className="h-3.5 w-3.5" />
-                {zh ? "返回" : "Back"}
-              </button>
-              {sharedCrumbs.map((crumb) => (
-                <span key={crumb.path} className="flex items-center gap-1.5">
-                  <span className="opacity-40">/</span>
-                  <span className="max-w-[14rem] truncate">{crumb.name}</span>
-                </span>
-              ))}
-            </div>
+          {view === "nas" && nasError && (
+            <p className="mb-3 text-xs text-red-500">{nasError}</p>
           )}
 
-          {sharedError && (
-            <p className="mb-3 text-xs text-red-500">{sharedError}</p>
-          )}
-
-          {sharedTab !== null && sharedLoading && sharedRows.length === 0 ? (
+          {view === "nas" ? (
+            nasScanning ? (
+              <div className="bg-card/50 border border-border rounded-xl overflow-hidden shadow-sm p-12 flex items-center justify-center">
+                <div className="text-center text-text-secondary">
+                  <Loader2 className="w-8 h-8 mx-auto mb-2 animate-spin" />
+                  <p className="text-sm">
+                    {zh
+                      ? `正在遍历「${nasCategory?.label ?? ""}」中的文档…`
+                      : `Scanning “${nasCategory?.label ?? ""}” for documents…`}
+                  </p>
+                </div>
+              </div>
+            ) : nasDocuments.length === 0 ? (
+              <div className="bg-card/50 border border-border rounded-xl overflow-hidden shadow-sm p-12 flex items-center justify-center">
+                <div className="text-center text-text-secondary">
+                  <FolderOpen className="w-12 h-12 mx-auto mb-3 opacity-40" />
+                  <p className="text-sm font-medium mb-1">
+                    {zh
+                      ? "该分类下没有可打开的文档"
+                      : "No openable documents in this category"}
+                  </p>
+                  <p className="text-xs">
+                    {zh
+                      ? "已递归遍历所有子目录，只识别 Word / Excel / PPT / PDF"
+                      : "All subfolders were scanned; only Word / Excel / PPT / PDF are recognised"}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="">
+                {nasDocuments.map((doc) => (
+                  <div
+                    key={doc.key}
+                    onClick={() => void openNasDocument(doc)}
+                    className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-sidebar-hover border-b border-border last:border-0 transition-colors group cursor-pointer"
+                    title={
+                      zh
+                        ? "点击打开并编辑原文档，保存写回原文件"
+                        : "Click to open and edit; saving writes back to the original"
+                    }
+                  >
+                    <div className="flex min-w-0 items-center gap-4">
+                      <DocumentIcon
+                        type={doc.name.split(".").pop()?.toLowerCase() || ""}
+                        size="sm"
+                      />
+                      <div className="min-w-0 text-left">
+                        <p className="truncate font-semibold text-sm">
+                          {doc.name}
+                        </p>
+                        <p className="text-[10px] text-text-secondary">
+                          {[
+                            doc.folder ? `${doc.folder}/` : null,
+                            formatFileSize(doc.size),
+                            formatRelativeTime(doc.modified * 1000),
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="ml-4 flex shrink-0 items-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-2 text-xs font-medium text-primary transition-colors group-hover:bg-primary/15">
+                        {nasBusyKey === doc.key ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <FolderOpen className="h-4 w-4" />
+                        )}
+                        {zh ? "打开" : "Open"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void downloadNasDocument(doc);
+                        }}
+                        disabled={nasBusyKey !== null}
+                        title={zh ? "下载原文件" : "Download original"}
+                        className="rounded-lg bg-muted p-2 text-foreground transition-colors hover:bg-sidebar-hover disabled:opacity-50"
+                      >
+                        {nasBusyKey === doc.key ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Download className="h-4 w-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {nasTruncated && (
+                  <p className="mt-2 text-[10px] text-text-secondary">
+                    {zh
+                      ? "文档太多，仅列出前一部分；请改用更具体的授权目录。"
+                      : "Too many documents — only the first part is listed. Narrow the authorized folder."}
+                  </p>
+                )}
+              </div>
+            )
+          ) : storedState === "checking" ? (
             <div className="bg-card/50 border border-border rounded-xl overflow-hidden shadow-sm p-12 flex items-center justify-center">
               <div className="text-center text-text-secondary">
                 <HardDrive className="w-8 h-8 mx-auto mb-2 animate-pulse" />
@@ -550,58 +668,30 @@ export function OpenView({
                 </p>
               </div>
             </div>
-          ) : sharedTab === null && storedState === "checking" ? (
-            <div className="bg-card/50 border border-border rounded-xl overflow-hidden shadow-sm p-12 flex items-center justify-center">
-              <div className="text-center text-text-secondary">
-                <HardDrive className="w-8 h-8 mx-auto mb-2 animate-pulse" />
-                <p className="text-sm">
-                  {t({
-                    id: "myDocsLoading",
-                    message: "Loading your documents...",
-                  })}
-                </p>
-              </div>
-            </div>
-          ) : (sharedTab === null
-              ? storedFiles.length === 0
-              : sharedRows.length === 0) ? (
+          ) : storedFiles.length === 0 ? (
             <div className="bg-card/50 border border-border rounded-xl overflow-hidden shadow-sm p-12 flex items-center justify-center">
               <div className="text-center text-text-secondary">
                 <HardDrive className="w-12 h-12 mx-auto mb-3 opacity-40" />
                 <p className="text-sm font-medium mb-1">
-                  {sharedTab === null
-                    ? t({ id: "myDocsEmpty", message: "No documents yet" })
-                    : zh
-                      ? "该目录下没有可打开的文档"
-                      : "No openable documents here"}
+                  {t({ id: "myDocsEmpty", message: "No documents yet" })}
                 </p>
                 <p className="text-xs">
-                  {sharedTab === null
-                    ? t({
-                        id: "myDocsEmptyHint",
-                        message:
-                          "Documents saved in the editor are stored in your private directory",
-                      })
-                    : zh
-                      ? "只显示 Word / Excel / PPT / PDF"
-                      : "Only Word / Excel / PPT / PDF files are listed"}
+                  {t({
+                    id: "myDocsEmptyHint",
+                    message:
+                      "Documents saved in the editor are stored in your private directory",
+                  })}
                 </p>
-                {sharedTab === null && sharedTabs.length > 0 && (
+                {nasCategories.length > 0 && (
                   <p className="mt-1 text-[10px] opacity-80">
                     {zh
-                      ? `平台授权目录（${sharedTabs
-                          .map((tab) => tab.label)
-                          .join("、")}）里的文档在对应页签中`
-                      : `Documents from authorized folders (${sharedTabs
-                          .map((tab) => tab.label)
-                          .join(", ")}) are under their own tabs`}
+                      ? "平台授权盘里的文档在「NAS 数据」页签中（公共 / 用户）"
+                      : "Documents on mounted drives are under the “NAS data” tab (public / user)"}
                   </p>
                 )}
               </div>
             </div>
           ) : (
-            <>
-            {sharedTab === null && (
             <div className="">
               {storedFiles.map((file) => (
                 <div
@@ -696,94 +786,6 @@ export function OpenView({
                 </div>
               ))}
             </div>
-            )}
-
-            {/* 授权目录（页签）里的内容：目录可逐层进入，文档点开即编辑，
-                保存写回共享盘上的原文件 */}
-            {sharedTab !== null &&
-              sharedRows.map((row) => (
-              <div
-                key={row.key}
-                onClick={() =>
-                  row.isDir
-                    ? void enterSharedFolder(row)
-                    : void openSharedRow(row)
-                }
-                className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-sidebar-hover border-b border-border last:border-0 transition-colors group cursor-pointer"
-                title={
-                  row.isDir
-                    ? zh
-                      ? "进入该文件夹"
-                      : "Open this folder"
-                    : zh
-                      ? "点击打开并编辑原文档"
-                      : "Click to open and edit the original"
-                }
-              >
-                <div className="flex min-w-0 items-center gap-4">
-                  {row.isDir ? (
-                    <FolderOpen className="h-4 w-4 shrink-0 text-amber-500" />
-                  ) : (
-                    <DocumentIcon
-                      type={row.name.split(".").pop()?.toLowerCase() || ""}
-                      size="sm"
-                    />
-                  )}
-                  <div className="min-w-0 text-left">
-                    <p className="truncate font-semibold text-sm">
-                      {row.name}
-                    </p>
-                    <p className="text-[10px] text-text-secondary">
-                      {[
-                        row.isDir
-                          ? zh
-                            ? "文件夹"
-                            : "Folder"
-                          : formatFileSize(row.size),
-                        row.isDir
-                          ? null
-                          : formatRelativeTime(row.modified * 1000),
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </p>
-                  </div>
-                </div>
-                <div className="ml-4 flex shrink-0 items-center gap-2">
-                  {row.isDir ? (
-                    <ChevronRight className="h-4 w-4 text-text-secondary" />
-                  ) : (
-                    <>
-                      <span className="inline-flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-2 text-xs font-medium text-primary transition-colors group-hover:bg-primary/15">
-                        {sharedBusyKey === row.key ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <FolderOpen className="h-4 w-4" />
-                        )}
-                        {zh ? "打开" : "Open"}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void downloadSharedFile(row);
-                        }}
-                        disabled={sharedBusyKey !== null}
-                        title={zh ? "下载原文件" : "Download original"}
-                        className="rounded-lg bg-muted p-2 text-foreground transition-colors hover:bg-sidebar-hover disabled:opacity-50"
-                      >
-                        {sharedBusyKey === row.key ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Download className="h-4 w-4" />
-                        )}
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-            ))}
-            </>
           )}
         </section>
       )}

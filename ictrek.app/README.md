@@ -61,8 +61,8 @@
 - `server/main.py`：授权目录解析——按平台语义把挂载点解析成「公共目录」（`public`）与「用户数据（<用户名>）」（`users/<用户名>/data`）两个入口，并按真实路径去重（平台同时挂 `<空间>` 与 `volumes/<别名>` 软链）；界面不出现 `volumes/<随机ID>` 等平台内部路径。
 - `server/main.py`：WOPI 令牌支持共享源（令牌里带 `s` 源标识，`name` 即源内相对路径），Word 文档由 Collabora 通过 WOPI 直接读写共享盘上的原文件；`/wopi/files/{name:path}` 承接多级路径。
 - `utils/vos/storage.ts`：新增共享源客户端（`listSharedSources` / `browseSharedSource` / `openSharedDocument` / `saveSharedDocument`）。
-- `hooks/use-shared-documents.ts`：新增共享目录页签数据源——每个授权目录（目录名即页签名，如 media_video；NAS 同理）一个页签，管理其内容的逐层进入与返回；完全空的授权目录不占页签。
-- `components/main/open-view.tsx`：新增"我的文档"列表以及逐文件打开、下载、删除操作（VOS 模式才显示）；同一区块内以页签区分「我的文档」（私有目录）与每个已授权的共享目录，共享目录里的文档打开即可编辑、保存写回原文件。
+- `hooks/use-nas-documents.ts`：新增「NAS 数据」数据源——授权目录解析成分类（公共 / 用户），点分类递归遍历该目录，把所有子目录里可打开的文档平铺出来并按分类缓存。
+- `components/main/open-view.tsx`：新增"我的文档"列表以及逐文件打开、下载、删除操作（VOS 模式才显示）；同一区块内含「我的文档」与「NAS 数据」两个页签，「NAS 数据」里是公共 / 用户两个分类，分类下平铺展示递归遍历出的文档，打开即可编辑、保存写回原文件。
 - `components/main/api-guide-view.tsx`：新增 API 接入指南，包含版本化接口、认证说明和可复制的 Agent 调用示例。
 - `utils/editor/server.ts`：保存时 VOS 模式改为自动入云，新文档首次保存先命名；打开共享源文档时记录保存落点，保存写回原文件；打开文档时保留转换前的原始字节，供 Collabora 内核前推入存储。
 - `app/editor/page.tsx`：新增首次保存命名对话框和关闭当前文档按钮。

@@ -54,6 +54,24 @@ export interface SharedListing {
   truncated: boolean;
 }
 
+/** 递归遍历出来的一个文档（NAS 数据分类下的平铺条目） */
+export interface SourceDocument {
+  name: string;
+  /** 源内相对路径，直接用于打开/下载 */
+  path: string;
+  /** 所在子目录（相对分类根，空串表示就在根目录下） */
+  folder: string;
+  size: number;
+  modified: number;
+}
+
+export interface SourceDocumentListing {
+  source: string;
+  path: string;
+  documents: SourceDocument[];
+  truncated: boolean;
+}
+
 export class StorageUnavailableError extends Error {
   constructor(message = "Storage unavailable outside VOS") {
     super(message);
@@ -212,6 +230,7 @@ export async function openSharedDocument(
   source: string,
   path: string,
 ): Promise<File> {
+
   const response = await request(
     `/sources/${encodeURIComponent(source)}/file?path=${encodeURIComponent(path)}`,
   );
@@ -221,6 +240,26 @@ export async function openSharedDocument(
   const blob = await response.blob();
   const name = path.split("/").pop() || "document";
   return new File([blob], name);
+}
+
+/**
+ * 递归遍历一个授权目录，拿到其中所有可打开的文档（平铺）。
+ *
+ * 挂载盘里的文档常埋在多层子目录里，服务端一次遍历到底并返回相对路径，
+ * 前端直接平铺展示，不需要用户逐层点进去。
+ */
+export async function listSourceDocuments(
+  source: string,
+  path = "",
+): Promise<SourceDocumentListing> {
+  const query = path ? `?path=${encodeURIComponent(path)}` : "";
+  const response = await request(
+    `/sources/${encodeURIComponent(source)}/documents${query}`,
+  );
+  if (!response.ok) {
+    throw new Error(`List source documents failed: ${response.status}`);
+  }
+  return (await response.json()) as SourceDocumentListing;
 }
 
 /** 编辑器的保存落点：共享源 + 源内相对路径（即"编辑原文档"）。 */

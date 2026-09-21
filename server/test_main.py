@@ -397,7 +397,7 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             [root["name"] for root in sources[0]["roots"]],
-            ["公共目录", "用户数据（alice）"],
+            ["公共", "用户（alice）"],
         )
         self.assertEqual(
             [root["path"] for root in sources[0]["roots"]],
@@ -421,7 +421,7 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             [root["name"] for root in roots],
-            ["公共目录", "用户数据（admin）"],
+            ["公共", "用户（admin）"],
         )
         self.assertEqual(
             [root["path"] for root in roots],
@@ -467,8 +467,62 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
 
         # 直挂路径与 volumes 别名软链指向同一目录：只保留一个入口，不重复
         self.assertEqual(
-            [root["name"] for root in sources[0]["roots"]], ["公共目录"]
+            [root["name"] for root in sources[0]["roots"]], ["公共"]
         )
+
+    async def test_walks_all_levels_and_flattens_documents(self) -> None:
+        """挂载 A/B/C 时，把 C 及其子目录里的可打开文档全部遍历出来。"""
+        base = Path(self.temp_dir.name) / "exposed-walk"
+        public = base / "volumes" / "space" / "public"
+        deep = public / "A" / "B" / "C"
+        deep.mkdir(parents=True)
+        (deep / "课件.pptx").write_bytes(b"deck")
+        (deep / "宣传.pptx").write_bytes(b"deck")
+        (deep / "素材.mp4").write_bytes(b"x")
+        (public / "顶层.xlsx").write_bytes(b"sheet")
+        hidden = public / ".thumbnails"
+        hidden.mkdir()
+        (hidden / "隐藏.docx").write_bytes(b"x")
+        (public / "lost+found").mkdir()
+        (public / "lost+found" / "系统.docx").write_bytes(b"x")
+        main.SHARED_ROOT = base
+
+        listing = (
+            await self.client.get(
+                "/api/v1/sources/shared/documents",
+                params={"path": "volumes/space/public"},
+            )
+        ).json()
+        by_name = {doc["name"]: doc for doc in listing["documents"]}
+
+        self.assertEqual(sorted(by_name), ["宣传.pptx", "课件.pptx", "顶层.xlsx"])
+        self.assertEqual(by_name["课件.pptx"]["folder"], "A/B/C")
+        self.assertEqual(by_name["顶层.xlsx"]["folder"], "")
+        self.assertEqual(
+            by_name["课件.pptx"]["path"], "volumes/space/public/A/B/C/课件.pptx"
+        )
+        self.assertFalse(listing["truncated"])
+
+    async def test_walk_stops_at_the_document_limit(self) -> None:
+        base = Path(self.temp_dir.name) / "exposed-walk-limit"
+        public = base / "volumes" / "space" / "public"
+        public.mkdir(parents=True)
+        for index in range(3):
+            (public / f"文档{index}.docx").write_bytes(b"x")
+        main.SHARED_ROOT = base
+        original = main.MAX_WALK_DOCUMENTS
+        main.MAX_WALK_DOCUMENTS = 2
+        self.addCleanup(setattr, main, "MAX_WALK_DOCUMENTS", original)
+
+        listing = (
+            await self.client.get(
+                "/api/v1/sources/shared/documents",
+                params={"path": "volumes/space/public"},
+            )
+        ).json()
+
+        self.assertEqual(len(listing["documents"]), 2)
+        self.assertTrue(listing["truncated"])
 
     async def test_keeps_a_folder_that_has_multiple_branches(self) -> None:
         """授权目录下确实有多条分支时不折叠，让用户自己逐层进入。"""
@@ -486,7 +540,7 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
         sources = (await self.client.get("/api/v1/sources")).json()["sources"]
 
         self.assertEqual(
-            [root["name"] for root in sources[0]["roots"]], ["公共目录"]
+            [root["name"] for root in sources[0]["roots"]], ["公共"]
         )
 
 
