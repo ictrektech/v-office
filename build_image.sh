@@ -72,7 +72,9 @@ Options:
   --dry-run              Print the plan without building or writing Feishu
   --target TARGET        Build target tag prefix: amd or arm (default: detect current machine)
   --sheet SHEET          Override Feishu sheet title list; comma-separated values are accepted
-  --tag TAG              Override the generated tag
+  --tag TAG              Override the generated tag (used as-is, no suffix logic)
+  --suffix SUFFIX        Append SUFFIX to the generated tag (e.g. v2 -> amd_YYYYMMDDv2);
+                         default is to auto-append _2, _3, … when the tag is already taken
   -h, --help             Show this help
 
 Environment:
@@ -479,6 +481,7 @@ update_feishu() {
 }
 
 TAG_OVERRIDE=""
+TAG_SUFFIX=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -522,6 +525,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --tag)
       TAG_OVERRIDE="$2"
+      shift 2
+      ;;
+    --suffix)
+      TAG_SUFFIX="$2"
       shift 2
       ;;
     --target)
@@ -602,7 +609,57 @@ if [[ "$DRY_RUN" != "1" && "$SKIP_BUILD" != "1" ]]; then
 fi
 
 DATE="$(date +%Y%m%d)"
-TAG="${TAG_OVERRIDE:-${PROFILE_TAG}_${DATE}}"
+BASE_TAG="${PROFILE_TAG}_${DATE}"
+
+# 本次要构建的镜像：判断 tag 是否已被占用时逐个查
+IMAGES_TO_BUILD=()
+[[ "$BUILD_WEB" == "1" ]] && IMAGES_TO_BUILD+=("$WEB_IMAGE")
+[[ "$BUILD_STORAGE" == "1" ]] && IMAGES_TO_BUILD+=("$STORAGE_IMAGE")
+[[ "$BUILD_COLLABORA" == "1" ]] && IMAGES_TO_BUILD+=("$COLLABORA_IMAGE")
+
+# tag 已被占用 = 本地有同名镜像，或远端仓库已存在该 tag。同日第二次构建若沿用
+# 同一个 tag，会覆盖掉飞书发布表里已记录的那一版，所以这里自动让位。
+tag_taken() {
+  local tag="$1" image
+  for image in "${IMAGES_TO_BUILD[@]}"; do
+    if docker image inspect "${image}:${tag}" >/dev/null 2>&1; then
+      return 0
+    fi
+    if command -v timeout >/dev/null 2>&1; then
+      if timeout 20 docker manifest inspect "${image}:${tag}" >/dev/null 2>&1; then
+        return 0
+      fi
+    elif docker manifest inspect "${image}:${tag}" >/dev/null 2>&1; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# 第一个没被占用的 tag：amd_20260922 -> amd_20260922_2 -> amd_20260922_3 …
+next_free_tag() {
+  local base="$1" candidate="$1" n=1
+  while tag_taken "$candidate"; do
+    n=$((n + 1))
+    candidate="${base}_${n}"
+  done
+  printf '%s\n' "$candidate"
+}
+
+if [[ -n "$TAG_OVERRIDE" ]]; then
+  # 显式 --tag：原样使用，不做加工
+  TAG="$TAG_OVERRIDE"
+elif [[ "$SKIP_BUILD" == "1" ]]; then
+  # --feishu-only：只登记已有 tag，不推导序号
+  TAG="$BASE_TAG"
+elif [[ -n "$TAG_SUFFIX" ]]; then
+  TAG="${BASE_TAG}${TAG_SUFFIX}"
+else
+  TAG="$(next_free_tag "$BASE_TAG")"
+  if [[ "$TAG" != "$BASE_TAG" ]]; then
+    log "Tag ${BASE_TAG} already exists; using ${TAG} for this build"
+  fi
+fi
 
 log "TARGET=${TARGET}"
 log "PROFILE_TAG=${PROFILE_TAG}"
