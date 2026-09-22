@@ -597,17 +597,8 @@ async def list_sources(request: Request) -> JSONResponse:
     return JSONResponse({"sources": _document_sources(username)})
 
 
-@app.get("/api/v1/sources/{source}/entries")
-async def list_source_entries(
-    source: str, request: Request, path: str = ""
-) -> JSONResponse:
-    """列出某个文档源下的一级内容（子目录 + 可打开的文档）。"""
-    await current_username(request)
-    root = source_root(source)
-    directory = source_target(source, path)
-    if not directory.is_dir():
-        raise HTTPException(status_code=404, detail="directory not found")
-
+def _read_entries_sync(root: Path, directory: Path) -> tuple[list[dict], bool]:
+    """同步读取一层目录（在工作线程里执行，别放事件循环上）。"""
     try:
         children = sorted(directory.iterdir(), key=lambda p: p.name.lower())
     except OSError as exc:
@@ -636,6 +627,25 @@ async def list_source_entries(
 
     # 目录在前、其余按名称排序，和常见文件浏览器一致
     entries.sort(key=lambda item: (not item["isDir"], item["name"].lower()))
+    return entries, truncated
+
+
+@app.get("/api/v1/sources/{source}/entries")
+async def list_source_entries(
+    source: str, request: Request, path: str = ""
+) -> JSONResponse:
+    """列出某个文档源下的一级内容（子目录 + 可打开的文档）。"""
+    await current_username(request)
+    root = source_root(source)
+    directory = source_target(source, path)
+    if not directory.is_dir():
+        raise HTTPException(status_code=404, detail="directory not found")
+
+    # 挂载盘上的目录读取是阻塞 syscall：丢到线程里跑，别挡住事件循环上的
+    # 其他请求（列文档 / 保存 / WOPI / 健康检查）。
+    entries, truncated = await asyncio.to_thread(
+        _read_entries_sync, root, directory
+    )
 
     rel = _source_relpath(root, directory)
     parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
@@ -666,26 +676,8 @@ async def get_source_file(source: str, request: Request, path: str) -> FileRespo
     )
 
 
-@app.get("/api/v1/sources/{source}/documents")
-async def list_source_documents(
-    source: str, request: Request, path: str = ""
-) -> JSONResponse:
-    """递归遍历一个授权目录，平铺返回其中所有可打开的文档。
-
-    挂载进来的盘里，文档常埋在多级子目录里（如 A/B/C/…），让用户一层层点进去
-    很费劲。这里一次遍历到底，返回每个文档的源内路径与所在子目录，前端直接
-    平铺展示；点开编辑、保存写回原路径。
-
-    安全与成本：深度上限 MAX_WALK_DEPTH，文档数上限 MAX_WALK_DOCUMENTS（超出
-    截断并置 truncated=true）；跳过隐藏目录与系统目录；软链解析后越出授权根
-    目录的一律不遍历。
-    """
-    await current_username(request)
-    root = source_root(source)
-    directory = source_target(source, path)
-    if not directory.is_dir():
-        raise HTTPException(status_code=404, detail="directory not found")
-
+def _walk_documents_sync(root: Path, directory: Path) -> tuple[list[dict], bool]:
+    """同步递归遍历（在工作线程里执行；纯目录扫描，不含任何 await）。"""
     documents: list[dict] = []
     truncated = False
     stack: list[tuple[Path, int]] = [(directory, 0)]
@@ -739,6 +731,35 @@ async def list_source_documents(
             )
 
     documents.sort(key=lambda item: (item["name"].lower(), item["path"]))
+    return documents, truncated
+
+
+@app.get("/api/v1/sources/{source}/documents")
+async def list_source_documents(
+    source: str, request: Request, path: str = ""
+) -> JSONResponse:
+    """递归遍历一个授权目录，平铺返回其中所有可打开的文档。
+
+    挂载进来的盘里，文档常埋在多级子目录里（如 A/B/C/…），让用户一层层点进去
+    很费劲。这里一次遍历到底，返回每个文档的源内路径与所在子目录，前端直接
+    平铺展示；点开编辑、保存写回原路径。
+
+    安全与成本：深度上限 MAX_WALK_DEPTH，文档数上限 MAX_WALK_DOCUMENTS（超出
+    截断并置 truncated=true）；跳过隐藏目录与系统目录；软链解析后越出授权根
+    目录的一律不遍历。
+    """
+    await current_username(request)
+    root = source_root(source)
+    directory = source_target(source, path)
+    if not directory.is_dir():
+        raise HTTPException(status_code=404, detail="directory not found")
+
+    # 这段递归遍历在挂载盘上很贵（每个条目都是网络 syscall），同步跑会把整个
+    # 服务卡住：遍历期间「我的文档」、保存、WOPI 全部排队（实测 781ms 里事件
+    # 循环只调度了 1 次）。丢到线程里跑，结果与耗时都不变，只是不再阻塞别人。
+    documents, truncated = await asyncio.to_thread(
+        _walk_documents_sync, root, directory
+    )
     return JSONResponse(
         {
             "source": source,

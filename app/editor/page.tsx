@@ -8,7 +8,6 @@ import {
   useState,
 } from "react";
 import { X, Upload, Layers, RotateCcw, Loader2 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useAppStore, useResolvedLanguage, useHasHydrated } from "@/store";
 import {
@@ -38,6 +37,7 @@ import {
   uploadKnowledgeFile,
 } from "@/utils/hybrag/client";
 import { renameStoredFile } from "@/utils/vos/storage";
+import { sitePath } from "@/utils/site-path";
 import {
   getVOSAccessToken,
   isVOSMode,
@@ -53,7 +53,6 @@ interface NameRequest {
 
 export default function Page() {
   const server = useAppStore((state) => state.server);
-  const router = useRouter();
   const language = useResolvedLanguage();
   const theme = useAppStore((state) => state.theme);
   const hasHydrated = useHasHydrated();
@@ -151,10 +150,8 @@ export default function Page() {
       return;
     }
     isDirty.current = false;
-    // 客户端路由返回首页：不再整页刷新，首页的「我的文档」与 NAS 数据会直接用
-    // 会话内缓存渲染（后台再校验），避免每次关闭文档都重新遍历一遍挂载盘。
-    router.push("/");
-  }, [language, router, server, requestFileName]);
+    window.location.href = sitePath("/");
+  }, [language, server, requestFileName]);
 
   /** Collabora 冷启动等待：遮罩可见时轮询状态直到就绪/超时/用户取消 */
   const [collaboraWaiting, setCollaboraWaiting] = useState(false);

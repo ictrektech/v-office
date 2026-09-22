@@ -22,11 +22,26 @@
     # 仅内容寻址/版本化产物放行一年 immutable。
     header Cache-Control "no-cache"
 
-    # Immutable versioned OnlyOffice assets (1 year)
-    @onlyoffice_versioned {
-        path /v*-*/*
+    # OnlyOffice 内核资源（/v<版本>-<hash>/…）：内容随版本目录固定，必须长期
+    # 缓存 + 传输压缩。
+    #
+    # 注意：这里**不能**用 matcher 形式的 header——它会被上面的默认
+    # `header Cache-Control "no-cache"` 覆盖（实测 /x2t/* 与 /v*-*/* 都中招），
+    # 结果是每次打开文档浏览器都要重新校验/下载整棵内核树（sdk-all.js 8.9MB、
+    # app.js 2.2MB，且未压缩），表现为"打开 Word 一直转圈"。用 handle 兜住，
+    # 求值顺序确定；encode 让这些未预压缩的 JS 走 gzip/zstd（8.9MB → 2.4MB）。
+    # Caddy 的 path 匹配器只支持结尾通配（/v*-*/* 与 /v*/* 都不匹配），
+    # 这里用正则匹配器，版本目录变了也不用改配置；排除 v9.3.0.24-1 —— 那是
+    # 极早期缓存的兼容前缀，由下面的 handle_path 重写到当前版本目录。
+    @onlyoffice_assets {
+        path_regexp ^/v[^/]+/
+        not path /v9.3.0.24-1/*
     }
-    header @onlyoffice_versioned Cache-Control "public, max-age=31556952, immutable"
+    handle @onlyoffice_assets {
+        header Cache-Control "public, max-age=31556952, immutable"
+        encode zstd gzip
+        file_server
+    }
 
     # Next.js content-hashed chunks (1 year)
     @next_static {

@@ -142,7 +142,21 @@ export async function waitForVOSFastpathPlatform(
  * signal even if the portal does not inject window.vos_platform (pre-1.1);
  * root-path standalone builds keep the injection probe.
  */
+/**
+ * 本地 dev 逃生口（仅开发构建生效；生产构建 NODE_ENV=production，下面是死代码）。
+ *
+ * 本地 `next dev` 没有 VOS 门户注入，isVOSMode() 必然为假，storage 相关能力
+ * （我的文档 / NAS 数据）全部隐藏，没法自测。开 NEXT_PUBLIC_DEV_VOS=1 时：
+ *   - 直接视为 VOS 模式；
+ *   - 令牌用占位串（后端以 V_OFFICE_AUTH_DISABLED=1 启动，不校验令牌）。
+ */
+const DEV_VOS =
+  process.env.NODE_ENV === "development" &&
+  process.env.NEXT_PUBLIC_DEV_VOS === "1";
+const DEV_VOS_TOKEN = "dev-local";
+
 export async function isVOSMode(): Promise<boolean> {
+  if (DEV_VOS) return true;
   if (process.env.NEXT_PUBLIC_BASE_PATH) return true;
   return (await waitForVOSFastpathPlatform()) !== null;
 }
@@ -241,6 +255,7 @@ export function legacyVOSAccessToken(): string | null {
  * legacy injected-token sources as fallback for older portals.
  */
 export async function getVOSAccessToken(): Promise<string | null> {
+  if (DEV_VOS) return DEV_VOS_TOKEN;
   const platform = await waitForVOSFastpathPlatform();
   const oauth2 = platform?.api?.v1000?.oauth2;
 

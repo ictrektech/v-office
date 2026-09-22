@@ -1,4 +1,6 @@
+import asyncio
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -260,6 +262,41 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([entry["name"] for entry in entries["entries"]], ["volumes"])
         self.assertEqual(opened.status_code, 400)
+
+    async def test_scan_runs_off_the_event_loop(self) -> None:
+        """目录遍历必须在工作线程里跑：期间事件循环仍要能调度别的协程。
+
+        回归守卫——同步遍历会把单进程服务卡到遍历结束（实测 781ms 里事件循环
+        只调度了 1 次），表现为「打开 / 保存 / 列文档全都慢」。
+        """
+        calls = 0
+
+        def slow_walk(_root, _directory):
+            nonlocal calls
+            calls += 1
+            time.sleep(0.2)  # 模拟慢盘
+            return [], False
+
+        ticks = 0
+
+        async def heartbeat() -> None:
+            nonlocal ticks
+            while True:
+                ticks += 1
+                await asyncio.sleep(0.01)
+
+        with patch.object(main, "_walk_documents_sync", slow_walk):
+            beat = asyncio.create_task(heartbeat())
+            response = await self.client.get(
+                "/api/v1/sources/shared/documents",
+                params={"path": "volumes/wr/public"},
+            )
+            beat.cancel()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(calls, 1)
+        # 修复前这里只会有 0~1 次心跳（事件循环被占死）
+        self.assertGreater(ticks, 5)
 
     async def test_no_sources_when_nothing_is_mounted(self) -> None:
         main.SHARED_ROOT = Path(self.temp_dir.name) / "absent"
