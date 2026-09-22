@@ -15,6 +15,8 @@ export interface NasCategory {
   sourceId: string;
   path: string;
   readOnly: boolean;
+  /** 授权目录类型：public / user / mount */
+  kind: string;
 }
 
 /** 遍历出来的一个文档 */
@@ -119,6 +121,7 @@ export function useNasDocuments(language: string) {
             sourceId: source.id,
             path: root.path,
             readOnly: source.readOnly,
+            kind: root.kind ?? "",
           });
         }
       }
@@ -181,6 +184,23 @@ export function useNasDocuments(language: string) {
     }
   }, []);
 
+  /**
+   * 刷新某个分类的列表（清掉缓存；若是当前分类则立即重扫）。
+   *
+   * 用于「存入公共目录」之后让 NAS 列表马上能看到新文件。
+   */
+  const refreshCategory = useCallback(
+    (category: NasCategory) => {
+      delete cacheRef.current[category.key];
+      if (activeCategory?.key === category.key) {
+        setDocuments([]);
+        setTruncated(false);
+        void scan(category);
+      }
+    },
+    [activeCategory, scan],
+  );
+
   return {
     categories,
     activeCategory,
@@ -194,6 +214,7 @@ export function useNasDocuments(language: string) {
     setBusyKey,
     downloadDocument,
     rescan,
+    refreshCategory,
     reload: loadCategories,
   };
 }

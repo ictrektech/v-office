@@ -6,6 +6,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
   FolderOpen,
+  FolderUp,
   HardDrive,
   Clock,
   Download,
@@ -16,6 +17,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { useExtracted } from "next-intl";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { getNewUrl } from "@/utils/editor/utils";
 import { FilePickerCard } from "@/components/file-picker-card";
@@ -44,6 +46,8 @@ import {
   openStoredFile,
   deleteStoredFile,
   renameStoredFile,
+  copyStoredFileToSource,
+  copySourceFileToStorage,
   openSharedDocument,
   whoAmI,
   type StoredFile,
@@ -74,6 +78,10 @@ export function OpenView({
     storedStateRef.current = storedState;
   }, [storedState]);
   const [loadingStoredFile, setLoadingStoredFile] = useState<string | null>(null);
+  /** 正在存入公共目录的文件名（行内转圈） */
+  const [publishingStoredFile, setPublishingStoredFile] = useState<string | null>(
+    null,
+  );
   const [downloadingStoredFile, setDownloadingStoredFile] = useState<
     string | null
   >(null);
@@ -102,6 +110,7 @@ export function OpenView({
     setBusyKey: setNasBusyKey,
     downloadDocument: downloadNasDocument,
     rescan: rescanNas,
+    refreshCategory: refreshNasCategory,
   } = useNasDocuments(language);
   const [view, setView] = useState<"mine" | "nas">("mine");
 
@@ -198,6 +207,93 @@ export function OpenView({
       }
     }
     setStoredState("off");
+  };
+
+  /**
+   * 把 NAS 上的文档复制进「我的文档」（私有目录）。
+   *
+   * 同名文件默认拒绝（服务端 409），不会静默覆盖你已有的文档。
+   */
+  const handleNasFileImport = async (doc: NasDocument) => {
+    if (nasBusyKey) return;
+    setNasBusyKey(doc.key);
+    try {
+      await copySourceFileToStorage(doc.sourceId, doc.path);
+      toast.success(
+        zh ? `已存入我的文档：${doc.name}` : `Saved to My Documents: ${doc.name}`,
+      );
+      await initStoredFiles();
+    } catch (error) {
+      const detail = String(error);
+      if (detail.includes("TARGET_EXISTS")) {
+        toast.error(
+          zh
+            ? "「我的文档」里已有同名文件，请先重命名或删除后再存"
+            : "A file with the same name already exists in My Documents",
+        );
+      } else {
+        toast.error(
+          zh ? "存入我的文档失败，请稍后重试" : "Failed to save to My Documents",
+        );
+      }
+      console.error("Import from NAS failed:", error);
+    } finally {
+      setNasBusyKey(null);
+    }
+  };
+
+  /** 平台授权里的「公共目录」；未挂载 / 未授权时为 null，入口不渲染。 */
+  const publicCategory =
+    nasCategories.find((item) => item.kind === "public") ?? null;
+
+  /**
+   * 把「我的文档」里的文件复制到 NAS 公共目录。
+   *
+   * 同名文件默认拒绝（服务端 409）——共享盘是多应用共用的权威数据，
+   * 不做静默覆盖。存入失败也不改写本地文档。
+   */
+  const handleStoredFilePublish = async (file: StoredFile) => {
+    if (!publicCategory || publishingStoredFile) return;
+    const isZh = language.toLowerCase().startsWith("zh");
+    setPublishingStoredFile(file.name);
+    try {
+      await copyStoredFileToSource(
+        file.name,
+        publicCategory.sourceId,
+        publicCategory.path,
+      );
+      toast.success(
+        isZh
+          ? `已存入公共目录：${file.name}`
+          : `Saved to the public folder: ${file.name}`,
+      );
+      // 清掉该分类的扫描缓存：否则切到「NAS 数据」看到的还是旧列表
+      refreshNasCategory(publicCategory);
+    } catch (error) {
+      const detail = String(error);
+      if (detail.includes("TARGET_EXISTS")) {
+        toast.error(
+          isZh
+            ? "公共目录里已有同名文件，请先重命名后再存"
+            : "A file with the same name already exists in the public folder",
+        );
+      } else if (detail.includes("READ_ONLY")) {
+        toast.error(
+          isZh
+            ? "公共目录当前不可写（平台授权为只读或磁盘权限不足）"
+            : "The public folder is not writable (read-only grant or permissions)",
+        );
+      } else {
+        toast.error(
+          isZh
+            ? "存入公共目录失败，请稍后重试"
+            : "Failed to save to the public folder",
+        );
+      }
+      console.error("Publish to public folder failed:", error);
+    } finally {
+      setPublishingStoredFile(null);
+    }
   };
 
   const handleStoredFileClick = async (file: StoredFile) => {
@@ -644,6 +740,26 @@ export function OpenView({
                           <Download className="h-4 w-4" />
                         )}
                       </button>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleNasFileImport(doc);
+                        }}
+                        disabled={nasBusyKey !== null}
+                        title={
+                          zh
+                            ? "存入我的文档（私有目录，同名不覆盖）"
+                            : "Save to My Documents (private folder, never overwrites)"
+                        }
+                        className="rounded-lg bg-muted p-2 text-foreground transition-colors hover:bg-sidebar-hover disabled:opacity-50"
+                      >
+                        {nasBusyKey === doc.key ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <HardDrive className="h-4 w-4" />
+                        )}
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -771,6 +887,29 @@ export function OpenView({
                         ? "重命名"
                         : "Rename"}
                     </button>
+                    {publicCategory && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleStoredFilePublish(file);
+                        }}
+                        disabled={publishingStoredFile !== null}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-sidebar-hover disabled:opacity-50"
+                        title={
+                          zh
+                            ? "存入公共目录（共享盘上的同名文件不会被覆盖）"
+                            : "Save to the shared public folder (existing files are never overwritten)"
+                        }
+                      >
+                        {publishingStoredFile === file.name ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <FolderUp className="h-4 w-4" />
+                        )}
+                        {zh ? "存入公共" : "To public"}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={(e) => handleStoredFileDelete(e, file.name)}

@@ -298,6 +298,99 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
         # 修复前这里只会有 0~1 次心跳（事件循环被占死）
         self.assertGreater(ticks, 5)
 
+    async def test_mounted_authorized_dir_wins_over_scaffolding(self) -> None:
+        """授权目录是单独挂进来的子目录时，公共入口必须指向它本身。
+
+        平台把用户选定的公共目录挂成 /exposed/<空间>/public/<目录>（bind mount），
+        父目录 public 只是脚手架。若照脚手架路径读写，用户在自己的公共文件夹
+        里看不到这些文件——就是"上传了却看不到"。
+        """
+        public = self.shared_root / "volumes" / "wr" / "public"
+        authorized = public / "office"
+        authorized.mkdir()
+        (authorized / "inside.docx").write_bytes(b"x")
+        mounts = {authorized}
+
+        with patch.object(main, "_is_mount_point", lambda path: Path(path) in mounts):
+            roots = main._shared_roots("alice")
+
+        self.assertEqual(roots[0]["path"], "volumes/wr/public/office")
+        self.assertEqual(roots[0]["kind"], "public")
+
+    async def test_copies_a_private_document_into_the_public_folder(self) -> None:
+        """「我的文档」→ 公共目录：服务端复制、默认不覆盖、只读时拒绝。"""
+        original_writable = main.SHARED_WRITABLE
+        self.addCleanup(setattr, main, "SHARED_WRITABLE", original_writable)
+
+        public = self.shared_root / "volumes" / "wr" / "public"
+        params = {"name": "季度报告.docx", "path": "volumes/wr/public"}
+
+        uploaded = await self.client.put(
+            "/api/v1/files/季度报告.docx", content=b"private-bytes"
+        )
+        copied = await self.client.post(
+            "/api/v1/sources/shared/copy-from-file", params=params
+        )
+        again = await self.client.post(
+            "/api/v1/sources/shared/copy-from-file", params=params
+        )
+        missing = await self.client.post(
+            "/api/v1/sources/shared/copy-from-file",
+            params={"name": "不存在.docx", "path": "volumes/wr/public"},
+        )
+        traversal = await self.client.post(
+            "/api/v1/sources/shared/copy-from-file",
+            params={"name": "季度报告.docx", "path": "../../escape"},
+        )
+        main.SHARED_WRITABLE = False
+        readonly = await self.client.post(
+            "/api/v1/sources/shared/copy-from-file", params=params
+        )
+        main.SHARED_WRITABLE = True
+
+        self.assertEqual(uploaded.status_code, 200)
+        self.assertEqual(copied.status_code, 200)
+        self.assertEqual(copied.json()["path"], "volumes/wr/public/季度报告.docx")
+        self.assertEqual((public / "季度报告.docx").read_bytes(), b"private-bytes")
+        # 同名默认拒绝，且不能动到已有文件
+        self.assertEqual(again.status_code, 409)
+        self.assertEqual((public / "季度报告.docx").read_bytes(), b"private-bytes")
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(traversal.status_code, 400)
+        self.assertEqual(readonly.status_code, 403)
+
+    async def test_copies_a_shared_document_into_my_documents(self) -> None:
+        """NAS → 我的文档：服务端复制、默认不覆盖、路径越权拒绝。"""
+        public = self.shared_root / "volumes" / "wr" / "public"
+        (public / "共享样本.docx").write_bytes(b"shared-bytes")
+        params = {"path": "volumes/wr/public/共享样本.docx"}
+
+        copied = await self.client.post(
+            "/api/v1/sources/shared/copy-to-file", params=params
+        )
+        again = await self.client.post(
+            "/api/v1/sources/shared/copy-to-file", params=params
+        )
+        missing = await self.client.post(
+            "/api/v1/sources/shared/copy-to-file",
+            params={"path": "volumes/wr/public/none.docx"},
+        )
+        traversal = await self.client.post(
+            "/api/v1/sources/shared/copy-to-file", params={"path": "../../escape.docx"}
+        )
+        listed = await self.client.get("/api/v1/files")
+
+        stored = main.DATA_ROOT / "local" / "共享样本.docx"
+        self.assertEqual(copied.status_code, 200)
+        self.assertEqual(copied.json()["name"], "共享样本.docx")
+        self.assertEqual(stored.read_bytes(), b"shared-bytes")
+        # 同名默认拒绝，不动已有文件
+        self.assertEqual(again.status_code, 409)
+        self.assertEqual(stored.read_bytes(), b"shared-bytes")
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(traversal.status_code, 400)
+        self.assertIn("共享样本.docx", [f["name"] for f in listed.json()["files"]])
+
     async def test_no_sources_when_nothing_is_mounted(self) -> None:
         main.SHARED_ROOT = Path(self.temp_dir.name) / "absent"
 

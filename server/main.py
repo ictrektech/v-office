@@ -337,9 +337,12 @@ async def rename_file(
 # 共享文档源（只读浏览）
 #
 # 「哪些目录能被应用访问」由平台侧的「数据访问授权」决定（公共目录 / 用户数据
-# 目录），VOS 把授权结果注入 VOS_APP_EXPOSED_PATH 并只读挂到容器内 /exposed：
-#     /exposed/volumes/<工作区>/public                 公共目录
-#     /exposed/volumes/<工作区>/users/<用户名>/data     用户数据目录
+# 目录），VOS 把授权结果注入 VOS_APP_EXPOSED_PATH 并挂到容器内 /exposed：
+#     /exposed/volumes/<工作区>/public                  公共目录的父目录（脚手架）
+#     /exposed/volumes/<工作区>/public/<目录>            用户选定的公共目录（单独挂载）
+#     /exposed/volumes/<工作区>/users/<用户名>/data      用户数据目录
+# 注意授权目录本身是**单独挂进来的挂载点**，必须以它为准，不能用它的脚手架父
+# 目录 public：按脚手架路径读写，用户在平台的公共文件夹里看不到这些文件。
 # 应用这一侧不提供任何授权配置，只负责"把已挂载的目录列出来、把选中的文件给
 # 编辑器"——平台不会替应用列目录，也不会知道怎么把 pptx 交给编辑器渲染。
 #
@@ -389,6 +392,57 @@ SOURCE_SKIP_NAMES = frozenset(
         "@eaDir", "#recycle", "node_modules",
     }
 )
+
+
+def _mount_points() -> frozenset[str]:
+    """当前进程可见的挂载点集合（读不到 /proc 时为空）。
+
+    用 /proc/self/mountinfo 而不是 os.path.ismount：授权目录是**同一文件系统
+    上的 bind mount**，它和父目录 st_dev 相同，ismount 会判成 False。
+    """
+    try:
+        raw = Path("/proc/self/mountinfo").read_text()
+    except OSError:
+        return frozenset()
+    points: set[str] = set()
+    for line in raw.splitlines():
+        fields = line.split()
+        if len(fields) > 4:
+            # 第 5 个字段是挂载点；空格等字符被转义成 \040 这类八进制
+            points.add(re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), fields[4]))
+    return frozenset(points)
+
+
+def _is_mount_point(path: Path) -> bool:
+    try:
+        if os.path.ismount(path):
+            return True
+        return str(path.resolve()) in _mount_points()
+    except OSError:
+        return False
+
+
+def _authorized_children(directory: Path) -> list[Path]:
+    """授权目录在容器里是独立挂载点，返回它下面这类挂进来的子目录。
+
+    平台的「数据访问授权」把用户选定的目录单独挂进来，形如
+    /exposed/<空间>/public/office（父目录 public 只是脚手架，不是授权目录）。
+    若照脚手架路径读写，用户在自己的公共文件夹里看不到这些文件。
+    """
+    try:
+        children = sorted(
+            (
+                child
+                for child in directory.iterdir()
+                if child.is_dir()
+                and not child.name.startswith(".")
+                and child.name not in SOURCE_SKIP_NAMES
+            ),
+            key=lambda p: p.name.lower(),
+        )
+    except OSError:
+        return []
+    return [child for child in children if _is_mount_point(child)]
 
 
 def _find_anchors(root: Path, max_depth: int) -> tuple[list[Path], list[Path]]:
@@ -450,7 +504,7 @@ def _shared_roots(username: str) -> list[dict]:
     roots: list[dict] = []
     seen: set[str] = set()
 
-    def add(path: Path, label: str) -> None:
+    def add(path: Path, label: str, kind: str = "mount") -> None:
         rel = _source_relpath(SHARED_ROOT, path)
         # 按真实路径去重：平台同时挂了 /exposed/<空间> 与 /exposed/volumes/<别名>
         # （软链指向同一目录），否则同一目录会出现两个入口
@@ -461,24 +515,33 @@ def _shared_roots(username: str) -> list[dict]:
         if identity in seen:
             return
         seen.add(identity)
-        roots.append({"name": label, "path": rel})
+        roots.append({"name": label, "path": rel, "kind": kind})
 
     if not SHARED_ROOT.is_dir():
         return roots
 
     public_dirs, user_dirs = _find_anchors(SHARED_ROOT, MAX_ROOT_SCAN_DEPTH)
 
-    for path in public_dirs:
-        add(path, "公共")
+    def effective(anchor: Path) -> list[Path]:
+        """锚点下若有单独挂进来的授权目录，用它们本身；否则用锚点自己。"""
+        return _authorized_children(anchor) or [anchor]
 
-    own = [p for p in user_dirs if p.parent.name == username]
+    for anchor in public_dirs:
+        for path in effective(anchor):
+            add(path, "公共", "public")
+
+    user_roots = [
+        (path, anchor.parent.name) for anchor in user_dirs for path in effective(anchor)
+    ]
+    own = [path for path, owner in user_roots if owner == username]
     if own:
         for path in own:
-            add(path, f"用户（{username}）")
-    elif len(user_dirs) == 1:
+            add(path, f"用户（{username}）", "user")
+    elif len(user_roots) == 1:
         # 单用户设备上 OIDC 用户名与目录名可能不一致：只有一个用户数据目录时
         # 直接采用它，多用户时宁可不显示也不越权。
-        add(user_dirs[0], f"用户（{user_dirs[0].parent.name}）")
+        path, owner = user_roots[0]
+        add(path, f"用户（{owner}）", "user")
 
     if not roots:
         # 非平台标准布局：/exposed 下的一级目录即为已授权目录
@@ -828,6 +891,80 @@ async def put_source_file(source: str, request: Request, path: str) -> JSONRespo
     _atomic_write(target, body)
     LOG.info("shared saved %s (%d bytes)", target, len(body))
     return JSONResponse({"status": "ok", "path": path, "size": len(body)})
+
+
+@app.post("/api/v1/sources/{source}/copy-from-file")
+async def copy_file_to_source(
+    source: str, request: Request, name: str, path: str = "", overwrite: bool = False
+) -> JSONResponse:
+    """把「我的文档」里的一个文件复制到共享源目录（例如 NAS 的公共目录）。
+
+    服务端直接读私有目录、写共享盘，不需要把文件下载到浏览器再上传一遍。
+    默认**不覆盖**同名文件（overwrite=true 才会覆盖）——共享盘是多应用
+    共用的权威数据，误覆盖不可逆。
+    """
+    username = await current_username(request)
+    if not name:
+        raise HTTPException(status_code=400, detail="missing name")
+    _require_writable(source)
+
+    blob = safe_target(username, name)
+    if not blob.is_file():
+        raise HTTPException(status_code=404, detail="source file not found")
+    if blob.suffix.lower() not in BROWSABLE_SUFFIXES:
+        raise HTTPException(status_code=400, detail="unsupported file type")
+    size = blob.stat().st_size
+    if size > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="file too large")
+
+    root = source_root(source)
+    directory = source_target(source, path)
+    if not directory.is_dir():
+        raise HTTPException(status_code=404, detail="directory not found")
+
+    target = directory / blob.name
+    # 目标必须仍在授权根目录内：拼接后再校验一次，防越权写
+    if target != root and root not in target.parents:
+        raise HTTPException(status_code=400, detail="path escapes source root")
+    if target.exists() and not overwrite:
+        raise HTTPException(status_code=409, detail="target already exists")
+
+    _atomic_write(target, blob.read_bytes())
+    LOG.info("copied %s -> %s (%d bytes)", blob, target, size)
+    return JSONResponse(
+        {"status": "ok", "path": _source_relpath(root, target), "size": size}
+    )
+
+
+@app.post("/api/v1/sources/{source}/copy-to-file")
+async def copy_source_file_to_storage(
+    source: str, request: Request, path: str, overwrite: bool = False
+) -> JSONResponse:
+    """把共享源里的文档复制到「我的文档」（用户私有目录）。
+
+    与 copy-from-file 相反的方向：服务端直接读共享盘、写私有目录，不经
+    浏览器。默认不覆盖同名文件（overwrite=true 才会覆盖）。
+    """
+    username = await current_username(request)
+    if not path:
+        raise HTTPException(status_code=400, detail="missing path")
+
+    origin = source_target(source, path)
+    if not origin.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    if origin.suffix.lower() not in BROWSABLE_SUFFIXES:
+        raise HTTPException(status_code=400, detail="unsupported file type")
+    size = origin.stat().st_size
+    if size > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="file too large")
+
+    target = safe_target(username, origin.name)
+    if target.exists() and not overwrite:
+        raise HTTPException(status_code=409, detail="target already exists")
+
+    _atomic_write(target, origin.read_bytes())
+    LOG.info("copied %s -> %s (%d bytes)", origin, target, size)
+    return JSONResponse({"status": "ok", "name": origin.name, "size": size})
 
 
 # ============================================================================

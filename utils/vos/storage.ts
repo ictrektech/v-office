@@ -25,6 +25,8 @@ export interface SharedSourceRoot {
   name: string;
   /** 源内相对路径；空串代表源根 */
   path: string;
+  /** 授权目录类型：public / user / mount（用于识别「公共目录」） */
+  kind?: string;
 }
 
 /** 文档源：平台「数据访问授权」挂进来的目录（shared）或宿主挂载的 NAS 目录（nas）。 */
@@ -260,6 +262,50 @@ export async function listSourceDocuments(
     throw new Error(`List source documents failed: ${response.status}`);
   }
   return (await response.json()) as SourceDocumentListing;
+}
+
+/**
+ * 把共享源（NAS）里的文档复制到「我的文档」。
+ *
+ * 服务端直接读共享盘写私有目录，不经浏览器；默认不覆盖同名文件。
+ */
+export async function copySourceFileToStorage(
+  source: string,
+  path: string,
+): Promise<void> {
+  const params = new URLSearchParams({ path });
+  const response = await request(
+    `/sources/${encodeURIComponent(source)}/copy-to-file?${params.toString()}`,
+    { method: "POST" },
+  );
+  if (response.status === 409) throw new Error("TARGET_EXISTS");
+  if (!response.ok) {
+    throw new Error(`Copy to my documents failed: ${response.status}`);
+  }
+}
+
+/**
+ * 把「我的文档」里的一个文件复制到共享源目录（例如 NAS 的公共目录）。
+ *
+ * 服务端直接读私有目录写共享盘，不经浏览器；默认不覆盖同名文件。
+ * 抛出 TARGET_EXISTS / READ_ONLY 供调用方给出明确提示。
+ */
+export async function copyStoredFileToSource(
+  name: string,
+  source: string,
+  path = "",
+): Promise<void> {
+  const params = new URLSearchParams({ name });
+  if (path) params.set("path", path);
+  const response = await request(
+    `/sources/${encodeURIComponent(source)}/copy-from-file?${params.toString()}`,
+    { method: "POST" },
+  );
+  if (response.status === 409) throw new Error("TARGET_EXISTS");
+  if (response.status === 403) throw new Error("READ_ONLY");
+  if (!response.ok) {
+    throw new Error(`Copy to shared folder failed: ${response.status}`);
+  }
 }
 
 /** 编辑器的保存落点：共享源 + 源内相对路径（即"编辑原文档"）。 */
