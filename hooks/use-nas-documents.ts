@@ -110,10 +110,14 @@ export function useNasDocuments(language: string) {
       const sources = await listSharedSources();
       const found: NasCategory[] = [];
       for (const source of sources) {
-        const roots: SharedSourceRoot[] =
-          source.roots && source.roots.length > 0
-            ? source.roots
-            : [{ name: source.kind === "nas" ? "NAS" : source.name, path: "" }];
+        const roots: SharedSourceRoot[] = [...(source.roots ?? [])];
+        // NAS 源本身就是挂载根，没有子分类。共享源则相反：它列出的是解析好的
+        // 授权目录（公共 / 用户），为空就代表当前没有可用授权——此时不能兜底成
+        // "path 空"，否则前端会去遍历 /exposed 整棵树，同一份文件会经真实路径
+        // 与 volumes/<别名> 软链各出现一次（列表里每个文档都是两行）。
+        if (roots.length === 0 && source.kind === "nas") {
+          roots.push({ name: "NAS", path: "" });
+        }
         for (const root of roots) {
           found.push({
             key: `${source.id}:${root.path}`,

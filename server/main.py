@@ -744,6 +744,9 @@ def _walk_documents_sync(root: Path, directory: Path) -> tuple[list[dict], bool]
     documents: list[dict] = []
     truncated = False
     stack: list[tuple[Path, int]] = [(directory, 0)]
+    # 同一目录/文件常能经两条路径到达（真实路径与 /exposed/volumes/<别名> 软链，
+    # 或多条授权目录重叠），按真实路径去重，否则列表里每个文档会出现两遍
+    visited: set[str] = set()
     while stack and not truncated:
         current, depth = stack.pop()
         if depth > MAX_WALK_DEPTH:
@@ -763,6 +766,10 @@ def _walk_documents_sync(root: Path, directory: Path) -> tuple[list[dict], bool]
             # 软链解析后必须仍在授权根目录内，避免顺着链接遍历到盘外
             if resolved != root and root not in resolved.parents:
                 continue
+            identity = str(resolved)
+            if identity in visited:
+                continue
+            visited.add(identity)
             try:
                 is_dir = child.is_dir()
             except OSError:
