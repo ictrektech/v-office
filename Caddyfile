@@ -34,11 +34,17 @@
     }
     header @next_static Cache-Control "public, max-age=31556952, immutable"
 
-    # Brotli-encoded x2t wasm
-    @x2t_wasm {
-        path /x2t/x2t.wasm
+    # x2t 运行时（brotli 压缩的 wasm 近 10MB + worker js）：内容随版本固定，
+    # 必须长期缓存——默认的 no-cache 会让浏览器每次打开文档都重新下载/校验这
+    # 近 10MB，表现为"打开 Word 一直转圈"。
+    # 用 handle 单独兜住：matcher 形式的 header 会被上面的默认规则覆盖，handle
+    # 的求值顺序是确定的。
+    handle /x2t/* {
+        header Cache-Control "public, max-age=31556952, immutable"
+        @x2t_wasm_file path *.wasm
+        header @x2t_wasm_file Content-Encoding br
+        file_server
     }
-    header @x2t_wasm Content-Encoding br
 
     # Brotli-encoded x2t versioned bundles
     @x2t_suffix {

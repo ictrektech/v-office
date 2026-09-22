@@ -49,6 +49,14 @@ import {
   type StoredFile,
 } from "@/utils/vos/storage";
 
+/**
+ * 首页「我的文档」的会话内快照。
+ *
+ * 从编辑器返回首页时（客户端路由）先用它秒开，再后台静默校验；否则每次返回
+ * 都要等一次列表请求，界面上就是"又要重新加载"。
+ */
+let homeSnapshot: { user: string; files: StoredFile[] } | null = null;
+
 export function OpenView({
   recommendedTemplates,
 }: {
@@ -127,6 +135,13 @@ export function OpenView({
       document.removeEventListener("visibilitychange", handleVisibility);
   }, []);
 
+  // 列表变化（删除 / 重命名 / 保存回来）时同步快照，避免返回首页看到旧数据
+  useEffect(() => {
+    if (homeSnapshot && storedUser) {
+      homeSnapshot = { user: storedUser, files: storedFiles };
+    }
+  }, [storedFiles, storedUser]);
+
   const loadRecentFiles = async () => {
     try {
       setIsLoading(true);
@@ -179,14 +194,23 @@ export function OpenView({
   };
 
   const initStoredFiles = async () => {
+    // 先用会话内快照秒开（从编辑器返回时不再空转一圈），再后台校验
+    const cached = homeSnapshot;
+    if (cached) {
+      setStoredUser(cached.user);
+      setStoredFiles(cached.files);
+      setStoredState("ready");
+    }
     // 失败一次就永久隐藏「我的文档」会让用户以为功能没了：门户注入令牌可能
     // 晚于首屏、storage 容器也可能刚好在重启，这里多探几次再判定不可用。
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         const user = await whoAmI();
         if (user) {
+          const files = await listStoredFiles();
+          homeSnapshot = { user, files };
           setStoredUser(user);
-          setStoredFiles(await listStoredFiles());
+          setStoredFiles(files);
           setStoredState("ready");
           return;
         }
@@ -197,7 +221,8 @@ export function OpenView({
         await new Promise((resolve) => setTimeout(resolve, 1500));
       }
     }
-    setStoredState("off");
+    // 有快照就继续用快照显示，不回退成"无存储"（避免返回首页时闪没）
+    if (!cached) setStoredState("off");
   };
 
   const handleStoredFileClick = async (file: StoredFile) => {
@@ -620,14 +645,28 @@ export function OpenView({
                       </div>
                     </div>
                     <div className="ml-4 flex shrink-0 items-center gap-2">
-                      <span className="inline-flex items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-2 text-xs font-medium text-primary transition-colors group-hover:bg-primary/15">
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void openNasDocument(doc);
+                        }}
+                        disabled={nasBusyKey !== null}
+                        className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary/10 px-3 py-2 text-xs font-medium text-primary transition-colors hover:bg-primary/15 active:bg-primary/20 disabled:opacity-60"
+                      >
                         {nasBusyKey === doc.key ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
                         ) : (
                           <FolderOpen className="h-4 w-4" />
                         )}
-                        {zh ? "打开" : "Open"}
-                      </span>
+                        {nasBusyKey === doc.key
+                          ? zh
+                            ? "打开中…"
+                            : "Opening…"
+                          : zh
+                            ? "打开"
+                            : "Open"}
+                      </button>
                       <button
                         type="button"
                         onClick={(event) => {
