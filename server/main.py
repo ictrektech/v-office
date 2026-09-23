@@ -60,12 +60,30 @@ MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_MB", "100")) * 1024 * 1024
 USERINFO_TIMEOUT = httpx.Timeout(10.0)
 USERNAME_CACHE_TTL = 300.0
 
-# File names handed over by the editor; keep them boring and traversal-free.
+# 文档名交给编辑器回传时的安全校验。
+#
+# 只挡真正的路径隐患（分隔符 / 控制字符 / 隐藏名 / 首尾空白 / 超长），不再用"常见
+# 标点白名单"：保存下来的名字常来自网页标题，里面是全角引号、顿号这类标点，白名单
+# 会让 Ctrl+S 直接 400（如「… _ “推动未来产业…”__中国政府网.pdf」）。跨目录由
+# safe_target 的 resolve + 父目录校验兜底，这里不承担防穿越职责。
 # `doc` 是 Collabora 路线需要的：它原生读写老版 .doc，不必再转成 docx。
-FILENAME_RE = re.compile(
-    r"^[\w][\w .()\[\]\-]{0,180}\.(doc|docx|xlsx|pptx|pdf|odt|ods|odp|csv|txt|md)$",
+DOC_SUFFIX_RE = re.compile(
+    r"\.(doc|docx|ppt|pptx|xls|xlsx|pdf|odt|ods|odp|csv|txt|md)$",
     re.IGNORECASE,
 )
+FILENAME_UNSAFE_RE = re.compile(r'[\\/:*?"<>|]')
+# 文件名按 UTF-8 字节数限长：中文一个字 3 字节，按字符数限长会撞 ENAMETOOLONG
+MAX_FILENAME_BYTES = 200
+
+
+def is_safe_filename(name: str) -> bool:
+    if not name or name != name.strip() or name.startswith("."):
+        return False
+    if FILENAME_UNSAFE_RE.search(name) or any(ord(ch) < 32 for ch in name):
+        return False
+    if len(name.encode("utf-8")) > MAX_FILENAME_BYTES:
+        return False
+    return bool(DOC_SUFFIX_RE.search(name))
 # VOS usernames are mapped onto directory names; everything unusual becomes "_".
 USERNAME_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 
@@ -161,7 +179,7 @@ def storage_dir(username: str) -> Path:
 
 
 def safe_target(username: str, name: str) -> Path:
-    if not FILENAME_RE.fullmatch(name):
+    if not is_safe_filename(name):
         raise HTTPException(status_code=400, detail="unsupported file name")
     directory = storage_dir(username)
     target = (directory / name).resolve()
@@ -256,17 +274,19 @@ async def delete_file(name: str, request: Request) -> JSONResponse:
 
 @app.post("/api/v1/convert")
 async def convert_file(request: Request, to: str = "docx", frm: str = "doc") -> Response:
-    """LibreOffice headless format conversion (doc <-> docx), auth required.
+    """LibreOffice headless format conversion (老格式 <-> 现代格式), auth required.
 
-    The editor engine cannot read legacy .doc reliably nor write it at all,
-    so the web app opens a LibreOffice-converted docx copy and converts the
-    edited docx back to .doc on save. `frm` is the source extension, `to`
-    the target extension ("docx" or "doc").
+    The editor engine cannot write legacy binaries at all（.doc / .ppt）and reads
+    them poorly, so the web app opens a LibreOffice-converted docx/pptx copy and
+    converts the edited copy back to the original legacy format on save.
+    `frm` is the source extension, `to` the target extension.
     """
     await current_username(request)  # auth gate (username unused: stateless conversion)
 
     to = to.lower()
     frm = frm.lower()
+    # 只保留 OnlyOffice 路线真正用到的转换：老 .doc 打开前升级、保存后转回，
+    # 以及 pdf → doc/docx。老 ppt / xls 由 Collabora 直接读写，不经过这里。
     allowed = (("docx", "doc"), ("doc", "docx"), ("pdf", "doc"), ("pdf", "docx"))
     if (to, frm) not in allowed:
         raise HTTPException(status_code=400, detail="unsupported conversion")

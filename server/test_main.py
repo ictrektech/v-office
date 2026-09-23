@@ -114,6 +114,37 @@ class MountedDirectoryContractTest(unittest.IsolatedAsyncioTestCase):
             directory.joinpath("existing.docx").read_bytes(), b"existing"
         )
 
+    async def test_accepts_real_world_document_titles(self) -> None:
+        """网页标题那种名字要能存下来：全角引号 / 顿号 / 空格都不是路径隐患。
+
+        回归守卫——之前文件名走"常见标点白名单"，这类名字保存时被 400 拒绝，
+        表现为「Ctrl+S 保存失败」。
+        """
+        title = (
+            "总书记的人民情怀 _ “推动未来产业同新兴产业、"
+            "传统产业相得益彰”__中国政府网.pdf"
+        )
+        directory = self.data_root / "local"
+
+        saved = await self.client.put(f"/files/{title}", content=b"pdf-bytes")
+        # 老格式（Collabora 路线）也要能落到私有目录：打开前要把它推给服务端渲染
+        legacy_ppt = await self.client.put("/files/旧版演示.ppt", content=b"ppt")
+        legacy_xls = await self.client.put("/files/旧版表格.xls", content=b"xls")
+        hidden = await self.client.put("/files/.hidden.pdf", content=b"x")
+        wrong_ext = await self.client.put("/files/runner.exe", content=b"x")
+        backslash = await self.client.put("/files/..\\escape.pdf", content=b"x")
+
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(legacy_ppt.status_code, 200)
+        self.assertEqual(legacy_xls.status_code, 200)
+        self.assertEqual(directory.joinpath(title).read_bytes(), b"pdf-bytes")
+        for rejected in (hidden, wrong_ext, backslash):
+            self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(
+            sorted(p.name for p in directory.iterdir()),
+            sorted([title, "旧版演示.ppt", "旧版表格.xls"]),
+        )
+
 
 class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
     """只读共享源（/exposed、NAS 挂载目录）的浏览与打开契约。"""

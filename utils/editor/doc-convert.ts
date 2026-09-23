@@ -1,11 +1,13 @@
 "use client";
 
 /**
- * 老版 .doc 格式的服务端转换客户端。
+ * 老版 .doc 的服务端转换客户端。
  *
- * 编辑器内核（x2t）读不好也写不了老版 .doc 二进制格式：
+ * 编辑器内核（x2t）读不好也写不了老 .doc 二进制：
  * - 打开：把 .doc 原件转成 docx 副本渲染（原文件不动）；
  * - 保存：把编辑器导出的 docx 转回 .doc 写回原路径（格式不变）。
+ *
+ * 老 ppt / xls 不走这里：它们默认由 Collabora（服务端 LibreOffice）原生读写。
  *
  * 端点：storage 服务的 /api/v1/convert（LibreOffice headless）。
  * VOS 与本地 standalone 均可用（本地用 V_OFFICE_AUTH_DISABLED=1 启动）。
@@ -16,15 +18,18 @@ import { getVOSAccessToken, clearVOSAuthCache } from "@/utils/vos/fastpath";
 const STORAGE_API =
   process.env.NEXT_PUBLIC_STORAGE_API || "/api/com.ictrek.v-office/api/v1";
 
-export type ConvertTarget = "docx" | "doc" | "pdf";
+/** 老版 .doc 与它对应的现代格式（x2t 能正常读写的那一侧）。 */
+export type LegacyFormat = "doc";
+export type LegacyModernFormat = "docx";
+export type ConvertTarget = LegacyModernFormat | LegacyFormat | "pdf";
 
 /**
  * 转换文档字节。失败抛错，由调用方决定提示方式
  * （打开失败 → 编辑器加载错误；保存失败 → 保存错误弹窗）。
  */
-export async function convertDocBuffer(
+export async function convertLegacyBuffer(
   data: ArrayBuffer | Uint8Array,
-  from: "doc" | "docx",
+  from: LegacyFormat | LegacyModernFormat,
   to: ConvertTarget,
   retry = true,
 ): Promise<ArrayBuffer> {
@@ -42,7 +47,7 @@ export async function convertDocBuffer(
   if (resp.status === 401 && retry) {
     // token 过期：清缓存重试一次（与 saveStoredFile 同策略）
     clearVOSAuthCache();
-    return convertDocBuffer(data, from, to, false);
+    return convertLegacyBuffer(data, from, to, false);
   }
   if (!resp.ok) {
     throw new Error(`convert failed (${resp.status})`);

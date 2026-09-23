@@ -24,21 +24,41 @@ const STORAGE_API =
   process.env.NEXT_PUBLIC_STORAGE_API || "/api/com.ictrek.v-office/api/v1";
 
 /**
- * Word 文档是否默认走 Collabora 内核。
+ * doc/docx/ppt/xls 是否默认走 Collabora 内核。
  *
  * 默认关闭（OnlyOffice 优先），由用户在编辑器里手动切换；部署侧想让
- * Word 文档默认用 Collabora 时设 NEXT_PUBLIC_WORD_ENGINE=collabora。
+ * 这些文档默认用 Collabora 时设 NEXT_PUBLIC_WORD_ENGINE=collabora。
  * 即使默认/手动启用，会话取不到时也会自动回退，不会出现“文档打不开”。
  */
 export const COLLABORA_WORD_ENGINE =
   process.env.NEXT_PUBLIC_WORD_ENGINE === "collabora";
 
-/** 走 Collabora 的扩展名：本阶段只覆盖 Word 文档。 */
-const COLLABORA_EXTS = new Set(["doc", "docx"]);
+/**
+ * 走 Collabora 的扩展名。
+ *
+ * Word 文档（doc/docx）之外，还包含老版二进制格式（ppt/xls）：x2t 读不好也写不了
+ * 这些格式，而 Collabora 就是服务端 LibreOffice，原生读写并按原格式保存——它自己的
+ * discovery 对 doc/xls/ppt 都声明了 edit 动作，对 pdf 只有 view_comment（所以 PDF
+ * 仍走 OnlyOffice）。
+ */
+const COLLABORA_EXTS = new Set(["doc", "docx", "ppt", "xls"]);
 
-/** 是否为 Collabora 可接管的 Word 文档（doc/docx），供编辑器 UI 判断。 */
-export function isWordDocExt(ext: string | undefined | null): boolean {
-  return COLLABORA_EXTS.has((ext || "").toLowerCase().replace(/^\./, ""));
+/**
+ * 老版二进制格式：默认就走 Collabora，不看引擎偏好。
+ *
+ * OnlyOffice 路线对它们先天不足——x2t 写不出二进制（.doc 输出 0 字节），xls 完全
+ * 没有补齐，ppt 还得靠镜像里的 LibreOffice impress；Collabora 是服务端 LibreOffice，
+ * 原生读写且按原格式保存，所以这些文件默认交给它。
+ */
+const LEGACY_EXTS = new Set(["doc", "ppt", "xls"]);
+
+/** 该扩展名是否可交给 Collabora 内核（doc/docx/ppt/xls），供编辑器 UI 判断。 */
+export function isCollaboraExt(ext: string | undefined | null): boolean {
+  return COLLABORA_EXTS.has(normalizeExt(ext));
+}
+
+function normalizeExt(ext: string | undefined | null): string {
+  return (ext || "").toLowerCase().replace(/^\./, "");
 }
 
 /**
@@ -52,9 +72,11 @@ export function shouldUseCollabora(
   ext: string | undefined | null,
   override?: string | null,
 ): boolean {
-  if (!isWordDocExt(ext)) return false;
+  if (!isCollaboraExt(ext)) return false;
   if (override === "collabora") return true;
   if (override === "onlyoffice") return false;
+  // 老格式默认交给 Collabora；其余（docs 的现代格式）仍按部署默认
+  if (LEGACY_EXTS.has(normalizeExt(ext))) return true;
   return COLLABORA_WORD_ENGINE;
 }
 

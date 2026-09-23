@@ -11,8 +11,9 @@ COPY requirements.txt ./
 ARG PIP_INDEX_URL=https://pypi.org/simple
 RUN pip install --no-cache-dir -i "${PIP_INDEX_URL}" -r requirements.txt
 
-# LibreOffice headless: doc <-> docx conversion for the editor save/open loop
-# (the x2t engine cannot read legacy .doc layouts nor write .doc at all).
+# LibreOffice headless：只服务 OnlyOffice 路线的老 .doc 往返（x2t 读不好也写不了
+# 老二进制）。老 ppt / xls 不走这条路——它们默认交给 Collabora（服务端 LibreOffice，
+# 自带全部过滤器），所以这里不需要 impress / calc。
 RUN apt-get update && apt-get install -y --no-install-recommends libreoffice-writer \
     && rm -rf /var/lib/apt/lists/*
 

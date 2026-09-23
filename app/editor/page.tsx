@@ -25,7 +25,7 @@ import {
   fetchCollaboraSession,
   fetchCollaboraStatus,
   guessExtension,
-  isWordDocExt,
+  isCollaboraExt,
   pushDocumentToStorage,
   shouldUseCollabora,
 } from "@/utils/editor/collabora";
@@ -70,7 +70,7 @@ export default function Page() {
    */
   const [collaboraUrl, setCollaboraUrl] = useState<string | null>(null);
   /** 当前文档是否为 Collabora 可接管的 Word 文档（doc/docx，非新建文档） */
-  const [wordDoc, setWordDoc] = useState(false);
+  const [collaboraDoc, setCollaboraDoc] = useState(false);
   /** 引擎切换进行中（换会话/重挂编辑器），期间禁用切换按钮 */
   const [switchingEngine, setSwitchingEngine] = useState(false);
   /** 当前实际生效的内核，用于避免重复初始化与切换失败的回退判断 */
@@ -593,8 +593,8 @@ export default function Page() {
         searchParams.get("fileType"),
         fileUrl,
       );
-      const isWord = isWordDocExt(ext) && !server.isNewDocumentOpen();
-      setWordDoc(isWord);
+      const collaboraDoc = isCollaboraExt(ext) && !server.isNewDocumentOpen();
+      setCollaboraDoc(collaboraDoc);
 
       /**
        * 按内核启动编辑器，可重复调用（UI 按钮切换内核时复用）。
@@ -603,7 +603,7 @@ export default function Page() {
        * 不会演变成“文档打不开”。
        */
       const startEditor = async (useCollabora: boolean) => {
-        if (useCollabora && isWord) {
+        if (useCollabora && collaboraDoc) {
           const name =
             original?.name ||
             searchParams.get("fileName") ||
@@ -719,7 +719,7 @@ export default function Page() {
       关闭按钮仍单独用 right-40 定位，位置不变。
     */}
     <div className="fixed right-52 top-3 z-50 flex items-center gap-2">
-      {wordDoc && !collaboraUrl && (
+      {collaboraDoc && !collaboraUrl && (
         <button
           type="button"
           onClick={() => handleSwitchEngine(true)}

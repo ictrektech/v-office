@@ -10,7 +10,7 @@ import {
 } from "./types";
 import { emptyDocx, emptyPdf, emptyPptx, emptyXlsx } from "./empty";
 import { getDocumentType, getFileExt } from "./utils";
-import { convertDocBuffer } from "./doc-convert";
+import { convertLegacyBuffer } from "./doc-convert";
 import { allPlugins, featuredPlugins, getPluginConfigUrl } from "./plugins";
 import { isVOSMode } from "@/utils/vos/fastpath";
 import {
@@ -273,9 +273,10 @@ export class EditorServer {
       output = new Uint8Array(data);
     } else {
       // 老版 .doc：x2t 直接解析排版会错乱，先用 LibreOffice 转成 docx 副本
-      // （原文件不动，仅本次打开的内存数据），后续按 docx 正常解析渲染
+      // （原文件不动，仅本次打开的内存数据），再按 docx 正常解析渲染。
+      // 老 ppt / xls 不在这里处理——它们默认由 Collabora 原生读写。
       if (fileType == "doc") {
-        data = await convertDocBuffer(data, "doc", "docx");
+        data = await convertLegacyBuffer(data, "doc", "docx");
       }
       // docx 页眉/页脚浮动元素修复已按反馈整体移除，文档按原生内容交给内核解析。
       const result = await converter.convert({
@@ -583,7 +584,9 @@ export class EditorServer {
 
       // x2t 无法把内部 bin 导出为老版 .doc 二进制格式（输出 0 字节文件，
       // PUT 到存储后被判 empty body 返回 400 → 编辑器弹「保存文件时发生错误」）。
-      // .doc 文档保存时统一升级为 .docx：输出格式与保存文件名同步改名。
+      // 所以老 .doc 保存分两步：先让 x2t 导出 docx，再用 LibreOffice 转回 .doc
+      // （见下方 round-trip）——格式、文件名都保持原样，用户无感知。
+      // 老 ppt / xls 不在这里处理——它们默认由 Collabora 原生读写、按原格式保存。
       const saveExt = (getFileExt(cmd.title) || this.fileType || "docx").toLowerCase();
       const isLegacyDoc = saveExt === "doc";
       if (isLegacyDoc) {
@@ -640,13 +643,13 @@ export class EditorServer {
           clientLog(`save-failed: ${saveName} :: conversion produced empty output`);
           return { status: "error" };
         }
-        // 老版 .doc：编辑器只能导出 docx（x2t 写不了 .doc 二进制），
+        // 老 .doc：编辑器只能导出 docx（x2t 写不了 .doc 二进制），
         // 经 LibreOffice 转回 .doc —— 格式、文件名都保持原样，用户无感知
         let finalOutput = output;
         if (isLegacyDoc) {
           try {
             finalOutput = new Uint8Array(
-              await convertDocBuffer(finalOutput, "docx", "doc"),
+              await convertLegacyBuffer(finalOutput, "docx", "doc"),
             );
           } catch (error) {
             clientLog(`save-failed: ${saveName} :: doc round-trip failed :: ${error}`);
