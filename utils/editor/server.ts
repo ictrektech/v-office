@@ -634,18 +634,30 @@ export class EditorServer {
           formatTo: formatTo,
           media: Object.fromEntries(this.fsMap),
         });
-        // PDF 特例：这套架构里浏览器版 x2t 写不出 PDF（官方靠服务端原生转换器），
-        // 所以 PDF 保存拿不到输出。这里**不能**把 input 兜底成输出——PDF 编辑器
-        // 交付的分片是内核内部容器（docx 结构），写成 .pdf 会把文件写坏（当场
-        // "保存成功"、下次打开报「内容与扩展名不一致」）。正确做法是回退成
-        // **原样保存原始 PDF**：Ctrl+S 可用、文件仍是有效 PDF、仍进「我的文档」，
-        // 只是本次编辑（批注等）不落盘。服务端还有一道同名内容的护栏兜底。
+        // PDF 特例：导出没有拿到 PDF 输出时，**不能**把 input 兜底成输出——PDF
+        // 编辑器交付的分片是内核内部容器（docx 结构 zip），写成 .pdf 会把文件
+        // 写坏（当场"保存成功"、下次打开报「内容与扩展名不一致」）。正确做法是
+        // 回退成**原样保存原始 PDF**：Ctrl+S 可用、文件仍是有效 PDF、仍进
+        // 「我的文档」，只是本次编辑（批注等）不落盘。服务端还有一道同名内容的
+        // 护栏兜底。（内核本身具备 PDF 导出，卡点在这侧的导出调用方式。）
         if (!output && (this.fileType === "pdf" || cmd.format == "pdf")) {
           const original = this.originalData;
           if (original && original.byteLength > 0) {
             output = new Uint8Array(original);
             clientLog(
               `save-note: ${saveName} :: pdf export unsupported, saved the original bytes`,
+            );
+          }
+        }
+        if (!output || output.byteLength === 0) {
+          const isPdf = this.fileType === "pdf" || cmd.format == "pdf";
+          if (!isPdf) {
+            // 非 PDF：x2t 没产出时沿用编辑器交付的分片——这是本应用一直以来的
+            // 行为（分片本身就是一份完整 OOXML 文档，Word/Excel 正常打开）。
+            // 之前把它改成硬失败，才出现"以前能存、现在弹保存失败"。
+            output = input;
+            clientLog(
+              `save-note: ${saveName} :: conversion returned nothing, saved the editor bytes`,
             );
           }
         }
