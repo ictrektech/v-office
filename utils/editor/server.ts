@@ -652,9 +652,9 @@ export class EditorServer {
         if (!output || output.byteLength === 0) {
           const isPdf = this.fileType === "pdf" || cmd.format == "pdf";
           if (!isPdf) {
-            // 非 PDF：x2t 没产出时沿用编辑器交付的分片——这是本应用一直以来的
-            // 行为（分片本身就是一份完整 OOXML 文档，Word/Excel 正常打开）。
-            // 之前把它改成硬失败，才出现"以前能存、现在弹保存失败"。
+            // 非 PDF：x2t 没产出时沿用编辑器交付的分片（分片本身就是一份完整
+            // OOXML 文档，Word/Excel 正常打开）。"空输出即失败"的分支在更早版本
+            // 就存在，这里额外补一层兜底，让非 PDF 的保存不会因转换没产出而失败。
             output = input;
             clientLog(
               `save-note: ${saveName} :: conversion returned nothing, saved the editor bytes`,
