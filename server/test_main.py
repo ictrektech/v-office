@@ -138,8 +138,8 @@ class MountedDirectoryContractTest(unittest.IsolatedAsyncioTestCase):
         fake_doc = await self.client.put(
             "/files/legacy2.doc", content=b"PK\x03\x04\x14\x00\x00\x00word/"
         )
-        # 已存在的有效 PDF 收到容器内容：照样拒绝，且原文件必须一字不动
-        overwrite = await self.client.put(
+        # 已存在的有效 PDF 收到容器内容：保持原文件不动，但回成功（Ctrl+S 不能报错）
+        kept = await self.client.put(
             "/files/report.pdf", content=b"PK\x03\x04\x14\x00\x00\x00word/"
         )
 
@@ -147,7 +147,8 @@ class MountedDirectoryContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(good_doc.status_code, 200)
         self.assertEqual(fake_pdf.status_code, 400)
         self.assertEqual(fake_doc.status_code, 400)
-        self.assertEqual(overwrite.status_code, 400)
+        self.assertEqual(kept.status_code, 200)
+        self.assertTrue(kept.json().get("unchanged"))
         self.assertEqual(
             directory.joinpath("report.pdf").read_bytes(), b"%PDF-1.7\n...\n%%EOF\n"
         )

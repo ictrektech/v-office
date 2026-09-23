@@ -105,14 +105,30 @@ CONTENT_MAGIC: dict[str, bytes] = {
 # 由上面的 .pdf 规则拦住即可。
 
 
-def _reject_content_mismatch(target: Path, body: bytes) -> None:
+def _accepts_body(target: Path, body: bytes) -> bool:
+    """内容与扩展名是否相符，以及本次写入要不要落盘。
+
+    True  —— 正常落盘
+    False —— 跳过写入、保持原文件不动（调用方回 200；用于 PDF 这一已知场景）
+    异常  —— 内容与扩展名明显不符，400 拒绝
+    """
     expected = CONTENT_MAGIC.get(target.suffix.lower())
     if not expected:
-        return
+        return True
     # 容忍前导 BOM / 空白，避免把正常文件误判成坏文件
     head = body.lstrip(b"\xef\xbb\xbf \t\r\n")
     if head.startswith(expected):
-        return
+        return True
+    # PDF：这套架构用浏览器版 x2t 导出，而它写不出 PDF（官方靠服务端原生转换器）。
+    # 内核把内部容器（docx 结构）当结果提交上来时，既不写坏、也不报错——保持原
+    # 文件不动并回成功，Ctrl+S 仍然可用，文件仍是有效 PDF。
+    if target.suffix.lower() == ".pdf" and target.is_file():
+        LOG.warning(
+            "pdf save skipped for %s: content (%s) is not a PDF, kept the existing file",
+            target.name,
+            body[:8].hex(),
+        )
+        return False
     LOG.warning(
         "rejected %s: content (%s) does not match extension",
         target.name,
@@ -291,7 +307,10 @@ async def put_file(name: str, request: Request) -> JSONResponse:
         raise HTTPException(status_code=413, detail="file too large")
     if not body:
         raise HTTPException(status_code=400, detail="empty body")
-    _reject_content_mismatch(target, body)
+    if not _accepts_body(target, body):
+        # 内容不是 PDF（内核写不出）：原文件保持不动，但仍回成功，让 Ctrl+S 可用
+        size = target.stat().st_size if target.is_file() else 0
+        return JSONResponse({"status": "ok", "name": name, "size": size, "unchanged": True})
     tmp = target.with_name(target.name + ".tmp")
     tmp.write_bytes(body)
     os.replace(tmp, target)
@@ -954,7 +973,9 @@ async def put_source_file(source: str, request: Request, path: str) -> JSONRespo
     if len(body) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file too large")
 
-    _reject_content_mismatch(target, body)
+    if not _accepts_body(target, body):
+        size = target.stat().st_size if target.is_file() else 0
+        return JSONResponse({"status": "ok", "path": path, "size": size, "unchanged": True})
     _atomic_write(target, body)
     LOG.info("shared saved %s (%d bytes)", target, len(body))
     return JSONResponse({"status": "ok", "path": path, "size": len(body)})
@@ -1367,7 +1388,8 @@ async def wopi_put_contents(name: str, request: Request) -> Response:
         raise HTTPException(status_code=400, detail="empty body")
     if len(body) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file too large")
-    _reject_content_mismatch(target, body)
+    if not _accepts_body(target, body):
+        return Response(status_code=200)
     if data.get("s"):
         _atomic_write(target, body)
     else:
