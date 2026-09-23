@@ -84,6 +84,44 @@ def is_safe_filename(name: str) -> bool:
     if len(name.encode("utf-8")) > MAX_FILENAME_BYTES:
         return False
     return bool(DOC_SUFFIX_RE.search(name))
+
+
+# 扩展名 ↔ 真实内容的一致性护栏。
+#
+# 编辑器保存链路里一旦把内核内部容器（docx 结构）当成 PDF 写出来，文件当场"保存
+# 成功"、日志也是 save-ok，但下次打开就报「内容与扩展名不一致」，而原内容已被
+# 覆盖、不可恢复。所以在落盘前挡一道：宁可保存失败，也不写出坏文件。
+# 只校验"客户端传来的字节"（私有保存 / 共享写回 / WOPI 写回）；平台内部复制
+# （共享盘 → 我的文档）沿用原字节，不做判断，避免把共享盘里名字不规范的老文件
+# 挡在门外。
+CONTENT_MAGIC: dict[str, bytes] = {
+    ".pdf": b"%PDF-",
+    ".doc": b"\xd0\xcf\x11\xe0",
+    ".xls": b"\xd0\xcf\x11\xe0",
+    ".ppt": b"\xd0\xcf\x11\xe0",
+}
+# 注意：docx/xlsx/pptx 等 OOXML **不校验**。加密（密码保护）的 OOXML 实际是 OLE2
+# 容器，按魔数硬校验会把它们当成坏文件拒掉；而本次事故（内核内部容器被写成 .pdf）
+# 由上面的 .pdf 规则拦住即可。
+
+
+def _reject_content_mismatch(target: Path, body: bytes) -> None:
+    expected = CONTENT_MAGIC.get(target.suffix.lower())
+    if not expected:
+        return
+    # 容忍前导 BOM / 空白，避免把正常文件误判成坏文件
+    head = body.lstrip(b"\xef\xbb\xbf \t\r\n")
+    if head.startswith(expected):
+        return
+    LOG.warning(
+        "rejected %s: content (%s) does not match extension",
+        target.name,
+        body[:8].hex(),
+    )
+    raise HTTPException(
+        status_code=400,
+        detail=f"content does not match extension {target.suffix.lower()}",
+    )
 # VOS usernames are mapped onto directory names; everything unusual becomes "_".
 USERNAME_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 
@@ -253,6 +291,7 @@ async def put_file(name: str, request: Request) -> JSONResponse:
         raise HTTPException(status_code=413, detail="file too large")
     if not body:
         raise HTTPException(status_code=400, detail="empty body")
+    _reject_content_mismatch(target, body)
     tmp = target.with_name(target.name + ".tmp")
     tmp.write_bytes(body)
     os.replace(tmp, target)
@@ -915,6 +954,7 @@ async def put_source_file(source: str, request: Request, path: str) -> JSONRespo
     if len(body) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file too large")
 
+    _reject_content_mismatch(target, body)
     _atomic_write(target, body)
     LOG.info("shared saved %s (%d bytes)", target, len(body))
     return JSONResponse({"status": "ok", "path": path, "size": len(body)})
@@ -1327,6 +1367,7 @@ async def wopi_put_contents(name: str, request: Request) -> Response:
         raise HTTPException(status_code=400, detail="empty body")
     if len(body) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file too large")
+    _reject_content_mismatch(target, body)
     if data.get("s"):
         _atomic_write(target, body)
     else:

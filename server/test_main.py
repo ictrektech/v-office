@@ -114,6 +114,48 @@ class MountedDirectoryContractTest(unittest.IsolatedAsyncioTestCase):
             directory.joinpath("existing.docx").read_bytes(), b"existing"
         )
 
+    async def test_rejects_content_that_does_not_match_extension(self) -> None:
+        """护栏：扩展名与内容不符时拒绝落盘，绝不写出坏文件。
+
+        回归守卫——PDF 保存曾把内核内部容器（docx 结构）写成 .pdf：文件当场
+        "保存成功"，下次打开报「内容与扩展名不一致」，原内容不可恢复。
+        """
+        directory = self.data_root / "local"
+        directory.mkdir(exist_ok=True)
+
+        # 正常内容放行
+        good_pdf = await self.client.put(
+            "/files/report.pdf", content=b"%PDF-1.7\n...\n%%EOF\n"
+        )
+        good_doc = await self.client.put(
+            "/files/legacy.doc", content=b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1old-doc"
+        )
+        # docx 容器冒充 pdf（就是这次的坏文件）
+        fake_pdf = await self.client.put(
+            "/files/report2.pdf", content=b"PK\x03\x04\x14\x00\x00\x00word/"
+        )
+        # docx 容器冒充老二进制（.doc 必须是 OLE2）
+        fake_doc = await self.client.put(
+            "/files/legacy2.doc", content=b"PK\x03\x04\x14\x00\x00\x00word/"
+        )
+        # 已存在的有效 PDF 收到容器内容：照样拒绝，且原文件必须一字不动
+        overwrite = await self.client.put(
+            "/files/report.pdf", content=b"PK\x03\x04\x14\x00\x00\x00word/"
+        )
+
+        self.assertEqual(good_pdf.status_code, 200)
+        self.assertEqual(good_doc.status_code, 200)
+        self.assertEqual(fake_pdf.status_code, 400)
+        self.assertEqual(fake_doc.status_code, 400)
+        self.assertEqual(overwrite.status_code, 400)
+        self.assertEqual(
+            directory.joinpath("report.pdf").read_bytes(), b"%PDF-1.7\n...\n%%EOF\n"
+        )
+        self.assertEqual(
+            sorted(p.name for p in directory.iterdir()),
+            ["legacy.doc", "report.pdf"],
+        )
+
     async def test_accepts_real_world_document_titles(self) -> None:
         """网页标题那种名字要能存下来：全角引号 / 顿号 / 空格都不是路径隐患。
 
@@ -126,10 +168,16 @@ class MountedDirectoryContractTest(unittest.IsolatedAsyncioTestCase):
         )
         directory = self.data_root / "local"
 
-        saved = await self.client.put(f"/files/{title}", content=b"pdf-bytes")
+        saved = await self.client.put(
+            f"/files/{title}", content=b"%PDF-1.7\nfake pdf body\n%%EOF\n"
+        )
         # 老格式（Collabora 路线）也要能落到私有目录：打开前要把它推给服务端渲染
-        legacy_ppt = await self.client.put("/files/旧版演示.ppt", content=b"ppt")
-        legacy_xls = await self.client.put("/files/旧版表格.xls", content=b"xls")
+        legacy_ppt = await self.client.put(
+            "/files/旧版演示.ppt", content=b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1ppt"
+        )
+        legacy_xls = await self.client.put(
+            "/files/旧版表格.xls", content=b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1xls"
+        )
         hidden = await self.client.put("/files/.hidden.pdf", content=b"x")
         wrong_ext = await self.client.put("/files/runner.exe", content=b"x")
         backslash = await self.client.put("/files/..\\escape.pdf", content=b"x")
@@ -137,7 +185,10 @@ class MountedDirectoryContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved.status_code, 200)
         self.assertEqual(legacy_ppt.status_code, 200)
         self.assertEqual(legacy_xls.status_code, 200)
-        self.assertEqual(directory.joinpath(title).read_bytes(), b"pdf-bytes")
+        self.assertEqual(
+            directory.joinpath(title).read_bytes(),
+            b"%PDF-1.7\nfake pdf body\n%%EOF\n",
+        )
         for rejected in (hidden, wrong_ext, backslash):
             self.assertEqual(rejected.status_code, 400)
         self.assertEqual(

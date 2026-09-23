@@ -634,9 +634,10 @@ export class EditorServer {
           formatTo: formatTo,
           media: Object.fromEntries(this.fsMap),
         });
-        if (!output && cmd.format == "pdf") {
-          output = input;
-        }
+        // 注意：这里**不能**把 input 兜底成输出。PDF 编辑器交付的分片是内核内部
+        // 容器（docx 结构），一旦 x2t 没真正导出 PDF，兜底就会把这种容器写成
+        // .pdf —— 文件当场显示"保存成功"，下次打开却报「内容与扩展名不一致」，
+        // 而且原内容已被覆盖。宁可保存失败（用户可另存/下载），也不写出坏文件。
         if (!output || output.byteLength === 0) {
           // 0 字节输出也视为失败：空文件 PUT 到存储会被判 empty body（400）
           console.error("Conversion failed (empty output)");
