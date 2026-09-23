@@ -115,10 +115,13 @@ class MountedDirectoryContractTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_rejects_content_that_does_not_match_extension(self) -> None:
-        """护栏：扩展名与内容不符时拒绝落盘，绝不写出坏文件。
+        """护栏只保护 PDF：内容是内核内部容器时不写坏文件。
 
         回归守卫——PDF 保存曾把内核内部容器（docx 结构）写成 .pdf：文件当场
         "保存成功"，下次打开报「内容与扩展名不一致」，原内容不可恢复。
+        其它扩展名**不校验**：客户端给 .doc/.xls/.ppt 交付的本来就是 OOXML
+        （zip）字节，Word/Excel 照常打开；按魔数硬校验会把正常保存拦成 400
+        （线上真实发生过：EMC及安规测试委托认证申请表(1).doc 保存失败）。
         """
         directory = self.data_root / "local"
         directory.mkdir(exist_ok=True)
@@ -134,8 +137,8 @@ class MountedDirectoryContractTest(unittest.IsolatedAsyncioTestCase):
         fake_pdf = await self.client.put(
             "/files/report2.pdf", content=b"PK\x03\x04\x14\x00\x00\x00word/"
         )
-        # docx 容器冒充老二进制（.doc 必须是 OLE2）
-        fake_doc = await self.client.put(
+        # .doc 收到 OOXML（zip）字节：放行落盘，不能拦（Word 能正常打开）
+        ooxml_doc = await self.client.put(
             "/files/legacy2.doc", content=b"PK\x03\x04\x14\x00\x00\x00word/"
         )
         # 已存在的有效 PDF 收到容器内容：保持原文件不动，但回成功（Ctrl+S 不能报错）
@@ -146,15 +149,19 @@ class MountedDirectoryContractTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(good_pdf.status_code, 200)
         self.assertEqual(good_doc.status_code, 200)
         self.assertEqual(fake_pdf.status_code, 400)
-        self.assertEqual(fake_doc.status_code, 400)
+        self.assertEqual(ooxml_doc.status_code, 200)
         self.assertEqual(kept.status_code, 200)
         self.assertTrue(kept.json().get("unchanged"))
         self.assertEqual(
             directory.joinpath("report.pdf").read_bytes(), b"%PDF-1.7\n...\n%%EOF\n"
         )
         self.assertEqual(
+            directory.joinpath("legacy2.doc").read_bytes(),
+            b"PK\x03\x04\x14\x00\x00\x00word/",
+        )
+        self.assertEqual(
             sorted(p.name for p in directory.iterdir()),
-            ["legacy.doc", "report.pdf"],
+            ["legacy.doc", "legacy2.doc", "report.pdf"],
         )
 
     async def test_accepts_real_world_document_titles(self) -> None:

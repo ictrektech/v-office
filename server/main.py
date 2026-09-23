@@ -95,14 +95,17 @@ def is_safe_filename(name: str) -> bool:
 # （共享盘 → 我的文档）沿用原字节，不做判断，避免把共享盘里名字不规范的老文件
 # 挡在门外。
 CONTENT_MAGIC: dict[str, bytes] = {
+    # 只保护 PDF——这是本次事故（内核内部容器被写成 .pdf：文件当场"保存成功"，
+    # 下次打开打不开，原内容不可恢复）的唯一来源。
     ".pdf": b"%PDF-",
-    ".doc": b"\xd0\xcf\x11\xe0",
-    ".xls": b"\xd0\xcf\x11\xe0",
-    ".ppt": b"\xd0\xcf\x11\xe0",
 }
-# 注意：docx/xlsx/pptx 等 OOXML **不校验**。加密（密码保护）的 OOXML 实际是 OLE2
-# 容器，按魔数硬校验会把它们当成坏文件拒掉；而本次事故（内核内部容器被写成 .pdf）
-# 由上面的 .pdf 规则拦住即可。
+# 为什么不校验 .doc/.xls/.ppt：客户端交付给它们的字节本来就是 OOXML（zip）。
+# 老 .doc 现由客户端两步导出（x2t 出 docx，再经 LibreOffice 转回 .doc），但线上
+# 跑着的前端未必带这一步，会直接交付 docx 字节——Word/Excel 照常打开，属既有行为。
+# 按魔数硬校验会把这种正常保存拦成 400（线上已发生：EMC及安规测试委托认证申请表
+# (1).doc 保存失败）。
+# docx/xlsx/pptx 同样不校验：加密（密码保护）的 OOXML 实际是 OLE2 容器，
+# 硬校验也会把正常文件拒掉。
 
 
 def _accepts_body(target: Path, body: bytes) -> bool:
@@ -119,9 +122,10 @@ def _accepts_body(target: Path, body: bytes) -> bool:
     head = body.lstrip(b"\xef\xbb\xbf \t\r\n")
     if head.startswith(expected):
         return True
-    # PDF：这套架构用浏览器版 x2t 导出，而它写不出 PDF（官方靠服务端原生转换器）。
-    # 内核把内部容器（docx 结构）当结果提交上来时，既不写坏、也不报错——保持原
-    # 文件不动并回成功，Ctrl+S 仍然可用，文件仍是有效 PDF。
+    # PDF：编辑器交付的保存结果不是 PDF（实测是内核内部容器，docx 结构的 zip），
+    # 直接把这种字节写成 .pdf 就是文件损坏（此前线上损坏的 PDF 即由此而来）。
+    # 这种情况下既不写坏、也不报错——保持原文件不动并回成功，Ctrl+S 仍然可用，
+    # 文件仍是有效 PDF。（导出 PDF 本身内核是支持的，卡在我们这侧的导出调用。）
     if target.suffix.lower() == ".pdf" and target.is_file():
         LOG.warning(
             "pdf save skipped for %s: content (%s) is not a PDF, kept the existing file",
