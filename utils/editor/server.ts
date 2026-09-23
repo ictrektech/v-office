@@ -208,6 +208,10 @@ export class EditorServer {
     this.title = title;
     this.isNewDocument = false;
     this.sharedTarget = null;
+    // 清掉上一个文档的留底：openUrl 是惰性下载，字节要等装载时才拿得到，
+    // 不重置的话会残留上一份文件的字节（PDF 保存回退时会拿错文件）。
+    this.originalData = null;
+    this.originalName = "";
     this.loadPromise = this.loadDocument(() => loader(url), this.fileType);
 
     return {
@@ -270,6 +274,11 @@ export class EditorServer {
     let media: { [key: string]: Uint8Array } = {};
 
     if (fileType == "pdf") {
+      // PDF 的"原始字节"就是内核直接拿到的那一份（我的文档 / 共享盘是惰性下载，
+      // 这里才真正拿到字节）。保存时若导出没产出真 PDF，就把它写回去——保证写进
+      // 去的一定是这份文件自己的内容，不会串到别的文档。
+      this.originalData = data;
+      this.originalName = this.originalName || this.title;
       output = new Uint8Array(data);
     } else {
       // 老版 .doc：x2t 直接解析排版会错乱，先用 LibreOffice 转成 docx 副本
