@@ -133,7 +133,9 @@ class MountedDirectoryContractTest(unittest.IsolatedAsyncioTestCase):
         good_doc = await self.client.put(
             "/files/legacy.doc", content=b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1old-doc"
         )
-        # docx 容器冒充 pdf（就是这次的坏文件）
+        # docx 容器冒充 pdf，且目标文件不存在（文档已在"我的文档"里被删除、
+        # 却仍在编辑器里打开、每 10 秒自动保存一次的真实场景）：
+        # 不写坏、不报错、也不新建文件
         fake_pdf = await self.client.put(
             "/files/report2.pdf", content=b"PK\x03\x04\x14\x00\x00\x00word/"
         )
@@ -148,7 +150,9 @@ class MountedDirectoryContractTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(good_pdf.status_code, 200)
         self.assertEqual(good_doc.status_code, 200)
-        self.assertEqual(fake_pdf.status_code, 400)
+        self.assertEqual(fake_pdf.status_code, 200)
+        self.assertTrue(fake_pdf.json().get("unchanged"))
+        self.assertFalse(directory.joinpath("report2.pdf").exists())
         self.assertEqual(ooxml_doc.status_code, 200)
         self.assertEqual(kept.status_code, 200)
         self.assertTrue(kept.json().get("unchanged"))

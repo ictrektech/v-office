@@ -124,13 +124,20 @@ def _accepts_body(target: Path, body: bytes) -> bool:
         return True
     # PDF：编辑器交付的保存结果不是 PDF（实测是内核内部容器，docx 结构的 zip），
     # 直接把这种字节写成 .pdf 就是文件损坏（此前线上损坏的 PDF 即由此而来）。
-    # 这种情况下既不写坏、也不报错——保持原文件不动并回成功，Ctrl+S 仍然可用，
-    # 文件仍是有效 PDF。（导出 PDF 本身内核是支持的，卡在我们这侧的导出调用。）
-    if target.suffix.lower() == ".pdf" and target.is_file():
+    # 所以 PDF 内容不符时**任何情况都不写盘、也不报错**（Ctrl+S 保持可用）：
+    #   · 原文件存在   → 保持原文件不动，不写坏；
+    #   · 原文件不存在 → 不新建（例如那份文档已在"我的文档"里被删除，却仍在
+    #     编辑器里打开着、每 10 秒自动保存一次；此前这里回 400，用户看到的是
+    #     反复弹「保存文件时发生错误」）。
+    # （导出 PDF 本身内核是支持的，卡在我们这侧的导出调用。）
+    if target.suffix.lower() == ".pdf":
         LOG.warning(
-            "pdf save skipped for %s: content (%s) is not a PDF, kept the existing file",
+            "pdf save skipped for %s: content (%s) is not a PDF (%s)",
             target.name,
             body[:8].hex(),
+            "kept the existing file"
+            if target.is_file()
+            else "no existing file, nothing written",
         )
         return False
     LOG.warning(
