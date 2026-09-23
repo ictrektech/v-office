@@ -634,19 +634,33 @@ export class EditorServer {
           formatTo: formatTo,
           media: Object.fromEntries(this.fsMap),
         });
-        // PDF 特例：导出没有拿到 PDF 输出时，**不能**把 input 兜底成输出——PDF
-        // 编辑器交付的分片是内核内部容器（docx 结构 zip），写成 .pdf 会把文件
-        // 写坏（当场"保存成功"、下次打开报「内容与扩展名不一致」）。正确做法是
-        // 回退成**原样保存原始 PDF**：Ctrl+S 可用、文件仍是有效 PDF、仍进
-        // 「我的文档」，只是本次编辑（批注等）不落盘。服务端还有一道同名内容的
-        // 护栏兜底。（内核本身具备 PDF 导出，卡点在这侧的导出调用方式。）
-        if (!output && (this.fileType === "pdf" || cmd.format == "pdf")) {
-          const original = this.originalData;
-          if (original && original.byteLength > 0) {
-            output = new Uint8Array(original);
-            clientLog(
-              `save-note: ${saveName} :: pdf export unsupported, saved the original bytes`,
-            );
+        // PDF 特例：内核交付的分片是它自己的内部容器（docx 结构 zip）。如果导出
+        // 没真的产出 PDF，就**存原始 PDF 字节**——这样本地上传的 PDF 会以一份
+        // 有效 PDF 落进「我的文档」（和以前一样能看见、能打开），从我的文档打开的
+        // PDF 则保持原样。绝不把内部容器写成 .pdf（那会让文件打不开）。
+        // 本次编辑（批注等）暂不落盘，等导出那条路打通。
+        if (this.fileType === "pdf" || cmd.format == "pdf") {
+          const looksLikePdf =
+            !!output &&
+            output.byteLength > 4 &&
+            output[0] === 0x25 &&
+            output[1] === 0x50 &&
+            output[2] === 0x44 &&
+            output[3] === 0x46;
+          if (!looksLikePdf) {
+            const original = this.originalData;
+            if (original && original.byteLength > 0) {
+              output = new Uint8Array(original);
+              clientLog(
+                `save-note: ${saveName} :: pdf export produced no PDF, saved the original bytes`,
+              );
+            } else {
+              // 没有原始字节可回退（例如从共享盘打开）：交给服务端按"保持原文件
+              // 不动 + 回成功"处理，不报错、也不写出坏文件。
+              clientLog(
+                `save-note: ${saveName} :: pdf export produced no PDF and no original bytes`,
+              );
+            }
           }
         }
         if (!output || output.byteLength === 0) {
