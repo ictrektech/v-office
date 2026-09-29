@@ -80,6 +80,100 @@ export function shouldUseCollabora(
   return COLLABORA_WORD_ENGINE;
 }
 
+/**
+ * 共享源（NAS / 平台授权的公共目录）文档是否可以多人协同。
+ *
+ * 共享盘上的同一份文件可能同时被多个人打开，而只有服务端内核（Collabora）能让
+ * 大家进同一个文档会话：互见光标、盘上只有一份权威字节（实测：第二个用户加入
+ * 只发一次 CheckFileInfo，不再重新拉取文档，两侧状态栏同步变化）。本地内核
+ * （OnlyOffice）是浏览器单机渲染，N 个人各改各的内存副本、保存时整份覆盖，
+ * 必然互相抹掉——所以共享源文档不看扩展名偏好，也不看用户在设置里选了哪个内核。
+ *
+ * 刻意排除：pdf（Collabora 只声明批注，不能协同编辑）、txt / md / csv / rtf
+ * （多人反复写回语义有坑）。这些继续走原来的单机链路，行为不变。
+ */
+const SHARED_COLLABORATIVE_EXTS = new Set([
+  "doc",
+  "docx",
+  "xls",
+  "xlsx",
+  "ppt",
+  "pptx",
+  "odt",
+  "ods",
+  "odp",
+]);
+
+/** 共享源文档是否必须走 Collabora 多人协同（与内核偏好、部署默认无关）。 */
+export function mustCollaborateOnShared(
+  shared: boolean,
+  ext: string | undefined | null,
+): boolean {
+  return shared && SHARED_COLLABORATIVE_EXTS.has(normalizeExt(ext));
+}
+
+/**
+ * 摘掉 Collabora 首次打开时的"What's new"浮层，并返回清理函数。
+ *
+ * 社区版镜像会在第一次打开编辑器时弹一层盖住正文的浮层：用户点开自己的文档，
+ * 第一眼看到的是广告而不是内容。官方开关 `home_mode.enable=true` 能关掉它，
+ * 但同时把并发连接/并发文档压到 20/10，代价太大；所以这里用同源 iframe 直接
+ * 移除那层节点，不改任何服务端行为。iframe 与宿主跨源时静默跳过（拿不到
+ * contentDocument 就不做）。
+ */
+export function hideCollaboraWelcomeScreen(
+  iframe: HTMLIFrameElement,
+): () => void {
+  const SELECTOR = "[class*='iframe-welcome'],[class*='welcome-modal']";
+  let observer: MutationObserver | null = null;
+  let timer: number | null = null;
+
+  const strip = () => {
+    let removed = 0;
+    try {
+      const doc = iframe.contentDocument;
+      if (!doc) return;
+      doc.querySelectorAll(SELECTOR).forEach((node) => {
+        node.remove();
+        removed += 1;
+      });
+    } catch {
+      return; // 跨源：放弃
+    }
+    if (removed > 0) stopObserving();
+  };
+
+  const stopObserving = () => {
+    observer?.disconnect();
+    observer = null;
+    if (timer !== null) {
+      window.clearTimeout(timer);
+      timer = null;
+    }
+  };
+
+  const attach = () => {
+    strip();
+    try {
+      const doc = iframe.contentDocument;
+      if (!doc || observer) return;
+      observer = new MutationObserver(strip);
+      observer.observe(doc.documentElement, { childList: true, subtree: true });
+      // 浮层只在首屏出现；最多盯 20 秒就收工，别让观察器常驻
+      timer = window.setTimeout(stopObserving, 20_000);
+    } catch {
+      /* 跨源：忽略 */
+    }
+  };
+
+  iframe.addEventListener("load", attach);
+  attach();
+  return () => {
+    iframe.removeEventListener("load", attach);
+    stopObserving();
+  };
+}
+
 export interface CollaboraSession {
   /** 浏览器直接加载的编辑器地址（含 WOPISrc 与 access_token） */
   editorUrl: string;

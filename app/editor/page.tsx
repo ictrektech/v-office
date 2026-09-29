@@ -25,7 +25,9 @@ import {
   fetchCollaboraSession,
   fetchCollaboraStatus,
   guessExtension,
+  hideCollaboraWelcomeScreen,
   isCollaboraExt,
+  mustCollaborateOnShared,
   pushDocumentToStorage,
   shouldUseCollabora,
 } from "@/utils/editor/collabora";
@@ -37,7 +39,7 @@ import {
   uploadKnowledgeFile,
 } from "@/utils/hybrag/client";
 import { renameStoredFile } from "@/utils/vos/storage";
-import { sitePath } from "@/utils/site-path";
+import { useRouter } from "next/navigation";
 import {
   getVOSAccessToken,
   isVOSMode,
@@ -52,6 +54,7 @@ interface NameRequest {
 }
 
 export default function Page() {
+  const router = useRouter();
   const server = useAppStore((state) => state.server);
   const language = useResolvedLanguage();
   const theme = useAppStore((state) => state.theme);
@@ -71,6 +74,15 @@ export default function Page() {
   const [collaboraUrl, setCollaboraUrl] = useState<string | null>(null);
   /** 当前文档是否为 Collabora 可接管的 Word 文档（doc/docx，非新建文档） */
   const [collaboraDoc, setCollaboraDoc] = useState(false);
+  /**
+   * 当前文档来自共享源（NAS / 公共目录）：统一走 Collabora 多人协同，且不允许
+   * 回退到本地内核编辑——整份字节覆盖会抹掉协作者刚改的内容。
+   */
+  const [sharedCollaborative, setSharedCollaborative] = useState(false);
+  /** 编辑器首帧是否已经画出来；没画出来之前盖一层骨架，避免白屏/黑屏观感 */
+  const [editorPainted, setEditorPainted] = useState(false);
+  /** Collabora iframe：用于摘掉首启浮层、监听首帧 */
+  const collaboraFrameRef = useRef<HTMLIFrameElement | null>(null);
   /** 引擎切换进行中（换会话/重挂编辑器），期间禁用切换按钮 */
   const [switchingEngine, setSwitchingEngine] = useState(false);
   /** 当前实际生效的内核，用于避免重复初始化与切换失败的回退判断 */
@@ -150,8 +162,9 @@ export default function Page() {
       return;
     }
     isDirty.current = false;
-    window.location.href = sitePath("/");
-  }, [language, server, requestFileName]);
+    // 客户端路由：别整页刷新（那会白屏闪一下）。列表侧另有缓存，返回即秒出。
+    router.replace("/");
+  }, [language, router, server, requestFileName]);
 
   /** Collabora 冷启动等待：遮罩可见时轮询状态直到就绪/超时/用户取消 */
   const [collaboraWaiting, setCollaboraWaiting] = useState(false);
@@ -220,6 +233,15 @@ export default function Page() {
       const start = startEditorRef.current;
       if (!start || switchingEngine) return;
       const zh = language.toLowerCase().startsWith("zh");
+      // 共享盘文档只有一个合法内核：切到本地 OnlyOffice 会整份覆盖协作者的内容
+      if (!useCollabora && server.getSharedTarget()) {
+        toast.error(
+          zh
+            ? "共享盘文档以多人协同方式打开，不能切回本地内核"
+            : "Shared documents stay on the collaboration engine",
+        );
+        return;
+      }
       setSwitchingEngine(true);
       try {
         // 选择持久化，下次从首页打开文档时沿用同一内核
@@ -259,7 +281,7 @@ export default function Page() {
         setSwitchingEngine(false);
       }
     },
-    [language, switchingEngine, ensureCollaboraReady],
+    [language, server, switchingEngine, ensureCollaboraReady],
   );
 
   /** 上传到知识库：导出当前文档字节 → hybrag 上传 */
@@ -372,6 +394,12 @@ export default function Page() {
 
     let editor: DocEditor | null = null;
 
+    /**
+     * 共享盘文档在协同内核不可用时的只读降级开关：置 true 后挂载的本地内核
+     * 只给只读权限——宁可不能编辑，也不能让整份覆盖抹掉协作者的修改。
+     */
+    let forceReadOnly = false;
+
     // AI 助手等 OnlyOffice 插件运行在编辑器 iframe 内，沿 parent 链查找该桥
     // 获取宿主能力（VOS 访问令牌、当前文档名）。
     window.__voffice = {
@@ -461,10 +489,11 @@ export default function Page() {
           url: doc.url,
 
           permissions: {
-            edit: editing && doc.fileType !== "pdf",
+            // forceReadOnly：共享盘文档在协同内核不可用时的只读降级
+            edit: editing && !forceReadOnly && doc.fileType !== "pdf",
             chat: false,
-            rename: editing,
-            protect: editing,
+            rename: editing && !forceReadOnly,
+            protect: editing && !forceReadOnly,
             review: false,
             print: false,
           },
@@ -597,13 +626,26 @@ export default function Page() {
       setCollaboraDoc(collaboraDoc);
 
       /**
+       * 共享源（NAS / 公共目录）文档统一走 Collabora 多人协同：同一份文件被多人
+       * 同时打开时，只有服务端内核能让所有人进同一个文档会话（互见光标、盘上只有
+       * 一份权威字节）。因此不看引擎偏好，也不看部署默认值。
+       */
+      const sharedTarget = server.getSharedTarget();
+      const sharedCollaborative = mustCollaborateOnShared(
+        Boolean(sharedTarget),
+        ext,
+      );
+      setSharedCollaborative(sharedCollaborative);
+
+      /**
        * 按内核启动编辑器，可重复调用（UI 按钮切换内核时复用）。
        * doc/docx 默认用 OnlyOffice；useCollabora 为 true 时先换取
        * Collabora 会话，取不到再回退 OnlyOffice，保证“新内核不可用”
        * 不会演变成“文档打不开”。
        */
       const startEditor = async (useCollabora: boolean) => {
-        if (useCollabora && collaboraDoc) {
+        // 共享源文档即使扩展名不在"手动可切"名单里，也强制走协同
+        if (useCollabora && (collaboraDoc || sharedCollaborative)) {
           const name =
             original?.name ||
             searchParams.get("fileName") ||
@@ -612,7 +654,6 @@ export default function Page() {
           // 到 storage；?url= 指向存储时文件本来就在，不必重复上传。
           // 共享源（平台授权目录 / NAS）文档本来就在服务端：不推副本，让
           // Collabora 通过 WOPI 直接读写原文件，保存即写回共享盘。
-          const sharedTarget = server.getSharedTarget();
           const ready = sharedTarget
             ? true
             : original
@@ -635,16 +676,26 @@ export default function Page() {
             setCollaboraUrl(session.editorUrl);
             return;
           }
-          if (activeEngineRef.current === "onlyoffice") {
+          if (sharedCollaborative) {
+            // 共享盘文档绝不回退到本地内核编辑：整份字节覆盖会抹掉协作者的
+            // 修改。降级为只读打开，并明确告诉用户为什么。
+            forceReadOnly = true;
+            toast.error(
+              language.toLowerCase().startsWith("zh")
+                ? "协同内核暂不可用，已以只读方式打开；为避免覆盖他人修改，请稍后重新打开"
+                : "Collaboration engine unavailable — opened read-only so others' edits are not overwritten",
+            );
+          } else if (activeEngineRef.current === "onlyoffice") {
             // 手动切换失败：OnlyOffice 仍在运行，维持现状不重复初始化
             console.warn(
               "[editor] Collabora session unavailable, staying on OnlyOffice",
             );
             return;
+          } else {
+            console.warn(
+              "[editor] Collabora session unavailable, falling back to OnlyOffice",
+            );
           }
-          console.warn(
-            "[editor] Collabora session unavailable, falling back to OnlyOffice",
-          );
         }
 
         activeEngineRef.current = "onlyoffice";
@@ -669,16 +720,19 @@ export default function Page() {
           : userEngine === "onlyoffice"
             ? "onlyoffice"
             : null);
-      const useCollabora = shouldUseCollabora(ext, enginePref);
-      if (useCollabora) {
-        // 上次会话选了 Collabora：若内核还在冷启动，先等就绪再挂载，
-        // 避免静默回退 OnlyOffice 让用户困惑
+      const useCollabora =
+        sharedCollaborative || shouldUseCollabora(ext, enginePref);
+      if (useCollabora && !sharedCollaborative) {
+        // 私有文档：上次会话选了 Collabora 而内核还在冷启动时，先等就绪再
+        // 挂载，避免静默回退 OnlyOffice 让用户困惑
         const ready = await ensureCollaboraReady();
         if (!ready) {
           await startEditor(false);
           return;
         }
       }
+      // 共享源文档直接取会话、不做前置探活：那次探活是一次多余往返，而"内核
+      // 不可用"由取会话的失败路径兜住（降级为只读），更快也少一层等待。
       await startEditor(useCollabora);
     }
 
@@ -692,6 +746,49 @@ export default function Page() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasHydrated]);
+
+  /** 骨架兜底：正常由 onLoad / onAppReady 收尾，异常时 20s 后也不至于常驻 */
+  useEffect(() => {
+    if (editorPainted) return;
+    const timer = window.setTimeout(() => setEditorPainted(true), 20_000);
+    return () => window.clearTimeout(timer);
+  }, [editorPainted]);
+
+  /**
+   * 摘掉 Collabora 首启的"What's new"浮层：它会盖住正文，用户点开自己的文档
+   * 第一眼看到的是推广内容。同源 iframe 直接移除该节点，不动服务端行为。
+   */
+  useEffect(() => {
+    const frame = collaboraFrameRef.current;
+    if (!frame) return;
+    return hideCollaboraWelcomeScreen(frame);
+  }, [collaboraUrl]);
+
+  /**
+   * 悬浮按钮组的落点。
+   *
+   * Collabora 的顶栏是一条窄带，而且最右侧是它自带的协作者头像 / Editing 等
+   * 控件：按 OnlyOffice 的尺寸摆（h-9 + top-3，36px 高从 12px 起）会往下探出
+   * 顶栏、压住下面的工具栏，也会蹭到头像。所以 Collabora 用更矮的一组、贴到
+   * 最上沿，并整体左移一档让开右侧控件；OnlyOffice 顶栏更高，维持原位不动。
+   */
+  const actions = collaboraUrl
+    ? {
+        group: "right-60 top-1 gap-1.5",
+        button:
+          "flex h-7 items-center gap-1 rounded-lg bg-background/90 px-2.5 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted disabled:opacity-60",
+        icon: "h-3.5 w-3.5",
+        text: "text-xs font-medium",
+        close: "right-44 top-1 h-7 w-7",
+      }
+    : {
+        group: "right-52 top-3 gap-2",
+        button:
+          "flex h-9 items-center gap-1.5 rounded-lg bg-background/90 px-3 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted disabled:opacity-60",
+        icon: "h-4 w-4",
+        text: "text-sm font-medium",
+        close: "right-40 top-3 h-9 w-9",
+      };
 
   return (
     <>
@@ -718,8 +815,8 @@ export default function Page() {
       内核切换按钮排在前面 → 渲染在知识库按钮左侧，间距由 gap 保证。
       关闭按钮仍单独用 right-40 定位，位置不变。
     */}
-    <div className="fixed right-52 top-3 z-50 flex items-center gap-2">
-      {collaboraDoc && !collaboraUrl && (
+    <div className={`fixed z-50 flex items-center ${actions.group}`}>
+      {collaboraDoc && !collaboraUrl && !sharedCollaborative && (
         <button
           type="button"
           onClick={() => handleSwitchEngine(true)}
@@ -744,7 +841,8 @@ export default function Page() {
           </span>
         </button>
       )}
-      {collaboraUrl && (
+      {/* 共享盘文档固定协同内核：不给"切回本地内核"的入口（会整份覆盖） */}
+      {collaboraUrl && !sharedCollaborative && (
         <button
           type="button"
           onClick={() => handleSwitchEngine(false)}
@@ -759,10 +857,10 @@ export default function Page() {
               ? "切换回 OnlyOffice 内核"
               : "Switch back to OnlyOffice"
           }
-          className="flex h-9 items-center gap-1.5 rounded-lg bg-background/90 px-3 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted disabled:opacity-60"
+          className={actions.button}
         >
-          <RotateCcw className="h-4 w-4" />
-          <span className="text-sm font-medium">
+          <RotateCcw className={actions.icon} />
+          <span className={actions.text}>
             {language.toLowerCase().startsWith("zh")
               ? "切换回 OnlyOffice"
               : "Back to OnlyOffice"}
@@ -783,10 +881,10 @@ export default function Page() {
               ? "上传到知识库"
               : "Upload to knowledge base"
           }
-          className="flex h-9 items-center gap-1.5 rounded-lg bg-background/90 px-3 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted"
+          className={actions.button}
         >
-          <Upload className="h-4 w-4" />
-          <span className="text-sm font-medium">
+          <Upload className={actions.icon} />
+          <span className={actions.text}>
             {language.toLowerCase().startsWith("zh")
               ? "上传到知识库"
               : "Upload to KB"}
@@ -807,16 +905,18 @@ export default function Page() {
           ? "关闭当前文档"
           : "Close document"
       }
-      className="fixed right-40 top-3 z-50 flex h-9 w-9 items-center justify-center rounded-lg bg-background/90 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted"
+      className={`fixed z-50 flex items-center justify-center rounded-lg bg-background/90 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted ${actions.close}`}
     >
-      <X className="h-5 w-5" />
+      <X className={collaboraUrl ? "h-4 w-4" : "h-5 w-5"} />
     </button>
     {collaboraUrl ? (
       <iframe
+        ref={collaboraFrameRef}
         title="document"
         src={collaboraUrl}
         className="fixed inset-0 h-screen w-screen border-0"
         allow="clipboard-read; clipboard-write; fullscreen"
+        onLoad={() => setEditorPainted(true)}
       />
     ) : (
       <div>
@@ -827,6 +927,23 @@ export default function Page() {
               src={APP_ROOT + PRELOAD_HTML}
             ></iframe>
           </div>
+        </div>
+      </div>
+    )}
+    {/*
+      首帧骨架：从路由切进编辑器页到内核真正画出内容之间，避免白屏/黑屏闪一下。
+      Collabora 用 iframe onLoad 收尾、OnlyOffice 用 onAppReady 收尾，另有一道
+      兜底定时器，任何异常都不会让骨架常驻。
+    */}
+    {!editorPainted && !collaboraWaiting && (
+      <div className="pointer-events-none fixed inset-0 z-[55] flex items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <p className="text-sm text-muted-foreground">
+            {language.toLowerCase().startsWith("zh")
+              ? "正在打开文档…"
+              : "Opening document…"}
+          </p>
         </div>
       </div>
     )}

@@ -204,8 +204,8 @@ export async function renameStoredFile(
 // 编辑器正常加载，保存时仍写入用户私有目录，不会回写共享盘。
 // ---------------------------------------------------------------------------
 
-export async function listSharedSources(): Promise<SharedSource[]> {
-  const response = await request("/sources");
+export async function listSharedSources(refresh = false): Promise<SharedSource[]> {
+  const response = await request(`/sources${refresh ? "?refresh=1" : ""}`);
   if (!response.ok) {
     throw new Error(`List sources failed: ${response.status}`);
   }
@@ -253,10 +253,16 @@ export async function openSharedDocument(
 export async function listSourceDocuments(
   source: string,
   path = "",
+  refresh = false,
 ): Promise<SourceDocumentListing> {
-  const query = path ? `?path=${encodeURIComponent(path)}` : "";
+  // refresh=1 让服务端绕过目录列举缓存：用于用户显式刷新、以及我们自己刚写完
+  // 共享盘之后的强制对齐
+  const params = new URLSearchParams();
+  if (path) params.set("path", path);
+  if (refresh) params.set("refresh", "1");
+  const query = params.toString();
   const response = await request(
-    `/sources/${encodeURIComponent(source)}/documents${query}`,
+    `/sources/${encodeURIComponent(source)}/documents${query ? `?${query}` : ""}`,
   );
   if (!response.ok) {
     throw new Error(`List source documents failed: ${response.status}`);

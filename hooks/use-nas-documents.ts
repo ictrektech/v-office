@@ -39,26 +39,58 @@ export interface NasDocument {
  * 就**递归遍历**该目录，把它以及所有子目录里可打开的文档平铺出来——盘里的
  * 文档常埋在多级目录（A/B/C/…）里，不让用户一层层点。
  *
- * 遍历结果按分类缓存，短时间内重复切分类不重复扫盘。
+ * 遍历结果缓存在**模块级**（而不是组件内）：从列表进编辑器再返回时组件会重新
+ * 挂载，组件内缓存会跟着一起消失，用户看到的就是"回来还得再转几秒"。放模块级
+ * 就能先立刻把内容铺出来、再后台对齐，手感上是秒开。
  */
+interface CachedScan {
+  documents: NasDocument[];
+  truncated: boolean;
+  /** 缓存写入时刻（ms） */
+  at: number;
+}
+
+const scanCache = new Map<string, CachedScan>();
+let categoriesCache: { list: NasCategory[]; activeKey: string } | null = null;
+/** 缓存新鲜期：在这之内直接复用，不做任何后台扫描 */
+const CACHE_FRESH_MS = 30_000;
+
+function readCacheSeed() {
+  const list = categoriesCache?.list ?? [];
+  const active =
+    list.find((item) => item.key === categoriesCache?.activeKey) ??
+    list[0] ??
+    null;
+  const scanned = active ? scanCache.get(active.key) : undefined;
+  return {
+    categories: list,
+    active,
+    documents: scanned?.documents ?? [],
+    truncated: scanned?.truncated ?? false,
+  };
+}
+
 export function useNasDocuments(language: string) {
   const zh = language.toLowerCase().startsWith("zh");
-  const [categories, setCategories] = useState<NasCategory[]>([]);
-  const [activeCategory, setActiveCategory] = useState<NasCategory | null>(null);
-  const [documents, setDocuments] = useState<NasDocument[]>([]);
-  const [loading, setLoading] = useState(true);
+  const seedRef = useRef<ReturnType<typeof readCacheSeed> | null>(null);
+  if (seedRef.current === null) seedRef.current = readCacheSeed();
+  const seed = seedRef.current;
+  const [categories, setCategories] = useState<NasCategory[]>(seed.categories);
+  const [activeCategory, setActiveCategory] = useState<NasCategory | null>(
+    seed.active,
+  );
+  const [documents, setDocuments] = useState<NasDocument[]>(seed.documents);
+  const [loading, setLoading] = useState(seed.categories.length === 0);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState("");
-  const [truncated, setTruncated] = useState(false);
+  const [truncated, setTruncated] = useState(seed.truncated);
   const [busyKey, setBusyKey] = useState<string | null>(null);
-  const cacheRef = useRef<
-    Record<string, { documents: NasDocument[]; truncated: boolean }>
-  >({});
 
   const scan = useCallback(
-    async (category: NasCategory) => {
-      const cached = cacheRef.current[category.key];
-      if (cached) {
+    async (category: NasCategory, force = false) => {
+      const cached = scanCache.get(category.key);
+      if (cached && !force) {
+        // 有缓存就先出内容：切分类、从编辑器返回列表都是瞬时完成，不等网络
         setDocuments(cached.documents);
         setTruncated(cached.truncated);
         setError("");
@@ -67,9 +99,11 @@ export function useNasDocuments(language: string) {
       setScanning(true);
       setError("");
       try {
+        // force 时连服务端的列举缓存一起绕过：用户显式刷新 / 我们刚写完共享盘
         const listing = await listSourceDocuments(
           category.sourceId,
           category.path,
+          force,
         );
         const scanned: NasDocument[] = listing.documents.map((doc) => ({
           key: `${category.sourceId}:${doc.path}`,
@@ -80,10 +114,11 @@ export function useNasDocuments(language: string) {
           size: doc.size,
           modified: doc.modified,
         }));
-        cacheRef.current[category.key] = {
+        scanCache.set(category.key, {
           documents: scanned,
           truncated: listing.truncated,
-        };
+          at: Date.now(),
+        });
         setDocuments(scanned);
         setTruncated(listing.truncated);
       } catch (scanError) {
@@ -104,7 +139,8 @@ export function useNasDocuments(language: string) {
 
   /** 列出分类（公共 / 用户）并默认展开第一个 */
   const loadCategories = useCallback(async () => {
-    setLoading(true);
+    // 有缓存就不转圈：已有内容先留在屏幕上，再后台对齐
+    setLoading(categoriesCache === null);
     setError("");
     try {
       const sources = await listSharedSources();
@@ -129,12 +165,26 @@ export function useNasDocuments(language: string) {
           });
         }
       }
+      const active =
+        found.find((item) => item.key === categoriesCache?.activeKey) ??
+        found[0] ??
+        null;
+      categoriesCache = { list: found, activeKey: active?.key ?? "" };
       setCategories(found);
-      if (found.length > 0) {
-        setActiveCategory(found[0]);
-        setDocuments([]);
-        setTruncated(false);
-        await scan(found[0]);
+      if (active) {
+        setActiveCategory(active);
+        const cached = scanCache.get(active.key);
+        if (cached && Date.now() - cached.at < CACHE_FRESH_MS) {
+          // 缓存还新鲜：直接复用，一次盘都不用扫（从编辑器返回列表就是这条路）
+          setDocuments(cached.documents);
+          setTruncated(cached.truncated);
+        } else {
+          if (!cached) {
+            setDocuments([]);
+            setTruncated(false);
+          }
+          await scan(active);
+        }
       } else {
         setActiveCategory(null);
         setDocuments([]);
@@ -162,13 +212,13 @@ export function useNasDocuments(language: string) {
     [scan],
   );
 
-  /** 重新遍历当前分类（丢弃缓存） */
+  /** 重新遍历当前分类（连服务端列举缓存一起绕过） */
   const rescan = useCallback(() => {
     if (!activeCategory) return;
-    delete cacheRef.current[activeCategory.key];
+    scanCache.delete(activeCategory.key);
     setDocuments([]);
     setTruncated(false);
-    void scan(activeCategory);
+    void scan(activeCategory, true);
   }, [activeCategory, scan]);
 
   const downloadDocument = useCallback(async (doc: NasDocument) => {
@@ -195,11 +245,10 @@ export function useNasDocuments(language: string) {
    */
   const refreshCategory = useCallback(
     (category: NasCategory) => {
-      delete cacheRef.current[category.key];
+      scanCache.delete(category.key);
       if (activeCategory?.key === category.key) {
-        setDocuments([]);
-        setTruncated(false);
-        void scan(category);
+        // 刚往共享盘写过东西：绕过所有缓存，确保新文件立刻出现在列表里
+        void scan(category, true);
       }
     },
     [activeCategory, scan],
