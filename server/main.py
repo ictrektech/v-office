@@ -293,11 +293,8 @@ async def me(request: Request) -> JSONResponse:
     return JSONResponse({"username": username})
 
 
-@app.get("/api/v1/files")
-@app.get("/files", include_in_schema=False)
-async def list_files(request: Request) -> JSONResponse:
-    username = await current_username(request)
-    directory = storage_dir(username)
+def _list_files_sync(directory: Path) -> list[dict]:
+    """同步列私有目录（在工作线程里执行，见文件末尾"阻塞 I/O"一节）。"""
     items = []
     for path in sorted(directory.iterdir()):
         if not path.is_file() or path.name.endswith(".tmp"):
@@ -310,6 +307,15 @@ async def list_files(request: Request) -> JSONResponse:
                 "modified": int(stat.st_mtime),
             }
         )
+    return items
+
+
+@app.get("/api/v1/files")
+@app.get("/files", include_in_schema=False)
+async def list_files(request: Request) -> JSONResponse:
+    username = await current_username(request)
+    directory = storage_dir(username)
+    items = await asyncio.to_thread(_list_files_sync, directory)
     return JSONResponse({"files": items})
 
 
@@ -340,9 +346,8 @@ async def put_file(name: str, request: Request) -> JSONResponse:
         # 内容不是 PDF（内核写不出）：原文件保持不动，但仍回成功，让 Ctrl+S 可用
         size = target.stat().st_size if target.is_file() else 0
         return JSONResponse({"status": "ok", "name": name, "size": size, "unchanged": True})
-    tmp = target.with_name(target.name + ".tmp")
-    tmp.write_bytes(body)
-    os.replace(tmp, target)
+    # 写盘是阻塞调用，必须出事件循环（见文件末尾"阻塞 I/O"一节）
+    await asyncio.to_thread(_atomic_write_private, target, body)
     LOG.info("saved %s for %s (%d bytes)", name, username, len(body))
     return JSONResponse({"status": "ok", "name": name, "size": len(body)})
 
@@ -408,7 +413,7 @@ async def convert_file(request: Request, to: str = "docx", frm: str = "doc") -> 
             LOG.warning("convert %s->%s failed rc=%s stderr=%s",
                         frm, to, proc.returncode, proc.stderr.decode("utf-8", "replace")[:300])
             raise HTTPException(status_code=500, detail="conversion failed")
-        data = out.read_bytes()
+        data = await asyncio.to_thread(out.read_bytes)
         if not data:
             raise HTTPException(status_code=500, detail="conversion produced empty output")
         LOG.info("converted %s->%s (%d -> %d bytes)", frm, to, len(body), len(data))
@@ -435,7 +440,7 @@ async def rename_file(
         return JSONResponse({"status": "ok", "name": target.name})
     if target.exists():
         raise HTTPException(status_code=409, detail="file already exists")
-    os.replace(source, target)
+    await asyncio.to_thread(os.replace, source, target)
     LOG.info("renamed %s to %s for %s", name, target.name, username)
     return JSONResponse({"status": "ok", "name": target.name})
 
@@ -760,11 +765,70 @@ def _source_entry(root: Path, child: Path) -> Optional[dict]:
     }
 
 
+# ============================================================================
+# 目录列举缓存
+#
+# 共享盘上的遍历很贵（每个条目都是网络 syscall），而"进 NAS 标签就全盘重扫"
+# 是纯浪费：用户来回复看的间隔通常只有几秒。这里做一层极短 TTL 的缓存 +
+# 并发去重（同一目录被多人/多标签页同时请求时只真正扫一次），任何写入立即
+# 失效，保证"刚存回共享盘的文件马上出现在列表里"。
+# ============================================================================
+_SOURCE_CACHE_TTL = float(os.environ.get("V_OFFICE_SOURCE_CACHE_TTL", "10"))
+
+# key -> (monotonic 时间戳, 响应体)
+_source_cache: dict[str, tuple[float, dict]] = {}
+# key -> 正在扫描的任务（并发去重；同一 key 只会真正扫一次）
+_source_scanning: dict[str, "asyncio.Task[dict]"] = {}
+
+
+def _invalidate_source_cache() -> None:
+    """共享盘发生写入后调用：丢弃所有列举缓存（粗粒度，但绝不会显示过期数据）。"""
+    if _source_cache:
+        _source_cache.clear()
+
+
+async def _cached_scan(
+    key: str, scanner, force: bool = False
+) -> tuple[dict, bool]:
+    """返回 (响应体, 是否命中缓存)。scanner 是同步函数，在工作线程里跑。"""
+    now = time.monotonic()
+    hit = _source_cache.get(key)
+    if hit and not force and now - hit[0] < _SOURCE_CACHE_TTL:
+        return hit[1], True
+
+    task = _source_scanning.get(key)
+    if task is None:
+        task = asyncio.ensure_future(asyncio.to_thread(scanner))
+        _source_scanning[key] = task
+    try:
+        payload = await task
+    finally:
+        _source_scanning.pop(key, None)
+
+    _source_cache[key] = (time.monotonic(), payload)
+    if len(_source_cache) > 256:
+        # 目录数量天然有限；真超了就把最旧的一条清掉，避免长跑无限增长
+        oldest = min(_source_cache.items(), key=lambda kv: kv[1][0])[0]
+        _source_cache.pop(oldest, None)
+    return payload, False
+
+
 @app.get("/api/v1/sources")
 async def list_sources(request: Request) -> JSONResponse:
     """列出可浏览的文档源（共享目录 / NAS）及其解析后的授权目录。"""
     username = await current_username(request)
-    return JSONResponse({"sources": _document_sources(username)})
+    force = request.query_params.get("refresh", "") in ("1", "true")
+
+    def scan() -> dict:
+        return {"sources": _document_sources(username)}
+
+    # 键要带上"解析结果与授权状态"：换挂载点（重装/换授权）或读写开关变化时
+    # 必须重新解析，不能沿用上一份 payload
+    cache_key = (
+        f"sources\x00{SHARED_ROOT}\x00{NAS_ROOT}\x00{SHARED_WRITABLE}\x00{username}"
+    )
+    payload, cached = await _cached_scan(cache_key, scan, force)
+    return JSONResponse({**payload, "cached": cached})
 
 
 def _read_entries_sync(root: Path, directory: Path) -> tuple[list[dict], bool]:
@@ -811,23 +875,25 @@ async def list_source_entries(
     if not directory.is_dir():
         raise HTTPException(status_code=404, detail="directory not found")
 
-    # 挂载盘上的目录读取是阻塞 syscall：丢到线程里跑，别挡住事件循环上的
-    # 其他请求（列文档 / 保存 / WOPI / 健康检查）。
-    entries, truncated = await asyncio.to_thread(
-        _read_entries_sync, root, directory
-    )
-
     rel = _source_relpath(root, directory)
-    parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
-    return JSONResponse(
-        {
+    force = request.query_params.get("refresh", "") in ("1", "true")
+
+    def scan() -> dict:
+        # 挂载盘上的目录读取是阻塞 syscall：交给 _cached_scan 在工作线程里跑，
+        # 既不挡事件循环（列文档 / 保存 / WOPI / 健康检查），也不会因为用户
+        # 来回点而重复扫盘。
+        entries, truncated = _read_entries_sync(root, directory)
+        parent = rel.rsplit("/", 1)[0] if "/" in rel else ""
+        return {
             "source": source,
             "path": rel,
             "parent": parent,
             "entries": entries,
             "truncated": truncated,
         }
-    )
+
+    payload, cached = await _cached_scan(f"entries\x00{source}\x00{rel}", scan, force)
+    return JSONResponse({**payload, "cached": cached})
 
 
 @app.get("/api/v1/sources/{source}/file")
@@ -931,20 +997,26 @@ async def list_source_documents(
     if not directory.is_dir():
         raise HTTPException(status_code=404, detail="directory not found")
 
-    # 这段递归遍历在挂载盘上很贵（每个条目都是网络 syscall），同步跑会把整个
-    # 服务卡住：遍历期间「我的文档」、保存、WOPI 全部排队（实测 781ms 里事件
-    # 循环只调度了 1 次）。丢到线程里跑，结果与耗时都不变，只是不再阻塞别人。
-    documents, truncated = await asyncio.to_thread(
-        _walk_documents_sync, root, directory
-    )
-    return JSONResponse(
-        {
+    rel = _source_relpath(root, directory)
+    force = request.query_params.get("refresh", "") in ("1", "true")
+
+    def scan() -> dict:
+        # 这段递归遍历在挂载盘上很贵：同步跑会把整个服务卡住（实测 781ms 里事件
+        # 循环只调度了 1 次），而"每次进 NAS 标签都全盘重扫"纯属浪费。交给
+        # _cached_scan：在工作线程里跑 + 极短 TTL 缓存 + 并发去重。
+        documents, truncated = _walk_documents_sync(root, directory)
+        return {
             "source": source,
-            "path": _source_relpath(root, directory),
+            "path": rel,
             "documents": documents,
             "truncated": truncated,
         }
+
+    # 键用"解析后的真实目录"，而不是 source+相对路径：挂载点换了就是另一个键
+    payload, cached = await _cached_scan(
+        f"documents\x00{source}\x00{directory}", scan, force
     )
+    return JSONResponse({**payload, "cached": cached})
 
 
 def _require_writable(source: str) -> None:
@@ -952,6 +1024,41 @@ def _require_writable(source: str) -> None:
     if not SHARED_WRITABLE:
         raise HTTPException(status_code=403, detail="shared source is read-only")
     source_root(source)
+
+
+# ============================================================================
+# 阻塞 I/O 一律出事件循环
+#
+# uvicorn 在这里是单进程单事件循环（server/Dockerfile 的 CMD 没有 --workers），
+# 而共享盘（SMB/NFS）上的每一次 write / read / stat 都是网络调用：一个用户在
+# 共享盘上保存占用几百毫秒，这期间其他人的保存、列目录、WOPI 回调、健康检查
+# 全部排队。表现出来就是"偶尔卡一下、对方光标突然跳一下"，单人自测复现不了。
+#
+# 列目录与 soffice 早已丢进线程（_read_entries_sync / _walk_documents_sync /
+# convert_file），这里把读写路径补齐。
+# ============================================================================
+
+
+def _atomic_write_private(target: Path, body: bytes) -> None:
+    """私有目录落盘：同目录临时文件 + os.replace，避免写到一半截断原文档。"""
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_bytes(body)
+    os.replace(tmp, target)
+
+
+def _write_source_or_skip(target: Path, body: bytes) -> bool:
+    """共享源落盘；内容与扩展名不符时跳过（返回 False，保持原文件不动）。"""
+    if not _accepts_body(target, body):
+        return False
+    _atomic_write(target, body)
+    return True
+
+
+def _copy_file_atomic(src: Path, dst: Path) -> int:
+    """读一份、原子写一份（共享盘 <-> 私有目录之间复制），返回字节数。"""
+    data = src.read_bytes()
+    _atomic_write(dst, data)
+    return len(data)
 
 
 def _atomic_write(target: Path, body: bytes) -> None:
@@ -1002,10 +1109,12 @@ async def put_source_file(source: str, request: Request, path: str) -> JSONRespo
     if len(body) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file too large")
 
-    if not _accepts_body(target, body):
+    written = await asyncio.to_thread(_write_source_or_skip, target, body)
+    if not written:
         size = target.stat().st_size if target.is_file() else 0
         return JSONResponse({"status": "ok", "path": path, "size": size, "unchanged": True})
-    _atomic_write(target, body)
+    # 共享盘内容变了：丢掉列举缓存，用户回到列表立刻看到新的时间/大小
+    _invalidate_source_cache()
     LOG.info("shared saved %s (%d bytes)", target, len(body))
     return JSONResponse({"status": "ok", "path": path, "size": len(body)})
 
@@ -1079,7 +1188,7 @@ async def copy_source_file_to_storage(
     if target.exists() and not overwrite:
         raise HTTPException(status_code=409, detail="target already exists")
 
-    _atomic_write(target, origin.read_bytes())
+    await asyncio.to_thread(_copy_file_atomic, origin, target)
     LOG.info("copied %s -> %s (%d bytes)", origin, target, size)
     return JSONResponse({"status": "ok", "name": origin.name, "size": size})
 
@@ -1420,11 +1529,12 @@ async def wopi_put_contents(name: str, request: Request) -> Response:
     if not _accepts_body(target, body):
         return Response(status_code=200)
     if data.get("s"):
-        _atomic_write(target, body)
+        # 共享源：写盘是网络调用（SMB/NFS），必须出事件循环，否则一次保存就会
+        # 卡住所有其他用户；内容与扩展名不符时跳过（保持原文件不动）。
+        if await asyncio.to_thread(_write_source_or_skip, target, body):
+            _invalidate_source_cache()
     else:
-        tmp = target.with_name(target.name + ".tmp")
-        tmp.write_bytes(body)
-        os.replace(tmp, target)
+        await asyncio.to_thread(_atomic_write_private, target, body)
     LOG.info("wopi saved %s for %s (%d bytes)", name, username, len(body))
     return Response(status_code=200)
 
