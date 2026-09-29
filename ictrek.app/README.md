@@ -99,6 +99,16 @@ PathPrefix(`/browser`) || PathPrefix(`/cool`) || PathPrefix(`/hosting`) || PathP
 - 这四个前缀目前没有其它应用占用。新增应用若也要占用，需要同步调整——Traefik 里同 rule 的路由会互相抢流量。
 - 前缀入口的 priority 必须高于 web 的 `-top-open`（1000）：后者对同一前缀按 `Sec-Fetch-Dest=document` 匹配并重定向到门户路由，直接打开 `cool.html` 时会被它截走。
 - Collabora 侧不需额外开关：`net.proxy_prefix` 实测不改变上述绝对路径，因此没有启用它；镜像里固化 `--o:ssl.enable=false --o:net.proto=IPv4 --o:ssl.termination=true`（见 `collabora/Dockerfile`）。其中 `ssl.termination=true` 不可省：网关终止 TLS 后 coolwsd 必须知道对外是 HTTPS，否则它产出 `ws://`，而页面是 HTTPS 加载的，浏览器会抛 `SecurityError` 拒绝建立 WebSocket。
+- **`ssl.termination` 是全局二选一，不能按请求协商**：置 `true` 时 coolwsd 无条件产出 `https://` / `wss://`，与请求带什么 `X-Forwarded-Proto` 无关（实测：显式发 `http` / `https` 两种，discovery 的 `urlsrc` 都是 `https://`）。因此**浏览器入口必须走 TLS 的那个 entrypoint（`web`，宿主 1180）**。若从明文入口（`web-internal`，宿主 1182）访问，浏览器会拿到 `wss://<host>:1182/cool/ws` 去连一个没有 TLS 的端口，握手必然失败，Collabora 报「无法建立网络连接或网络连接被意外关闭，反向代理可能配置错误」。
+- 要**同时**支持明文入口，只能再起一个 Collabora 实例（同镜像、`--o:ssl.termination=false`，产出 `ws://`），并用 Traefik `entryPoints` 把 `web-internal` 上的 `-collab` / `-collab-root` 指向它、`web` 上的仍指向现实例。多一份常驻 LibreOffice 内核，按需取舍。
+
+## x2t 资源的压缩协商（明文入口为什么打不开文档）
+
+`public/x2t/` 与 `public/x2t-1/` 里的 x2t 运行时（`x2t.js`、`x2t.wasm`）在仓库里是 **brotli 预压缩**的。Caddyfile 一度对它们写死 `Content-Encoding: br`，而 **Chrome 只在安全来源（https / localhost）才在 `Accept-Encoding` 里声明 `br`** —— 从明文入口进来的浏览器收到一个声称是 brotli 的响应却无法解码，浏览器直接判定请求失败，`utils/editor/x2t.worker.ts` 加载不到 `x2t-1/x2t.js` / `x2t.wasm`，于是**任何需要转换的文档**（doc / docx / xlsx / pptx）一律报「打开文件时发生错误」。新建空白文档不需要 x2t，所以它一直正常——这个对比是当时的主要误导线。
+
+修法：构建期由 `scripts/prepare-x2t-precompressed.mjs` 把资源展开成「明文 + `.br` + `.gz`」三件套，Caddyfile 用 `file_server { precompressed br gzip }` 按 `Accept-Encoding` 协商。`https` 客户端仍拿到 9.6MB 的 brotli，明文入口拿 13.9MB 的 gzip，都不会再解码失败。
+
+**结论：浏览器的正式入口是 TLS 的 `web`（宿主 1180，或经 frp 暴露的对外 https 端口）。`web-internal`（宿主 1182）按设计只服务应用容器之间的东西向互访，不是给浏览器用的**——在那里会同时踩到本文档里的两条坑。
 
 ## 镜像构建与发布流程
 

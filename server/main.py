@@ -220,10 +220,28 @@ async def current_username(request: Request) -> str:
             raise HTTPException(status_code=502, detail="userinfo unreachable")
         if resp.status_code != 200:
             raise HTTPException(status_code=401, detail="invalid VOS token")
-        data = resp.json() if resp.content else {}
-        raw = data.get("preferred_username") or data.get("sub") or ""
+        try:
+            payload = resp.json() if resp.content else {}
+        except ValueError:
+            raise HTTPException(status_code=401, detail="invalid VOS token")
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=401, detail="invalid VOS token")
+        # VOS 的 /v1000/oauth2/userinfo 在令牌无效时**同样返回 HTTP 200**，只是把
+        # body 换成 ResultBody 错误信封（{"code":10001,"category":...,"msg":...}）。
+        # 只判状态码会把"令牌无效"说成"用户名解析失败"，401 的成因在日志里根本
+        # 分不开（2026-09-29 排查时被误导过一轮）。成功时是 OIDC 标准 claims，
+        # 扁平返回、没有 ResultBody 包裹。
+        code = payload.get("code")
+        if isinstance(code, int) and code != 0:
+            LOG.warning(
+                "userinfo rejected token: code=%s msg=%s", code, payload.get("msg")
+            )
+            raise HTTPException(status_code=401, detail="invalid VOS token")
+        claims = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        raw = claims.get("preferred_username") or claims.get("sub") or ""
         username = USERNAME_SAFE_RE.sub("_", str(raw))[:64].strip("._") or ""
         if not username:
+            LOG.warning("userinfo returned no usable identity; claims=%s", list(claims)[:8])
             raise HTTPException(status_code=401, detail="username not resolvable")
         _username_cache[token] = (username, time.monotonic() + USERNAME_CACHE_TTL)
         if len(_username_cache) > 1024:
