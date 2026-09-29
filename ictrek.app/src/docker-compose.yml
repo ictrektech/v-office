@@ -32,11 +32,26 @@ x-v-office-web-base: &v-office-web-base
   labels:
     - "traefik.enable=true"
     - "traefik.docker.network=vos_default"
-    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-top-open.rule=PathPrefix(`/app/com.ictrek.v-office`) && HeadersRegexp(`Sec-Fetch-Dest`, `document`)"
+    # top-open 兜底：浏览器顶层打开应用地址（书签 / 直接粘 URL / 新标签页）时，
+    # 把请求送回门户 hash 路由，让应用跑在门户 iframe 里——否则拿不到
+    # window.vos_platform 注入，免登录与「我的文档」全线失效。
+    #
+    # 函数名必须是 v3 的 `HeaderRegexp`（单数）。写 v2 的旧名 `HeadersRegexp`
+    # 时 Traefik 3.x 解析规则失败，整条 router 被 **静默禁用**（API 里
+    # status=disabled，error=unsupported function），兜底完全失效——这正是
+    # 2026-09-29 那次事故的成因之一。
+    #
+    # priority 1000 必须低于 Collabora 入口(1100)：否则
+    # /app/com.ictrek.v-office/cool/... 的顶层文档加载会被本路由截走。
+    - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-top-open.rule=PathPrefix(`/app/com.ictrek.v-office`) && HeaderRegexp(`Sec-Fetch-Dest`, `document`)"
     - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-top-open.priority=1000"
     - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-top-open.service=${COMPOSE_PROJECT_NAME:-v-office}-web"
     - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-top-open.middlewares=${COMPOSE_PROJECT_NAME:-v-office}-top-open-redirect"
-    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-v-office}-top-open-redirect.redirectregex.regex=^(https?://[^/]+)/app/com\\.ictrek\\.v-office/?(?:\\?.*)?$"
+    # 正则覆盖前缀下**任意**路径（含 /editor 这类深链接）。旧版用 /?(?:\?.*)?$
+    # 只兜住裸前缀，而应用首页跳转后浏览器地址是 /app/com.ictrek.v-office/editor，
+    # 恰好落到正则之外，于是"直接打开 URL"的场景依旧在门户外裸跑。
+    # Collabora 入口由上面的 priority 保护，不受放宽影响。
+    - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-v-office}-top-open-redirect.redirectregex.regex=^(https?://[^/]+)/app/com\\.ictrek\\.v-office(?:/[^?#]*)?(?:\\?[^#]*)?$"
     - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-v-office}-top-open-redirect.redirectregex.replacement=$${1}/#/app/com.ictrek.v-office/v-office"
     - "traefik.http.middlewares.${COMPOSE_PROJECT_NAME:-v-office}-top-open-redirect.redirectregex.permanent=false"
     - "traefik.http.routers.${COMPOSE_PROJECT_NAME:-v-office}-web.rule=PathPrefix(`/app/com.ictrek.v-office`)"

@@ -511,8 +511,14 @@ verify_package() {
   if printf '%s\n' "$compose_text" | awk '/^[[:space:]]*image:/ {print $2}' | grep -v '^[^/[:space:]]\+\.[^/[:space:]]\+/' | grep -q .; then
     die "docker-compose.yml contains short image reference"
   fi
-  if ! printf '%s\n' "$compose_text" | grep -Fq 'HeadersRegexp(`Sec-Fetch-Dest`, `document`)'; then
+  if ! printf '%s\n' "$compose_text" | grep -Fq 'HeaderRegexp(`Sec-Fetch-Dest`, `document`)'; then
     die "docker-compose.yml must redirect top-level document opens to VOS hash route"
+  fi
+  # 函数名是 v3 的 HeaderRegexp（单数）。旧写法 HeadersRegexp 在 Traefik 3.x 里
+  # 解析失败，整条 router 会被静默禁用（status=disabled），兜底形同不存在，
+  # 且不会报错——只能靠打包期拦下来。
+  if printf '%s\n' "$compose_text" | grep -Fq 'HeadersRegexp(`Sec-Fetch-Dest`, `document`)'; then
+    die "docker-compose.yml uses the Traefik v2 rule name HeadersRegexp; Traefik v3 requires HeaderRegexp"
   fi
   if ! printf '%s\n' "$compose_text" | grep -Fq "${ROUTER_HASH_PATH}"; then
     die "docker-compose.yml redirect must target ${ROUTER_HASH_PATH}"
