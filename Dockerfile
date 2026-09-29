@@ -78,7 +78,12 @@ COPY . .
 
 # Run the Next.js static export build, then verify that Worker-loaded assets
 # retain the configured deployment prefix in the emitted browser bundle.
-RUN pnpm build && node scripts/check-exported-worker-paths.mjs
+#
+# prepare-x2t-precompressed 把 brotli 预压缩的 x2t 运行时展开成明文 + .br + .gz：
+# 只有 .br 一个版本时，不声明 br 的客户端（http 来源的 Chrome）会解码失败，
+# x2t 加载不了，文档一律打不开。详见该脚本头部与 Caddyfile。
+RUN pnpm build && node scripts/check-exported-worker-paths.mjs \
+ && node scripts/prepare-x2t-precompressed.mjs
 
 # ============================================================
 # Stage 3: Caddy production server

@@ -49,24 +49,37 @@
     }
     header @next_static Cache-Control "public, max-age=31556952, immutable"
 
-    # x2t 运行时（brotli 压缩的 wasm 近 10MB + worker js）：内容随版本固定，
-    # 必须长期缓存——默认的 no-cache 会让浏览器每次打开文档都重新下载/校验这
-    # 近 10MB，表现为"打开 Word 一直转圈"。
+    # x2t 运行时（wasm 60MB+ + worker js）：内容随版本固定，必须长期缓存——
+    # 默认的 no-cache 会让浏览器每次打开文档都重新下载/校验这棵大树，表现为
+    # "打开 Word 一直转圈"。
     # 用 handle 单独兜住：matcher 形式的 header 会被上面的默认规则覆盖，handle
     # 的求值顺序是确定的。
+    #
+    # 压缩必须交给 precompressed 做内容协商，**不能**写死 `Content-Encoding: br`：
+    # 仓库里这几个文件是 brotli 预压缩的，但 Chrome 只在安全来源（https /
+    # localhost）才在 Accept-Encoding 里声明 br。写死时，从 http 入口进来的
+    # 浏览器收到 Content-Encoding: br 却无法解码，直接判定请求失败 →
+    # x2t.worker 加载不到 x2t.js/x2t.wasm → 任何需要转换的文档一律
+    # 「打开文件时发生错误」（2026-09-29 线上事故）。
+    # 构建期由 scripts/prepare-x2t-precompressed.mjs 补出明文与 .br/.gz 旁挂
+    # 文件，这里按 Accept-Encoding 选最合适的那份。
     handle /x2t/* {
         header Cache-Control "public, max-age=31556952, immutable"
-        @x2t_wasm_file path *.wasm
-        header @x2t_wasm_file Content-Encoding br
-        file_server
+        file_server {
+            precompressed br gzip
+        }
     }
 
-    # Brotli-encoded x2t versioned bundles
+    # x2t 版本化 bundle（/x2t-*/*），同上
     @x2t_suffix {
         path /x2t-*/*
     }
-    header @x2t_suffix Content-Encoding br
-    header @x2t_suffix Cache-Control "public, max-age=31556952, immutable"
+    handle @x2t_suffix {
+        header Cache-Control "public, max-age=31556952, immutable"
+        file_server {
+            precompressed br gzip
+        }
+    }
 
     # 兼容层：极早期前端缓存仍请求 /v9.3.0.24-1，转发到当前内核目录，
     # 老用户无需清浏览器缓存即可继续使用（配合上方 no-cache 策略过渡）
