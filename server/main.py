@@ -1247,6 +1247,7 @@ COLLABORA_WARMUP_TIMEOUT = int(
 async def _collabora_discover() -> str:
     """单次探测 discovery，成功返回 urlsrc 模板，失败返回空串。"""
     internal = COLLABORA_INTERNAL_URL.rstrip("/")
+    started = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(f"{internal}/hosting/discovery")
@@ -1265,27 +1266,37 @@ async def _collabora_discover() -> str:
 async def _collabora_warmup_loop() -> None:
     global _collabora_state, _collabora_state_since, _collabora_failures
     while True:
-        ok = bool(await _collabora_discover())
-        if ok:
-            _collabora_failures = 0
-            if _collabora_state != "ok":
-                LOG.info("collabora discovery ready")
-            _collabora_state = "ok"
-            await asyncio.sleep(30)  # 就绪后降频保活，感知容器重启
-            continue
+        try:
+            ok = bool(await _collabora_discover())
+            if ok:
+                _collabora_failures = 0
+                if _collabora_state != "ok":
+                    LOG.info("collabora discovery ready")
+                _collabora_state = "ok"
+                await asyncio.sleep(30)  # 就绪后降频保活，感知容器重启
+                continue
 
-        _collabora_failures += 1
-        # 单次探测失败多半只是 coolwsd 正忙着加载文档（它会短暂不响应 discovery）。
-        # 以前一次失败就把全局状态打成 warming_up，前端会因此弹"正在启动内核"并
-        # 干等 20~30 秒——哪怕此刻打开文档其实是通的。这里要求连续两次失败才降级。
-        if _collabora_failures >= 2 and _collabora_state != "warming_up":
-            LOG.warning(
-                "collabora discovery lost (%d consecutive failures), probing again",
-                _collabora_failures,
-            )
-            _collabora_state = "warming_up"
-            _collabora_state_since = time.time()
-        await asyncio.sleep(5)  # 未就绪期间高频探测
+            _collabora_failures += 1
+            # 单次探测失败多半只是 coolwsd 正忙着加载文档（它会短暂不响应 discovery）。
+            # 以前一次失败就把全局状态打成 warming_up，前端会因此弹"正在启动内核"并
+            # 干等 20~30 秒——哪怕此刻打开文档其实是通的。这里要求连续两次失败才降级。
+            if _collabora_failures >= 2 and _collabora_state != "warming_up":
+                LOG.warning(
+                    "collabora discovery lost (%d consecutive failures), probing again",
+                    _collabora_failures,
+                )
+                _collabora_state = "warming_up"
+                _collabora_state_since = time.time()
+            await asyncio.sleep(5)  # 未就绪期间高频探测
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            # 保活循环绝不能因为单次异常就退出：一旦退出，状态永远停在 warming_up，
+            # 180 秒后对外就变成"Collabora 不可用"——哪怕 coolwsd 其实好好的。
+            # （线上就是这么踩的：探测失败分支里引用了一个未定义变量，抛 NameError
+            # 直接掀掉了整个循环。）
+            LOG.warning("collabora warmup loop error: %s", exc)
+            await asyncio.sleep(5)
 
 
 def _collabora_effective_state() -> str:
