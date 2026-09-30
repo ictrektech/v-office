@@ -127,6 +127,18 @@ RUN find "./v${DS_VERSION}-${HASH}/web-apps" -type f \( -name "*.json" -o -name 
       -e 's/正在下载文件/正在保存文档/g' \
       {} +
 
+# OnlyOffice 自带的 preload.html 会把四个编辑器（doc / 表 / PPT / Visio）的 bundle
+# 全预加载一遍，实测打开一个 Word 会因此白下约 2.1MB —— 而且 cell / slide / visio
+# 的**完整** sdk-all.js 也在它的预加载列表里（慢网络上是灾难）。应用侧实际能打开的
+# 格式里 Word 占绝大多数，其余删掉：不预热它们不影响任何功能，只是切换格式首次稍慢。
+# 应用侧另有 Service Worker（public/sw.js）把内核资源缓进 Cache API，
+# 避免每次打开文档都重新下载几十 MB 字体/内核。
+RUN PRELOAD="./v${DS_VERSION}-${HASH}/web-apps/apps/api/documents/preload.html" \
+    && sed -i -e '/sdkjs\/cell\//d' -e '/sdkjs\/slide\//d' -e '/sdkjs\/visio\//d' \
+             -e '/apps\/spreadsheeteditor\//d' -e '/apps\/presentationeditor\//d' \
+             -e '/apps\/visioeditor\//d' "$PRELOAD" \
+    && grep -c 'rel="preload"' "$PRELOAD"
+
 # Copy the Next.js static export output.
 #
 # 必须放在最后，不能放在最前面。这个 COPY 的输入（out/）每次改应用代码都会变，
