@@ -1,5 +1,8 @@
 :80 {
     root * /srv
+    # 访问日志（输出到容器 stdout）：排查"打开文档慢"这类问题全靠它——
+    # 每条请求的 URI / 体积 / 服务端耗时都能对上号。
+    log
 
     # Serve static files; return a genuine 404 if the file doesn't exist
     # (do NOT fall back to index.html — Next.js static export has a real
@@ -33,6 +36,22 @@
     # Caddy 的 path 匹配器只支持结尾通配（/v*-*/* 与 /v*/* 都不匹配），
     # 这里用正则匹配器，版本目录变了也不用改配置；排除 v9.3.0.24-1 —— 那是
     # 极早期缓存的兼容前缀，由下面的 handle_path 重写到当前版本目录。
+    # 内核字体（/v<版本>/fonts/<编号>，文件没有扩展名）：Caddy 只能给
+    # application/octet-stream，而该类型不在默认可压缩名单里，于是 161MB 字体
+    # 全裸传（单个 4~17MB，首次填充一次要过 100MB+）。显式声明字体类型后
+    # encode 才会生效——TTF 一般能压掉 40%~50%。
+    # 字体是 XHR(arraybuffer) 取的，Content-Type 不参与解析，改它没有副作用。
+    @kernel_fonts {
+        path_regexp ^/v[^/]+/fonts/
+        not path /v9.3.0.24-1/*
+    }
+    handle @kernel_fonts {
+        header Content-Type "application/ttf"
+        header Cache-Control "public, max-age=31556952, immutable"
+        encode zstd gzip
+        file_server
+    }
+
     @onlyoffice_assets {
         path_regexp ^/v[^/]+/
         not path /v9.3.0.24-1/*
