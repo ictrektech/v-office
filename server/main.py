@@ -1238,6 +1238,7 @@ COLLABORA_INTERNAL_URL = os.environ.get(
 # ----------------------------------------------------------------------------
 _collabora_state = "warming_up"          # ok | warming_up
 _collabora_state_since = time.time()     # 进入当前状态的时刻
+_collabora_failures = 0                  # 连续探测失败次数（用来容忍偶发抖动）
 COLLABORA_WARMUP_TIMEOUT = int(
     os.environ.get("V_OFFICE_COLLABORA_WARMUP_TIMEOUT", "180")
 )
@@ -1252,26 +1253,39 @@ async def _collabora_discover() -> str:
             resp.raise_for_status()
             found = re.search(r'urlsrc="([^"]+)"', resp.text)
             return found.group(1) if found else ""
-    except Exception as exc:  # noqa: BLE001 - 探活失败是常态，debug 记录即可
-        LOG.debug("collabora discovery probe failed: %s", exc)
+    except Exception as exc:  # noqa: BLE001 - 探活失败是常态，记录耗时便于定位
+        LOG.warning(
+            "collabora discovery probe failed after %dms: %s",
+            int((time.monotonic() - started) * 1000),
+            exc,
+        )
         return ""
 
 
 async def _collabora_warmup_loop() -> None:
-    global _collabora_state, _collabora_state_since
+    global _collabora_state, _collabora_state_since, _collabora_failures
     while True:
         ok = bool(await _collabora_discover())
         if ok:
+            _collabora_failures = 0
             if _collabora_state != "ok":
                 LOG.info("collabora discovery ready")
             _collabora_state = "ok"
             await asyncio.sleep(30)  # 就绪后降频保活，感知容器重启
-        else:
-            if _collabora_state != "warming_up":
-                LOG.warning("collabora discovery lost, probing again")
-                _collabora_state = "warming_up"
-                _collabora_state_since = time.time()
-            await asyncio.sleep(5)  # 未就绪期间高频探测
+            continue
+
+        _collabora_failures += 1
+        # 单次探测失败多半只是 coolwsd 正忙着加载文档（它会短暂不响应 discovery）。
+        # 以前一次失败就把全局状态打成 warming_up，前端会因此弹"正在启动内核"并
+        # 干等 20~30 秒——哪怕此刻打开文档其实是通的。这里要求连续两次失败才降级。
+        if _collabora_failures >= 2 and _collabora_state != "warming_up":
+            LOG.warning(
+                "collabora discovery lost (%d consecutive failures), probing again",
+                _collabora_failures,
+            )
+            _collabora_state = "warming_up"
+            _collabora_state_since = time.time()
+        await asyncio.sleep(5)  # 未就绪期间高频探测
 
 
 def _collabora_effective_state() -> str:
@@ -1368,14 +1382,21 @@ async def _collabora_editor_url(wopi_src: str, token: str) -> str:
     urlsrc 在镜像升级时会变（含哈希路径），因此不能写死，必须动态取。
     """
     template = ""
-    # 请求内重试：撞上冷启动窗口时原地等容器就绪（约 20s），而不是立即失败
-    for attempt in range(3):
+    # 请求内重试：撞上冷启动窗口时原地等一小会儿，而不是立即失败。
+    #
+    # 但**不能**在这里排长队：前端取会话的 AbortSignal 超时是 10s，而原来是
+    # 3 次 ×（5s 超时 + 2s 间隔）＝ 最坏 19s，比前端超时还长——结果就是"点了
+    # 文档干等十几秒，最后前端超时失败"，这正是线上"打开要 20 多秒"的成因之一。
+    # 冷启动的正解是前端按 /wopi/status 显示等待提示（那条路不受这里影响），
+    # 所以这里只留一次短重试。
+    started = time.monotonic()
+    for attempt in range(2):
         template = await _collabora_discover()
         if template:
             break
-        LOG.warning("collabora discovery attempt %d/3 failed", attempt + 1)
-        if attempt < 2:
-            await asyncio.sleep(2)
+        LOG.warning("collabora discovery attempt %d/2 failed", attempt + 1)
+        if attempt == 0:
+            await asyncio.sleep(0.5)
 
     if not template:
         # 取不到 discovery（Collabora 容器没起来 / 网络不通）时不要编一个地址：
@@ -1384,7 +1405,8 @@ async def _collabora_editor_url(wopi_src: str, token: str) -> str:
         # 前端区分「正在启动（等待重试）」和「确实不可用（立即回退）」。
         reason = _collabora_effective_state()
         LOG.warning(
-            "collabora discovery unavailable (state=%s), refusing to fabricate an URL",
+            "collabora discovery unavailable after %dms (state=%s), refusing to fabricate an URL",
+            int((time.monotonic() - started) * 1000),
             reason,
         )
         raise HTTPException(
