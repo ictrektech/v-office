@@ -25,12 +25,15 @@ export class X2tConverter {
   private messageId = 0;
   private pendingMessages = new Map<number, PendingMessage>();
 
-  constructor() {
-    // Auto-initialize worker on construction
-    if (globalThis.Worker) {
-      this.init();
-    }
-  }
+  /**
+   * 构造时**不**起 worker。
+   *
+   * 一构造就 new Worker 会让"打开 PDF / 用 Collabora"这类完全不需要转换的场景
+   * 也去下载并编译 62.6MB 的 x2t wasm（首次传输 9.66MB）。真正需要时 convert()
+   * 自己会 await init()；想提前预热就显式调 init()（需在**主页面上下文**里做，
+   * 编辑器页通过客户端路由复用同一个单例）。
+   */
+  constructor() {}
 
   /**
    * Get next unique message ID

@@ -71,10 +71,15 @@ async function ensureInit(): Promise<void> {
   return initPromise;
 }
 
-// Auto-initialize on worker creation
-ensureInit().catch((err) => {
-  console.error("[x2t.worker] Auto-init failed:", err);
-});
+// 刻意**不**在 worker 创建时自动初始化。
+//
+// x2t 的 wasm 解压后 62.6MB（首次传输 9.66MB），一创建 worker 就拉，会把
+// "打开 PDF""用 Collabora 打开"这些根本不需要转换的场景也一起拖下水——它们
+// 既用不到 x2t，却要付下载 + 编译的钱。改为第一次真正收到 convert 消息时再
+// 初始化（见下面 case "convert" 里的 ensureInit()）。
+//
+// 需要"提前预热"的路径可以显式调 converter.init()，但必须在**主页面上下文**里做：
+// 编辑器页是客户端路由过去的同一个 JS 上下文，模块单例被复用，那次初始化才不白做。
 
 /**
  * Clean up temporary files after conversion

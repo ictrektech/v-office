@@ -61,8 +61,19 @@ function normalizeExt(ext: string | undefined | null): string {
   return (ext || "").toLowerCase().replace(/^\./, "");
 }
 
+/** 老版二进制格式（doc / xls / ppt）：本地内核读不好、更要命的是**写不出**。 */
+export function isLegacyOfficeExt(ext: string | undefined | null): boolean {
+  return LEGACY_EXTS.has(normalizeExt(ext));
+}
+
 /**
  * 是否改用 Collabora 内核。
+ *
+ * 老版二进制格式（doc / xls / ppt）**无条件**走 Collabora：x2t 写不出这些格式
+ * （.doc 输出 0 字节、xls 根本没有实现），打开解析也不好——留在本地内核上只会
+ * 得到"能打开、一保存就写出坏文件/空文件"这种最糟的结果。因此这里连内核偏好与
+ * URL 覆盖都不看：过去把偏好判断放在前面，导致默认配置（wordEngine=onlyoffice）
+ * 下这些老格式实际走的是本地内核，与代码注释写的相反。
  *
  * @param ext      文档扩展名
  * @param override URL 上的 `engine` 参数（collabora / onlyoffice），
@@ -73,10 +84,10 @@ export function shouldUseCollabora(
   override?: string | null,
 ): boolean {
   if (!isCollaboraExt(ext)) return false;
+  if (isLegacyOfficeExt(ext)) return true;
   if (override === "collabora") return true;
   if (override === "onlyoffice") return false;
-  // 老格式默认交给 Collabora；其余（docs 的现代格式）仍按部署默认
-  if (LEGACY_EXTS.has(normalizeExt(ext))) return true;
+  // 其余（docx/xlsx/pptx 等现代格式）按部署默认
   return COLLABORA_WORD_ENGINE;
 }
 

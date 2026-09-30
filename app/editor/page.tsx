@@ -16,6 +16,7 @@ import {
   getDocumentType,
   PRELOAD_HTML,
 } from "@/utils/editor/utils";
+import { ensureKernelCacheWorker } from "@/utils/editor/kernel-cache";
 import io, { MockSocket } from "@/utils/editor/socket";
 import { createFetchProxy } from "@/utils/editor/fetch";
 import { createXHRProxy } from "@/utils/editor/xhr";
@@ -27,6 +28,7 @@ import {
   guessExtension,
   hideCollaboraWelcomeScreen,
   isCollaboraExt,
+  isLegacyOfficeExt,
   mustCollaborateOnShared,
   pushDocumentToStorage,
   shouldUseCollabora,
@@ -38,7 +40,7 @@ import {
   isHybragInstalled,
   uploadKnowledgeFile,
 } from "@/utils/hybrag/client";
-import { renameStoredFile } from "@/utils/vos/storage";
+import { clientLog, renameStoredFile } from "@/utils/vos/storage";
 import { useRouter } from "next/navigation";
 import {
   getVOSAccessToken,
@@ -79,6 +81,11 @@ export default function Page() {
    * 回退到本地内核编辑——整份字节覆盖会抹掉协作者刚改的内容。
    */
   const [sharedCollaborative, setSharedCollaborative] = useState(false);
+  /**
+   * 老版二进制格式（doc / xls / ppt）：本地内核写不出这些格式，必须走 Collabora，
+   * 且同样不允许回退到本地内核编辑。
+   */
+  const [legacyCollabora, setLegacyCollabora] = useState(false);
   /** 编辑器首帧是否已经画出来；没画出来之前盖一层骨架，避免白屏/黑屏观感 */
   const [editorPainted, setEditorPainted] = useState(false);
   /** Collabora iframe：用于摘掉首启浮层、监听首帧 */
@@ -87,6 +94,8 @@ export default function Page() {
   const [switchingEngine, setSwitchingEngine] = useState(false);
   /** 当前实际生效的内核，用于避免重复初始化与切换失败的回退判断 */
   const activeEngineRef = useRef<"onlyoffice" | "collabora" | null>(null);
+  /** 打开耗时打点（供 useCallback 里的流程使用；实现由 effect 里的 init 注入） */
+  const openMarkRef = useRef<(phase: string) => void>(() => {});
   /** 可重复执行的编辑器启动函数（供 UI 按钮切换内核时复用） */
   const startEditorRef = useRef<((useCollabora: boolean) => Promise<void>) | null>(
     null,
@@ -178,7 +187,11 @@ export default function Page() {
    */
   const ensureCollaboraReady = useCallback(async (): Promise<boolean> => {
     const zh = language.toLowerCase().startsWith("zh");
+    const statusStarted = performance.now();
     const state = await fetchCollaboraStatus();
+    openMarkRef.current(
+      `status=${state} ${Math.round(performance.now() - statusStarted)}ms`,
+    );
     if (state !== "warming_up") {
       if (state === "unavailable") {
         toast.error(
@@ -209,6 +222,9 @@ export default function Page() {
         }
         await new Promise((resolve) => setTimeout(resolve, 3000));
         const next = await fetchCollaboraStatus();
+        openMarkRef.current(
+          `wait-status=${next} at ${Math.round((Date.now() - startedAt) / 1000)}s`,
+        );
         if (next === "ok" || next === "unknown") return true;
         if (next === "unavailable") break;
         setWaitSeconds(Math.floor((Date.now() - startedAt) / 1000));
@@ -233,12 +249,17 @@ export default function Page() {
       const start = startEditorRef.current;
       if (!start || switchingEngine) return;
       const zh = language.toLowerCase().startsWith("zh");
-      // 共享盘文档只有一个合法内核：切到本地 OnlyOffice 会整份覆盖协作者的内容
-      if (!useCollabora && server.getSharedTarget()) {
+      // 强制协同的文档只有一个合法内核：共享盘文档切回本地会整份覆盖协作者的
+      // 内容；老格式（doc/xls/ppt）本地内核写不出，切回去等于保存出坏文件。
+      if (
+        !useCollabora &&
+        (server.getSharedTarget() ||
+          isLegacyOfficeExt(server.getDocument().fileType))
+      ) {
         toast.error(
           zh
-            ? "共享盘文档以多人协同方式打开，不能切回本地内核"
-            : "Shared documents stay on the collaboration engine",
+            ? "该文档以协同内核打开，不能切回本地内核"
+            : "This document stays on the collaboration engine",
         );
         return;
       }
@@ -400,6 +421,12 @@ export default function Page() {
      */
     let forceReadOnly = false;
 
+    /**
+     * 打开文档的分阶段耗时打点，写到 storage 的 /client-log（容器日志里能看到）。
+     * 线上"打开要 20 多秒"这类问题必须靠真实数据定位，不能凭猜。
+     */
+    let mark: (phase: string) => void = () => {};
+
     // AI 助手等 OnlyOffice 插件运行在编辑器 iframe 内，沿 parent 链查找该桥
     // 获取宿主能力（VOS 访问令牌、当前文档名）。
     window.__voffice = {
@@ -411,6 +438,11 @@ export default function Page() {
     MockSocket.on("disconnect", server.handleDisconnect);
 
     const onAppReady = () => {
+      // 首帧骨架必须在这里收掉：OnlyOffice 的 app-ready 就是"编辑器壳已经画出来"。
+      // 漏掉这一句的后果是那层不透明遮罩一直盖到兜底定时器（原本 20s），
+      // 用户看到的就是"打开文档要 20 多秒"——实际文档早就好了。
+      setEditorPainted(true);
+      mark("paint=onlyoffice-app-ready");
       const iframe = document.querySelector<HTMLIFrameElement>(
         'iframe[name="frameEditor"]',
       );
@@ -534,7 +566,9 @@ export default function Page() {
           onAppReady: async () => {
             onAppReady();
           },
-          onDocumentReady: () => {},
+          onDocumentReady: () => {
+            mark("doc-ready");
+          },
           onDocumentStateChange: (e: { data: boolean; target: unknown }) => {
             if (e.data) {
               isDirty.current = true;
@@ -638,14 +672,42 @@ export default function Page() {
       setSharedCollaborative(sharedCollaborative);
 
       /**
+       * 老版二进制格式（doc / xls / ppt）同样强制走 Collabora：x2t 写不出这些
+       * 格式（.doc 输出 0 字节、xls 根本没有实现），留在本地内核上只会得到
+       * "能打开、一保存就写坏"的结果。
+       */
+      const legacyCollabora = isLegacyOfficeExt(ext);
+      setLegacyCollabora(legacyCollabora);
+
+      /** 当前文档是否属于"必须走 Collabora"的强制集合（共享源 或 老格式） */
+      const forcedCollaborative = sharedCollaborative || legacyCollabora;
+      // 打开耗时打点：带文档标识与阶段，落到 storage 的容器日志里
+      const t0 = performance.now();
+      let docLabel = "";
+      mark = (phase: string) =>
+        void clientLog(
+          `open-timing +${Math.round(performance.now() - t0)}ms ${phase}` +
+            (docLabel ? ` | ${docLabel}` : ""),
+        );
+      openMarkRef.current = mark;
+
+      docLabel =
+        `${ext || "?"} new=${server.isNewDocumentOpen()} shared=${sharedCollaborative}` +
+        ` legacy=${legacyCollabora}`;
+      // 从编辑器路由直接进来（刷新/外链）也要注册内核缓存：字体与内核是每次打开
+      // 的最大开销，交给 Service Worker 用 Cache API 兜住（见 public/sw.js）
+      ensureKernelCacheWorker();
+      mark("init");
+
+      /**
        * 按内核启动编辑器，可重复调用（UI 按钮切换内核时复用）。
        * doc/docx 默认用 OnlyOffice；useCollabora 为 true 时先换取
        * Collabora 会话，取不到再回退 OnlyOffice，保证“新内核不可用”
        * 不会演变成“文档打不开”。
        */
       const startEditor = async (useCollabora: boolean) => {
-        // 共享源文档即使扩展名不在"手动可切"名单里，也强制走协同
-        if (useCollabora && (collaboraDoc || sharedCollaborative)) {
+        // 共享源文档、老格式（doc/xls/ppt）即使不在"手动可切"名单里也强制走协同
+        if (useCollabora && (collaboraDoc || forcedCollaborative)) {
           const name =
             original?.name ||
             searchParams.get("fileName") ||
@@ -659,6 +721,7 @@ export default function Page() {
             : original
               ? await pushDocumentToStorage(original.name, original.data)
               : Boolean(fileUrl);
+          const sessionStarted = performance.now();
           const session = ready
             ? await fetchCollaboraSession(
                 name,
@@ -666,6 +729,9 @@ export default function Page() {
                 sharedTarget,
               )
             : null;
+          mark(
+            `session=${session ? "ok" : "fail"} ${Math.round(performance.now() - sessionStarted)}ms`,
+          );
           if (session) {
             // 销毁已有 OnlyOffice 实例，避免事件监听残留
             editorRef.current?.destroyEditor?.();
@@ -676,14 +742,15 @@ export default function Page() {
             setCollaboraUrl(session.editorUrl);
             return;
           }
-          if (sharedCollaborative) {
-            // 共享盘文档绝不回退到本地内核编辑：整份字节覆盖会抹掉协作者的
-            // 修改。降级为只读打开，并明确告诉用户为什么。
+          if (forcedCollaborative) {
+            // 这类文档绝不回退到本地内核：共享盘文档回退会整份字节覆盖、抹掉
+            // 协作者的修改；老格式（doc/xls/ppt）本地内核**写不出**，回退等于
+            // "能打开、一保存就写坏"。降级为只读打开，并说明原因。
             forceReadOnly = true;
             toast.error(
               language.toLowerCase().startsWith("zh")
-                ? "协同内核暂不可用，已以只读方式打开；为避免覆盖他人修改，请稍后重新打开"
-                : "Collaboration engine unavailable — opened read-only so others' edits are not overwritten",
+                ? "协同内核暂不可用，已以只读方式打开；为避免写坏或覆盖，请稍后重新打开"
+                : "Collaboration engine unavailable — opened read-only to avoid overwriting or corrupting the file",
             );
           } else if (activeEngineRef.current === "onlyoffice") {
             // 手动切换失败：OnlyOffice 仍在运行，维持现状不重复初始化
@@ -707,6 +774,7 @@ export default function Page() {
         // #placeholder 由 collaboraUrl 条件渲染，等 React 提交后再挂编辑器
         await new Promise((resolve) => setTimeout(resolve, 0));
         loadEditor();
+        mark("mount=onlyoffice");
       };
       startEditorRef.current = startEditor;
 
@@ -721,18 +789,19 @@ export default function Page() {
             ? "onlyoffice"
             : null);
       const useCollabora =
-        sharedCollaborative || shouldUseCollabora(ext, enginePref);
-      if (useCollabora && !sharedCollaborative) {
-        // 私有文档：上次会话选了 Collabora 而内核还在冷启动时，先等就绪再
-        // 挂载，避免静默回退 OnlyOffice 让用户困惑
+        forcedCollaborative || shouldUseCollabora(ext, enginePref);
+      if (useCollabora && !forcedCollaborative) {
+        // 私有现代格式文档：上次会话选了 Collabora 而内核还在冷启动时，先等
+        // 就绪再挂载，避免静默回退 OnlyOffice 让用户困惑
         const ready = await ensureCollaboraReady();
         if (!ready) {
           await startEditor(false);
           return;
         }
       }
-      // 共享源文档直接取会话、不做前置探活：那次探活是一次多余往返，而"内核
-      // 不可用"由取会话的失败路径兜住（降级为只读），更快也少一层等待。
+      // 强制协同的文档（共享源 / 老格式）直接取会话、不做前置探活：那次探活是
+      // 一次多余往返，而"内核不可用"由取会话的失败路径兜住（降级为只读），
+      // 更快也少一层等待。
       await startEditor(useCollabora);
     }
 
@@ -747,10 +816,14 @@ export default function Page() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasHydrated]);
 
-  /** 骨架兜底：正常由 onLoad / onAppReady 收尾，异常时 20s 后也不至于常驻 */
+  /**
+   * 骨架兜底：正常由 iframe onLoad / onAppReady 收尾。这里只兜 4 秒——骨架的职责
+   * 是盖住"路由切进来的那一下白屏"，不是盖住整个加载过程；一旦兜底时间设长，
+   * 万一收尾的信号没接上（曾经真实发生过），用户看到的就是干等十几秒的白遮罩。
+   */
   useEffect(() => {
     if (editorPainted) return;
-    const timer = window.setTimeout(() => setEditorPainted(true), 20_000);
+    const timer = window.setTimeout(() => setEditorPainted(true), 4_000);
     return () => window.clearTimeout(timer);
   }, [editorPainted]);
 
@@ -763,6 +836,9 @@ export default function Page() {
     if (!frame) return;
     return hideCollaboraWelcomeScreen(frame);
   }, [collaboraUrl]);
+
+  /** 渲染期用的同一判定（强制走 Collabora 的文档不给"切回本地内核"的入口） */
+  const forcedCollaborative = sharedCollaborative || legacyCollabora;
 
   /**
    * 悬浮按钮组的落点。
@@ -841,8 +917,8 @@ export default function Page() {
           </span>
         </button>
       )}
-      {/* 共享盘文档固定协同内核：不给"切回本地内核"的入口（会整份覆盖） */}
-      {collaboraUrl && !sharedCollaborative && (
+      {/* 强制协同的文档（共享盘 / 老格式）不给"切回本地内核"的入口 */}
+      {collaboraUrl && !forcedCollaborative && (
         <button
           type="button"
           onClick={() => handleSwitchEngine(false)}
@@ -916,7 +992,10 @@ export default function Page() {
         src={collaboraUrl}
         className="fixed inset-0 h-screen w-screen border-0"
         allow="clipboard-read; clipboard-write; fullscreen"
-        onLoad={() => setEditorPainted(true)}
+        onLoad={() => {
+          setEditorPainted(true);
+          openMarkRef.current("paint=collabora-iframe");
+        }}
       />
     ) : (
       <div>
