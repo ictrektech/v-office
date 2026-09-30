@@ -12,6 +12,7 @@ import { MobileNav } from "@/components/main/mobile-nav";
 import { ExtensionPrompt } from "@/components/extension-prompt";
 import { isDarkTheme } from "@/utils/utils";
 import { APP_ROOT, PRELOAD_HTML } from "@/utils/editor/utils";
+import { ensureKernelCacheWorker } from "@/utils/editor/kernel-cache";
 
 export default function MainLayout({
   children,
@@ -23,6 +24,12 @@ export default function MainLayout({
   const { server, theme } = useAppStore();
   const preloadRef = useRef<HTMLDivElement>(null);
 
+  // 内核资源缓存：OnlyOffice 的字体/内核每次打开要过几十 MB，HTTP 缓存留不住，
+  // 交给 Service Worker 用 Cache API 缓存（见 public/sw.js）
+  useEffect(() => {
+    ensureKernelCacheWorker();
+  }, []);
+
   // Preload editor iframe when browser is idle
   useEffect(() => {
     const idle = window.requestIdleCallback || ((cb: () => void) => setTimeout(cb, 2000));
@@ -32,11 +39,13 @@ export default function MainLayout({
       iframe.src = APP_ROOT + PRELOAD_HTML;
       iframe.className = "w-0 h-0 hidden absolute -z-10";
       preloadRef.current.appendChild(iframe);
+      // 顺便把编辑器路由自己的 chunk 也预取掉（点进去就不用等它下载）
+      router.prefetch("/editor");
     });
     return () => {
       (window.cancelIdleCallback || clearTimeout)(id);
     };
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     const isDark = isDarkTheme(theme);
