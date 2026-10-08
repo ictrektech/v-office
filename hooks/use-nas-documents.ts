@@ -224,7 +224,7 @@ export function useNasDocuments(language: string) {
   const downloadDocument = useCallback(async (doc: NasDocument) => {
     setBusyKey(doc.key);
     try {
-      const file = await openSharedDocument(doc.sourceId, doc.path);
+      const { file } = await openSharedDocument(doc.sourceId, doc.path);
       const url = URL.createObjectURL(file);
       const anchor = document.createElement("a");
       anchor.href = url;

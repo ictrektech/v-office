@@ -248,11 +248,18 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
         self.client = httpx.AsyncClient(transport=transport, base_url="http://test")
         self.addAsyncCleanup(self.client.aclose)
 
-        # 并发相关的状态是模块级的：上一个用例留下的协同锁 / 排队锁 / 幂等键
-        # 会漏进下一个用例，必须在每个用例结束时清掉。
+        # 并发相关的状态是模块级的：上一个用例留下的协同锁 / 排队锁 / 幂等键 /
+        # 列举缓存 / 内容指纹缓存都会漏进下一个用例，必须在每个用例结束时清掉。
         self.addCleanup(main._wopi_locks.clear)
         self.addCleanup(main._copy_locks.clear)
         self.addCleanup(main._copy_idempotency.clear)
+        self.addCleanup(main._source_cache.clear)
+        self.addCleanup(main._VERSION_CACHE.clear)
+
+    @staticmethod
+    def _backup_files(history: Path) -> list[Path]:
+        """留底目录里真正的备份。这里还躺着 `.author` 之类的辅助记录，不能算进来。"""
+        return [p for p in history.iterdir() if not p.name.endswith(".author")]
 
     def _restore_roots(self) -> None:
         main.SHARED_ROOT, main.NAS_ROOT = self._original_roots
@@ -468,6 +475,8 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(missing.status_code, 404)
         self.assertEqual(traversal.status_code, 400)
         self.assertEqual(readonly.status_code, 403)
+        # 新建走的是"写临时文件 → os.link 落位"：不能把临时文件留在公共目录里
+        self.assertEqual(list(public.glob("*.v-office-tmp")), [])
 
     async def test_copies_a_shared_document_into_my_documents(self) -> None:
         """NAS → 我的文档：服务端复制、默认不覆盖、路径越权拒绝。"""
@@ -552,6 +561,104 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(empty.status_code, 400)
         # 非法的空写入不得破坏原文件
         self.assertEqual(report.read_bytes(), b"edited-deck")
+
+    async def test_shared_save_rejects_a_stale_editor_token(self) -> None:
+        """编辑器保存要带"打开时拿到的版本标记"，对不上就拒写。
+
+        共享盘里的 pdf / txt / md / csv / rtf 走单机内核保存 → 就是这条路径。
+        它此前既没有锁、也没有版本校验、也没有留底：A 刚发布上去的内容，会被 B
+        手里那份"打开时的旧副本"整份写回抹掉，而且不可恢复。
+        """
+        public = self.shared_root / "volumes" / "wr" / "public"
+        target = public / "notes.txt"
+
+        opened = await self.client.get(
+            "/api/v1/sources/shared/file",
+            params={"path": "volumes/wr/public/notes.txt"},
+        )
+        token = opened.headers["X-VOffice-Token"]
+
+        # B 打开之后，盘上那份被别人改过了
+        target.write_bytes(b"someone-else")
+
+        stale = await self.client.put(
+            "/api/v1/sources/shared/file",
+            params={"path": "volumes/wr/public/notes.txt", "if-match-token": token},
+            content=b"b-stale-save",
+        )
+
+        self.assertTrue(token, "打开文档时必须带回版本标记")
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(stale.json()["detail"]["reason"], "version-changed")
+        # 被拒的那次一个字节都没落盘（此刻还断言得到"别人的内容"）
+        self.assertEqual(target.read_bytes(), b"someone-else")
+
+        # 重新取一份当前标记（等于用户重新打开文档）后再存，应当通过
+        reloaded = await self.client.get(
+            "/api/v1/sources/shared/file",
+            params={"path": "volumes/wr/public/notes.txt"},
+        )
+        accepted = await self.client.put(
+            "/api/v1/sources/shared/file",
+            params={
+                "path": "volumes/wr/public/notes.txt",
+                "if-match-token": reloaded.headers["X-VOffice-Token"],
+            },
+            content=b"b-fresh-save",
+        )
+
+        self.assertEqual(accepted.status_code, 200)
+        self.assertEqual(target.read_bytes(), b"b-fresh-save")
+        # 保存成功要回一个新标记，客户端据此更新手里的凭据（否则下次自动保存
+        # 会被自己刚写的这一版挡住）
+        self.assertTrue(accepted.json()["token"])
+        self.assertNotEqual(
+            accepted.json()["token"], reloaded.headers["X-VOffice-Token"]
+        )
+
+    async def test_shared_save_snapshots_only_without_a_token(self) -> None:
+        """没带凭据的写入留底；带匹配凭据的正常保存不留底。
+
+        编辑器每 10 秒自动保存一次——若无条件留底，留底目录会被自动保存刷满，
+        真正有价值的历史点反而被挤掉。
+        """
+        public = self.shared_root / "volumes" / "wr" / "public"
+        target = public / "snap.txt"
+        target.write_bytes(b"base")
+        history = public / main.HISTORY_DIR_NAME
+
+        # 没带凭据：无从判断这次写入基于哪一版 → 留底，让覆盖至少可回滚
+        blind = await self.client.put(
+            "/api/v1/sources/shared/file",
+            params={"path": "volumes/wr/public/snap.txt"},
+            content=b"blind-save",
+        )
+        self.assertEqual(blind.status_code, 200)
+        self.assertTrue(blind.json()["backup"].startswith(main.HISTORY_DIR_NAME + "/"))
+        self.assertEqual(len(self._backup_files(history)), 1)
+        self.assertEqual(
+            (public / blind.json()["backup"]).read_bytes(), b"base"
+        )
+
+        # 带当前凭据：用户就是对着他看到的那一版保存的，属正常保存 → 不留底
+        opened = await self.client.get(
+            "/api/v1/sources/shared/file",
+            params={"path": "volumes/wr/public/snap.txt"},
+        )
+        with_token = await self.client.put(
+            "/api/v1/sources/shared/file",
+            params={
+                "path": "volumes/wr/public/snap.txt",
+                "if-match-token": opened.headers["X-VOffice-Token"],
+            },
+            content=b"token-save",
+        )
+        self.assertEqual(with_token.status_code, 200)
+        self.assertEqual(with_token.json()["backup"], "")
+        self.assertEqual(
+            len(self._backup_files(history)), 1, "自动保存不该刷满留底"
+        )
+        self.assertEqual(target.read_bytes(), b"token-save")
 
     async def test_read_only_mode_refuses_writes(self) -> None:
         report = self.shared_root / "volumes" / "wr" / "public" / "report.pptx"
@@ -726,6 +833,225 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn(current["version"][:8], body["backup"])
         self.assertEqual((public / body["backup"]).read_bytes(), b"first")
 
+    async def test_history_keeps_the_last_five_versions(self) -> None:
+        """留底只保留最近 5 份，最新的在前，并且记下是谁覆盖的。"""
+        public = self.shared_root / "volumes" / "wr" / "public"
+        params = {"name": "版本.docx", "path": "volumes/wr/public"}
+        file_url = "/api/v1/files/版本.docx"
+        version_url = "/api/v1/sources/shared/version"
+
+        await self.client.put(file_url, content=b"v1")
+        await self.client.post("/api/v1/sources/shared/copy-from-file", params=params)
+
+        # 再连续覆盖 6 次 → 留底里有 6 个候选，只该剩最近 5 个（最早的 v1 被淘汰）
+        for body in (b"v2", b"v3", b"v4", b"v5", b"v6", b"v7"):
+            current = (
+                await self.client.get(
+                    version_url, params={"path": "volumes/wr/public/版本.docx"}
+                )
+            ).json()
+            await self.client.put(file_url, content=body)
+            saved = await self.client.post(
+                "/api/v1/sources/shared/copy-from-file",
+                params={
+                    **params,
+                    "on-conflict": "overwrite",
+                    "if-match": current["version"],
+                },
+            )
+            self.assertEqual(saved.status_code, 200, saved.text)
+
+        listing = (
+            await self.client.get(
+                "/api/v1/sources/shared/history",
+                params={"path": "volumes/wr/public/版本.docx"},
+            )
+        ).json()
+
+        self.assertEqual(listing["keep"], 5)
+        self.assertTrue(listing["writable"])
+        self.assertEqual(len(listing["versions"]), 5)
+        self.assertEqual(
+            [
+                (public / main.HISTORY_DIR_NAME / item["id"]).read_bytes()
+                for item in listing["versions"]
+            ],
+            [b"v6", b"v5", b"v4", b"v3", b"v2"],
+        )
+        self.assertEqual(listing["versions"][0]["name"], "版本.docx")
+        # 界面上要展示"谁在什么时候覆盖的"
+        self.assertTrue(all(item["by"] for item in listing["versions"]))
+        self.assertTrue(all(item["modified"] > 0 for item in listing["versions"]))
+
+    async def test_restore_rolls_back_and_is_itself_reversible(self) -> None:
+        """回退把旧版本写回原文件；回退本身也留底当前版本，所以还能再回退回来。"""
+        public = self.shared_root / "volumes" / "wr" / "public"
+        target = public / "回退.docx"
+        params = {"name": "回退.docx", "path": "volumes/wr/public"}
+        file_url = "/api/v1/files/回退.docx"
+        history_url = "/api/v1/sources/shared/history"
+        path = "volumes/wr/public/回退.docx"
+
+        await self.client.put(file_url, content=b"old")
+        await self.client.post("/api/v1/sources/shared/copy-from-file", params=params)
+        current = (
+            await self.client.get(
+                "/api/v1/sources/shared/version", params={"path": path}
+            )
+        ).json()
+        await self.client.put(file_url, content=b"new")
+        overwritten = await self.client.post(
+            "/api/v1/sources/shared/copy-from-file",
+            params={
+                **params,
+                "on-conflict": "overwrite",
+                "if-match": current["version"],
+            },
+        )
+        self.assertEqual(overwritten.status_code, 200, overwritten.text)
+        backup_id = overwritten.json()["backup"].split("/")[-1]
+
+        restored = await self.client.post(
+            "/api/v1/sources/shared/history/restore",
+            params={"path": path, "id": backup_id},
+        )
+
+        self.assertEqual(restored.status_code, 200, restored.text)
+        self.assertEqual(restored.json()["status"], "restored")
+        self.assertEqual(restored.json()["restoredFrom"], backup_id)
+        self.assertEqual(restored.json()["path"], path)
+        # 回退前后的版本必须不同：两者都是"同尺寸、几乎同一时刻"写下的，
+        # 曾经因为版本缓存只用 mtime+大小 作键，回退后返回的还是**旧**指纹
+        self.assertNotEqual(
+            restored.json()["version"], restored.json()["previousVersion"]
+        )
+        # 内容回到被覆盖之前那一版
+        self.assertEqual(target.read_bytes(), b"old")
+
+        # 回退这一步自己也留了底：被回退掉的 'new' 还能再回退回去
+        listing = (
+            await self.client.get(history_url, params={"path": path})
+        ).json()
+        self.assertIn(restored.json()["backup"].split("/")[-1], [
+            item["id"] for item in listing["versions"]
+        ])
+        self.assertEqual(
+            (public / main.HISTORY_DIR_NAME / listing["versions"][0]["id"]).read_bytes(),
+            b"new",
+        )
+
+    async def test_restore_refuses_an_id_that_is_not_this_files_backup(self) -> None:
+        """回退只接受"这个文件自己的"备份名：路径穿越、别人的备份一律拒绝。"""
+        params = {"path": "volumes/wr/public/report.pptx"}
+
+        for bad in (
+            "../../etc/passwd",
+            "budget.xlsx.20260101-000000.local.deadbeef",
+            "report.pptx",
+        ):
+            response = await self.client.post(
+                "/api/v1/sources/shared/history/restore",
+                params={**params, "id": bad},
+            )
+            self.assertEqual(response.status_code, 400, f"{bad} → {response.text}")
+
+        # 形状合法但不存在的版本 → 404（而不是把冒烟改成成功）
+        missing = await self.client.post(
+            "/api/v1/sources/shared/history/restore",
+            params={**params, "id": "report.pptx.20260101-000000.local.deadbeef"},
+        )
+        self.assertEqual(missing.status_code, 404)
+
+    async def test_history_records_who_submitted_each_version(self) -> None:
+        """「版本」里显示的是**被归档那一版的提交人**，不是后来覆盖它的人。"""
+        params = {"name": "作者.docx", "path": "volumes/wr/public"}
+        file_url = "/api/v1/files/作者.docx"
+        path = "volumes/wr/public/作者.docx"
+
+        with patch.object(main, "current_username", AsyncMock(return_value="alice")):
+            await self.client.put(file_url, content=b"alice-version")
+            created = await self.client.post(
+                "/api/v1/sources/shared/copy-from-file", params=params
+            )
+        self.assertEqual(created.status_code, 201, created.text)
+
+        current = (
+            await self.client.get(
+                "/api/v1/sources/shared/version", params={"path": path}
+            )
+        ).json()
+        with patch.object(main, "current_username", AsyncMock(return_value="bob")):
+            await self.client.put(file_url, content=b"bob-version")
+            overwritten = await self.client.post(
+                "/api/v1/sources/shared/copy-from-file",
+                params={
+                    **params,
+                    "on-conflict": "overwrite",
+                    "if-match": current["version"],
+                },
+            )
+        self.assertEqual(overwritten.status_code, 200, overwritten.text)
+
+        listing = (
+            await self.client.get(
+                "/api/v1/sources/shared/history", params={"path": path}
+            )
+        ).json()
+
+        self.assertEqual(len(listing["versions"]), 1)
+        self.assertEqual(listing["versions"][0]["by"], "alice")
+
+    async def test_export_a_version_saves_it_into_my_documents(self) -> None:
+        """「保存到我的文档」把旧版本取回私有目录，公共盘上那份一个字节都不动。"""
+        public = self.shared_root / "volumes" / "wr" / "public"
+        params = {"name": "取回.docx", "path": "volumes/wr/public"}
+        file_url = "/api/v1/files/取回.docx"
+        path = "volumes/wr/public/取回.docx"
+
+        await self.client.put(file_url, content=b"kept-old")
+        await self.client.post("/api/v1/sources/shared/copy-from-file", params=params)
+        current = (
+            await self.client.get(
+                "/api/v1/sources/shared/version", params={"path": path}
+            )
+        ).json()
+        await self.client.put(file_url, content=b"kept-new")
+        overwritten = await self.client.post(
+            "/api/v1/sources/shared/copy-from-file",
+            params={
+                **params,
+                "on-conflict": "overwrite",
+                "if-match": current["version"],
+            },
+        )
+        backup_id = overwritten.json()["backup"].split("/")[-1]
+        export_url = "/api/v1/sources/shared/history/export"
+
+        exported = await self.client.post(
+            export_url, params={"path": path, "id": backup_id}
+        )
+
+        self.assertEqual(exported.status_code, 200, exported.text)
+        saved_name = exported.json()["name"]
+        # 名字里带上那一版的时刻，扩展名保持不变
+        self.assertTrue(saved_name.endswith(".docx"))
+        self.assertNotEqual(saved_name, "取回.docx")
+        stored = main.storage_dir("local") / saved_name
+        self.assertEqual(stored.read_bytes(), b"kept-old")
+        # 公共盘上那份没被动过
+        self.assertEqual((public / "取回.docx").read_bytes(), b"kept-new")
+
+        # 同一个版本再存一次：不覆盖私有目录里的同名文件，自动换名
+        again = await self.client.post(
+            export_url, params={"path": path, "id": backup_id}
+        )
+        self.assertEqual(again.status_code, 200, again.text)
+        self.assertNotEqual(again.json()["name"], saved_name)
+        self.assertEqual(
+            (main.storage_dir("local") / again.json()["name"]).read_bytes(),
+            b"kept-old",
+        )
+
     async def test_concurrent_publishes_let_exactly_one_win(self) -> None:
         """同一个目标名同时发两次「存入」：只能有一个成功，另一个必须收到冲突。
 
@@ -833,7 +1159,7 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first.json(), second.json())
         self.assertEqual(target.read_bytes(), b"v2")
         self.assertEqual(
-            len(list((public / main.HISTORY_DIR_NAME).iterdir())), 1
+            len(self._backup_files(public / main.HISTORY_DIR_NAME)), 1
         )
 
     async def test_history_directory_is_not_reachable_through_the_api(self) -> None:
@@ -860,7 +1186,7 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
                 "if-match": current["version"],
             },
         )
-        backup_name = next((public / main.HISTORY_DIR_NAME).iterdir()).name
+        backup_name = self._backup_files(public / main.HISTORY_DIR_NAME)[0].name
 
         listed = await self.client.get(
             "/api/v1/sources/shared/entries",
@@ -880,39 +1206,139 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
             main.HISTORY_DIR_NAME, [e["name"] for e in top.json()["entries"]]
         )
 
-    async def test_wopi_save_rejects_a_stale_version(self) -> None:
-        """Collabora 保存时若盘上内容已被别人改过，必须拒 —— 否则整份内存副本
-        写回去会把别人刚写进来的内容抹掉，而且双方都没有任何提示。"""
-        report = self.shared_root / "volumes" / "wr" / "public" / "report.pptx"
-        token = await self._shared_wopi_token("volumes/wr/public/report.pptx")
-        info = await self.client.get(
-            "/wopi/files/volumes/wr/public/report.pptx",
-            params={"access_token": token},
-        )
-        opened_version = info.json()["Version"]
+    async def test_overwrite_snapshot_is_a_hard_link(self) -> None:
+        """留底走同卷硬链接：备份与被替换掉的那个 inode 是同一个（零拷贝）。
 
-        # 别人用「覆盖添加」换掉了盘上那份，并强制推进 mtime（秒级精度的文件系统）
-        report.write_bytes(b"someone-else")
-        os.utime(report, (time.time() + 10, time.time() + 10))
+        原来用 shutil.copy2，要把整个文件从共享盘读一遍再写一遍——大文件上就是
+        好几秒，而且全都发生在持锁期间。
+        """
+        public = self.shared_root / "volumes" / "wr" / "public"
+        target = public / "硬链接.docx"
+        params = {"name": "硬链接.docx", "path": "volumes/wr/public"}
 
-        stale = await self.client.post(
-            "/wopi/files/volumes/wr/public/report.pptx/contents",
-            params={"access_token": token},
-            headers={"X-WOPI-ItemVersion": opened_version},
-            content=b"stale-save",
+        await self.client.put("/api/v1/files/硬链接.docx", content=b"first")
+        await self.client.post("/api/v1/sources/shared/copy-from-file", params=params)
+        before = target.stat().st_ino
+
+        current = (
+            await self.client.get(
+                "/api/v1/sources/shared/version",
+                params={"path": "volumes/wr/public/硬链接.docx"},
+            )
+        ).json()
+        await self.client.put("/api/v1/files/硬链接.docx", content=b"second")
+        overwritten = await self.client.post(
+            "/api/v1/sources/shared/copy-from-file",
+            params={
+                **params,
+                "on-conflict": "overwrite",
+                "if-match": current["version"],
+            },
         )
-        fresh = await self.client.post(
-            "/wopi/files/volumes/wr/public/report.pptx/contents",
-            params={"access_token": token},
-            headers={"X-WOPI-ItemVersion": main._file_token(report)},
-            content=b"fresh-save",
+        backup = public / overwritten.json()["backup"]
+
+        self.assertEqual(overwritten.status_code, 200)
+        self.assertEqual(backup.read_bytes(), b"first")
+        # 备份就是被换下来的那个 inode 本身；新文件是另一个 inode
+        self.assertEqual(backup.stat().st_ino, before)
+        self.assertNotEqual(target.stat().st_ino, before)
+
+    async def test_no_target_read_across_probe_and_overwrite(self) -> None:
+        """「冲突探测 + 覆盖」不该为了算指纹去读共享盘上的目标文件。
+
+        原来整条链路要读三遍（算当前版本、给备份起名、写后算新版本）。现在：
+        我们自己的写入就顺手把指纹（对内存里那份字节算的）记进缓存，于是
+        紧接着的探测与覆盖都是缓存命中；留底改硬链接也不再读内容。
+        这条用例是防止有人再把重复读加回来。
+        """
+        public = self.shared_root / "volumes" / "wr" / "public"
+        target_name = "只读一遍.docx"
+        params = {"name": target_name, "path": "volumes/wr/public"}
+        await self.client.put(f"/api/v1/files/{target_name}", content=b"v1")
+        await self.client.post(
+            "/api/v1/sources/shared/copy-from-file", params=params
         )
 
-        self.assertNotEqual(opened_version, main._file_token(report))
-        self.assertEqual(stale.status_code, 409)
-        self.assertEqual(stale.json()["error"], "version mismatch")
-        self.assertEqual(fresh.status_code, 200)
-        self.assertEqual(report.read_bytes(), b"fresh-save")
+        original_read_bytes = Path.read_bytes
+        reads: list[str] = []
+
+        def counting_read_bytes(path_obj: Path) -> bytes:
+            reads.append(str(path_obj))
+            return original_read_bytes(path_obj)
+
+        target = public / target_name
+        with patch.object(Path, "read_bytes", counting_read_bytes):
+            current = (
+                await self.client.get(
+                    "/api/v1/sources/shared/version",
+                    params={"path": f"volumes/wr/public/{target_name}"},
+                )
+            ).json()
+            await self.client.put(f"/api/v1/files/{target_name}", content=b"v2")
+            overwritten = await self.client.post(
+                "/api/v1/sources/shared/copy-from-file",
+                params={
+                    **params,
+                    "on-conflict": "overwrite",
+                    "if-match": current["version"],
+                },
+            )
+
+        self.assertEqual(overwritten.status_code, 200)
+        # 只统计"共享盘上那份目标文件"的读取；私有件的那次读是业务上必需的
+        self.assertEqual(
+            [p for p in reads if p == str(target)],
+            [],
+            "冲突探测 / 覆盖不该回读共享盘上的目标文件来算指纹",
+        )
+        self.assertEqual(target.read_bytes(), b"v2")
+
+    async def test_publish_keeps_unrelated_directory_caches(self) -> None:
+        """写入只失效受影响的目录：无关目录的列举缓存不该被一起扔掉。
+
+        原来一次写入就 _source_cache.clear()：用户发布完切到「NAS 数据」，每个
+        分类都要重扫整棵树，来回切标签每次都重扫。
+        """
+        alice_dir = main.source_target("shared", "volumes/wr/users/alice/data")
+        public_dir = main.source_target("shared", "volumes/wr/public")
+
+        await self.client.get(
+            "/api/v1/sources/shared/documents", params={"path": "volumes/wr/public"}
+        )
+        await self.client.get(
+            "/api/v1/sources/shared/documents",
+            params={"path": "volumes/wr/users/alice/data"},
+        )
+        self.assertIn(f"documents\x00shared\x00{public_dir}", main._source_cache)
+        self.assertIn(f"documents\x00shared\x00{alice_dir}", main._source_cache)
+
+        await self.client.put("/api/v1/files/新文件.docx", content=b"x")
+        await self.client.post(
+            "/api/v1/sources/shared/copy-from-file",
+            params={"name": "新文件.docx", "path": "volumes/wr/public"},
+        )
+
+        # 目标所在的目录（及其每一级祖先）被失效，免得显示过期数据
+        self.assertNotIn(f"documents\x00shared\x00{public_dir}", main._source_cache)
+        # 无关目录的缓存必须还在
+        self.assertIn(f"documents\x00shared\x00{alice_dir}", main._source_cache)
+
+    async def test_lock_key_follows_the_file_not_the_path(self) -> None:
+        """锁键按 inode：同一份文件的两个名字必须映射到同一把锁。
+
+        否则在大小写不敏感（SMB/CIFS 默认）或存在硬链接别名的挂载上，两个人用
+        不同写法覆盖同一份文件会各拿一把锁、双双通过检查。
+        """
+        public = self.shared_root / "volumes" / "wr" / "public"
+        os.link(public / "report.pptx", public / "别名.pptx")
+
+        self.assertEqual(
+            main._lock_key(public / "report.pptx"), main._lock_key(public / "别名.pptx")
+        )
+        # 还不存在的文件退回路径键（同一时刻抢同一名字的请求会拿到同一个键）
+        self.assertTrue(
+            main._lock_key(public / "还没建.docx").startswith("path:")
+        )
 
     async def test_reports_resolved_authorized_roots(self) -> None:
         """源列表直接给出已解析的授权入口，前端不必自己穿平台内部路径。"""
@@ -1064,6 +1490,249 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             [root["name"] for root in sources[0]["roots"]], ["公共"]
+        )
+
+
+class PrivateDocumentWopiTest(unittest.IsolatedAsyncioTestCase):
+    """私有文档的**文档标识**（谁和谁是"同一份文档"）。
+
+    Collabora 判定"是不是同一份文档"靠 WOPISrc（容器日志里就是 docKey）。私有文档
+    早期的 WOPISrc 只带文件名，于是两个用户的同名文档算出**完全相同**的 WOPISrc，
+    被并成同一个协作会话：读得到对方的内容，保存还写进对方的文件。
+
+    规则是两条，缺一不可：
+      · 不同用户 → 标识必须不同（否则跨用户串号，读到、写到别人文件上）；
+      · 同一用户同一文件 → 标识必须相同（同一账号在两处登录进同一个会话、改动互相
+        可见，这是正常行为，不能被打散成两份各自覆盖）。
+
+    另一条独立的坑：锁只做"谁正在编辑"的记录，不做互斥——曾经拿它互斥，僵尸锁把用户
+    自己挡成只读、保存报 savefailed。见 test_a_stale_lock_never_blocks_a_save。
+    """
+
+    COLLABORA_TEMPLATE = "http://collabora:9980/browser/abc/cool.html?"
+
+    async def asyncSetUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        base = Path(self.temp_dir.name)
+
+        main.DATA_ROOT = base / "data"
+        main.DATA_ROOT.mkdir()
+        main.AUTH_DISABLED = True
+
+        for user in ("alice", "bob"):
+            directory = main.storage_dir(user)
+            (directory / "报告.docx").write_bytes(f"{user}-content".encode())
+
+        transport = httpx.ASGITransport(app=main.app)
+        self.client = httpx.AsyncClient(transport=transport, base_url="http://test")
+        self.addAsyncCleanup(self.client.aclose)
+        self.addCleanup(main._wopi_locks.clear)
+
+    async def _session(self, user: str, name: str) -> dict:
+        """以某个用户身份换取协作会话。"""
+        with (
+            patch.object(main, "current_username", AsyncMock(return_value=user)),
+            patch.object(
+                main,
+                "_collabora_discover",
+                AsyncMock(return_value=self.COLLABORA_TEMPLATE),
+            ),
+        ):
+            response = await self.client.post(
+                "/api/v1/wopi/session", params={"name": name}
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
+
+    async def test_the_same_account_reopens_into_the_same_document(self) -> None:
+        """同一个账号、同一个文件连开两次：**必须**是同一份文档（正常协同）。"""
+        first = await self._session("alice", "报告.docx")
+        second = await self._session("alice", "报告.docx")
+
+        self.assertEqual(first["wopiSrc"], second["wopiSrc"])
+        self.assertEqual(first["name"], "alice/报告.docx")
+        self.assertEqual(second["name"], "alice/报告.docx")
+
+    async def test_same_named_private_files_get_different_wopi_srcs(self) -> None:
+        """两个用户的同名私有文档必须是**两个**文档标识（不同的人绝不合并）。"""
+        alice = await self._session("alice", "报告.docx")
+        bob = await self._session("bob", "报告.docx")
+
+        self.assertNotEqual(alice["wopiSrc"], bob["wopiSrc"])
+        self.assertEqual(alice["name"], "alice/报告.docx")
+        self.assertEqual(bob["name"], "bob/报告.docx")
+
+    async def test_private_token_cannot_reach_another_user(self) -> None:
+        """拿 A 的令牌碰不到 B 的文件，也回不到"只有文件名"的老形态。"""
+        alice = await self._session("alice", "报告.docx")
+        token = alice["accessToken"]
+
+        foreign = await self.client.get(
+            "/wopi/files/bob/报告.docx/contents", params={"access_token": token}
+        )
+        bare = await self.client.get(
+            "/wopi/files/报告.docx/contents", params={"access_token": token}
+        )
+
+        self.assertEqual(foreign.status_code, 403)
+        self.assertEqual(bare.status_code, 403)
+
+    async def test_private_wopi_round_trip_stays_in_the_owners_directory(self) -> None:
+        """正常路径不受影响：读到的、写回的都得是自己那份。"""
+        session = await self._session("alice", "报告.docx")
+        name = session["name"]
+        token = session["accessToken"]
+
+        info = await self.client.get(
+            f"/wopi/files/{name}", params={"access_token": token}
+        )
+        contents = await self.client.get(
+            f"/wopi/files/{name}/contents", params={"access_token": token}
+        )
+        saved = await self.client.post(
+            f"/wopi/files/{name}/contents",
+            params={"access_token": token},
+            content=b"alice-edited",
+        )
+
+        self.assertEqual(info.status_code, 200)
+        # 编辑器里显示的文件名不该带用户前缀
+        self.assertEqual(info.json()["BaseFileName"], "报告.docx")
+        self.assertEqual(info.json()["OwnerId"], "alice")
+        self.assertEqual(contents.content, b"alice-content")
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(
+            (main.storage_dir("alice") / "报告.docx").read_bytes(), b"alice-edited"
+        )
+        # 同名同内容都没用：bob 那份一个字节都不能动
+        self.assertEqual(
+            (main.storage_dir("bob") / "报告.docx").read_bytes(), b"bob-content"
+        )
+
+    async def test_a_dead_session_cannot_lock_the_owner_out(self) -> None:
+        """一个会话留下的锁，不能挡住后来打开**同一个文件**的会话。
+
+        真实的坑（已踩过）：用户直接关掉浏览器、或令牌先到期，Collabora 就发不出
+        UNLOCK，那把锁成了僵尸。僵尸锁把一个**只读状态**留给了后来打开的会话，一保存
+        就报 savefailed。所以锁绝不允许成为写入门槛。
+        """
+        dead = await self._session("alice", "报告.docx")
+        await self.client.post(
+            f"/wopi/files/{dead['name']}",
+            params={"access_token": dead["accessToken"]},
+            headers={"X-WOPI-Override": "LOCK", "X-WOPI-Lock": "lock-dead"},
+        )
+
+        fresh = await self._session("alice", "报告.docx")
+        got_lock = await self.client.post(
+            f"/wopi/files/{fresh['name']}",
+            params={"access_token": fresh["accessToken"]},
+            headers={"X-WOPI-Override": "LOCK", "X-WOPI-Lock": "lock-fresh"},
+        )
+        saved = await self.client.post(
+            f"/wopi/files/{fresh['name']}/contents",
+            params={"access_token": fresh["accessToken"]},
+            headers={"X-WOPI-Lock": "lock-fresh"},
+            content=b"alice-saved",
+        )
+
+        self.assertEqual(got_lock.status_code, 200)
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(
+            (main.storage_dir("alice") / "报告.docx").read_bytes(), b"alice-saved"
+        )
+
+    async def test_a_stale_lock_never_blocks_a_save(self) -> None:
+        """记录里的锁 id 与请求带来的不一致时，保存照样成功（只是留一条告警）。"""
+        session = await self._session("alice", "报告.docx")
+        params = {"access_token": session["accessToken"]}
+        url = f"/wopi/files/{session['name']}"
+        await self.client.post(
+            url,
+            params=params,
+            headers={"X-WOPI-Override": "LOCK", "X-WOPI-Lock": "mine"},
+        )
+
+        other = await self.client.post(
+            url,
+            params=params,
+            headers={"X-WOPI-Override": "LOCK", "X-WOPI-Lock": "someone-else"},
+        )
+        saved = await self.client.post(
+            f"{url}/contents",
+            params=params,
+            headers={"X-WOPI-Lock": "someone-else"},
+            content=b"alice-after-stale",
+        )
+
+        self.assertEqual(other.status_code, 200)
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(
+            (main.storage_dir("alice") / "报告.docx").read_bytes(),
+            b"alice-after-stale",
+        )
+
+    async def test_activity_keeps_the_lock_alive(self) -> None:
+        """锁的空闲时长从"最近一次请求"算起：还在发请求的会话不该被判过期。"""
+        session = await self._session("alice", "报告.docx")
+        name = session["name"]
+        key = "private/alice/报告.docx"
+        await self.client.post(
+            f"/wopi/files/{name}",
+            params={"access_token": session["accessToken"]},
+            headers={"X-WOPI-Override": "LOCK", "X-WOPI-Lock": "L"},
+        )
+        main._wopi_locks[key]["at"] = 0  # 假装已经空闲到过期
+
+        await self.client.get(
+            f"/wopi/files/{name}", params={"access_token": session["accessToken"]}
+        )
+
+        self.assertNotEqual(main._wopi_locks[key]["at"], 0)
+
+    def test_an_abandoned_lock_expires(self) -> None:
+        """彻底不再发请求的锁要按 TTL 自动消失，而不是把文件锁到天荒地老。"""
+        key = "private/alice/报告.docx"
+        main._wopi_locks[key] = {"lock": "L", "user": "alice", "at": 0}
+
+        self.assertEqual(main._wopi_lock_of(key), {})
+        self.assertNotIn(key, main._wopi_locks)
+
+    async def test_two_saves_in_one_session_are_both_accepted(self) -> None:
+        """同一会话连保存两次都要成功。
+
+        保存成功必须把**新版本号**回给编辑器（X-WOPI-ItemVersion）：它拿着新版本号
+        做下一次校验。少了这个响应头，它只能一直用打开时的老版本号，同一个会话里
+        第二次保存必然被版本校验判 409——表现就是 savefailed。
+        """
+        session = await self._session("alice", "报告.docx")
+        name = session["name"]
+        params = {"access_token": session["accessToken"]}
+
+        info = await self.client.get(f"/wopi/files/{name}", params=params)
+        first = await self.client.post(
+            f"/wopi/files/{name}/contents",
+            params=params,
+            headers={"X-WOPI-ItemVersion": info.json()["Version"]},
+            content=b"alice-v2",
+        )
+        second = await self.client.post(
+            f"/wopi/files/{name}/contents",
+            params=params,
+            headers={"X-WOPI-ItemVersion": first.headers["X-WOPI-ItemVersion"]},
+            content=b"alice-v3-longer",
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertTrue(first.headers.get("X-WOPI-ItemVersion"))
+        # 新版本号必须真的变了，否则这条用例等于没测到东西
+        self.assertNotEqual(
+            first.headers["X-WOPI-ItemVersion"], info.json()["Version"]
+        )
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(
+            (main.storage_dir("alice") / "报告.docx").read_bytes(), b"alice-v3-longer"
         )
 
 

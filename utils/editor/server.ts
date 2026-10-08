@@ -738,16 +738,34 @@ export class EditorServer {
         // 原文件"。写入失败（目录只读、权限不足）保持错误状态，不改走浏览器
         // 下载，否则用户会误以为已经存回原文件。
         if (vosMode && this.sharedTarget) {
-          const { source, path } = this.sharedTarget;
+          const shared = this.sharedTarget;
           clientLog(
-            `shared-save-begin: ${source}:${path} (${finalOutput.byteLength} bytes)`,
+            `shared-save-begin: ${shared.source}:${shared.path}` +
+              ` (${finalOutput.byteLength} bytes, token=${shared.token || "-"})`,
           );
           try {
-            await saveSharedDocument(source, path, finalOutput);
-            clientLog(`shared-save-ok: ${path}`);
+            const nextToken = await saveSharedDocument(
+              shared.source,
+              shared.path,
+              finalOutput,
+              shared.token || "",
+            );
+            // 更新手里的凭据：不更新的话，下一次自动保存会被**我们自己**刚写进去
+            // 的那一版挡住（凭据还停留在上一版）。
+            if (nextToken) {
+              this.sharedTarget = { ...shared, token: nextToken };
+            }
+            clientLog(`shared-save-ok: ${shared.path} (token=${nextToken || "-"})`);
             return { status: "ok" };
           } catch (error) {
-            clientLog(`shared-save-failed: ${path} :: ${error}`);
+            // 版本冲突：盘上那份在我们打开之后被别人改过了。这里**绝不**自动改用
+            // 对方的新版本号重试——那等于把对方刚写进去的内容抹掉。保持错误状态，
+            // 让用户自己决定（另存到「我的文档」或重新打开）。
+            const reason =
+              error instanceof Error && error.message === "SHARED_VERSION_CHANGED"
+                ? "version-changed"
+                : String(error);
+            clientLog(`shared-save-failed: ${shared.path} :: ${reason}`);
             console.error("Failed to save document back to shared source", error);
             return { status: "error" };
           }

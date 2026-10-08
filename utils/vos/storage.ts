@@ -227,21 +227,28 @@ export async function browseSharedSource(
   return (await response.json()) as SharedListing;
 }
 
-/** 把共享源里的文档下载成 File，交给编辑器打开。 */
+/**
+ * 把共享源里的文档下载成 File，交给编辑器打开。
+ *
+ * 同时把服务端给的版本标记（X-VOffice-Token）带出来：编辑器保存时要回传它，
+ * 服务端据此判断"你写的还是不是你收到的那一版"。用响应头而不是查一次列表，
+ * 是因为**只有跟内容一起取到的标记才对应你手里这份字节**（列表可能是几分钟前
+ * 拉的，期间文件早被改过了）。
+ */
 export async function openSharedDocument(
   source: string,
   path: string,
-): Promise<File> {
-
+): Promise<{ file: File; token: string }> {
   const response = await request(
     `/sources/${encodeURIComponent(source)}/file?path=${encodeURIComponent(path)}`,
   );
   if (!response.ok) {
     throw new Error(`Open shared document failed: ${response.status}`);
   }
+  const token = response.headers.get("X-VOffice-Token") || "";
   const blob = await response.blob();
   const name = path.split("/").pop() || "document";
-  return new File([blob], name);
+  return { file: new File([blob], name), token };
 }
 
 /**
@@ -414,10 +421,145 @@ export async function fetchSourceFileVersion(
   return (await response.json()) as SharedFileInfo;
 }
 
+/** 共享盘上一个文件被覆盖时留下的旧版本（可回退）。 */
+export interface SharedFileVersion {
+  /** 版本标识，回退时原样回传；服务端会校验它确实属于这个文件 */
+  id: string;
+  name: string;
+  /** 这一版"打开/另存"时该用的名字（带那一版的时刻），由服务端给 */
+  exportName?: string;
+  size?: number;
+  /** 留底时刻（秒） */
+  modified?: number;
+  /** 这一版的提交人；早期留下的版本没有这个信息，会是空串 */
+  by?: string;
+  version?: string;
+}
+
+export interface SourceHistory {
+  /** 最近的在前，最多 keep 条 */
+  versions: SharedFileVersion[];
+  /** 保留份数上限；0 表示这台部署没开留底 */
+  keep: number;
+  /** 共享盘可写才有意义：只读挂载下不给回退入口 */
+  writable: boolean;
+}
+
+/**
+ * 读某个共享文件的留底版本（文件列表里「版本」那一栏的内容）。
+ *
+ * 留底是覆盖时由服务端自动做的，前端不碰目录结构，只拿这份列表。
+ */
+export async function listSourceHistory(
+  source: string,
+  path: string,
+): Promise<SourceHistory> {
+  const response = await request(
+    `/sources/${encodeURIComponent(source)}/history?path=${encodeURIComponent(path)}`,
+  );
+  if (!response.ok) {
+    throw new Error(`Read file history failed: ${response.status}`);
+  }
+  const payload = (await response.json()) as Partial<SourceHistory>;
+  return {
+    versions: Array.isArray(payload.versions) ? payload.versions : [],
+    keep: payload.keep ?? 0,
+    writable: payload.writable !== false,
+  };
+}
+
+export interface RestoreOutcome {
+  status: "restored";
+  path: string;
+  size: number;
+  version: string;
+  previousVersion?: string | null;
+  /** 被回退掉的那一版（回退本身也留底了，所以还能再回退回来） */
+  backup?: string;
+}
+
+/**
+ * 把某个留底版本写回原文件（用户点「回退」）。
+ *
+ * 服务端在回退前也会给"当前版本"留底，所以回退错了还能再回退回来 —— 这里不需要
+ * 前端做二次确认之外的任何防护；只读挂载（403）会让它抛出来给界面提示。
+ */
+export async function restoreSourceHistory(
+  source: string,
+  path: string,
+  id: string,
+): Promise<RestoreOutcome> {
+  const query = new URLSearchParams({ path, id });
+  const response = await request(
+    `/sources/${encodeURIComponent(source)}/history/restore?${query.toString()}`,
+    { method: "POST" },
+  );
+  if (response.status === 403) throw new Error("READ_ONLY");
+  if (!response.ok) {
+    throw new Error(`Restore file version failed: ${response.status}`);
+  }
+  return (await response.json()) as RestoreOutcome;
+}
+
+/**
+ * 把某个留底版本「保存到我的文档」（私有目录），**不动公共盘上的原文件**。
+ *
+ * 给"想反悔但先不急着回退"用：把旧版本取回自己名下看一眼、接着改。服务端按
+ * 那一版的时刻命名（撞名自动加后缀），所以这里不传名字，用返回的名字告诉用户存成了什么。
+ */
+export async function exportSourceHistory(
+  source: string,
+  path: string,
+  id: string,
+): Promise<{ status: "saved"; name: string; size: number }> {
+  const query = new URLSearchParams({ path, id });
+  const response = await request(
+    `/sources/${encodeURIComponent(source)}/history/export?${query.toString()}`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    throw new Error(`Save version to My Documents failed: ${response.status}`);
+  }
+  return (await response.json()) as {
+    status: "saved";
+    name: string;
+    size: number;
+  };
+}
+
+/**
+ * 取某个留底版本的字节，供界面上「打开」看内容。
+ *
+ * 只读：拿到之后按**本地文件**打开（编辑器对本地文件的保存只会另存或下载），
+ * 公共盘上的原文件和留底都不会被碰到。
+ */
+export async function fetchSourceHistoryFile(
+  source: string,
+  path: string,
+  id: string,
+): Promise<Blob> {
+  const query = new URLSearchParams({ path, id });
+  const response = await request(
+    `/sources/${encodeURIComponent(source)}/history/file?${query.toString()}`,
+  );
+  if (!response.ok) {
+    throw new Error(`Open file version failed: ${response.status}`);
+  }
+  return await response.blob();
+}
+
 /** 编辑器的保存落点：共享源 + 源内相对路径（即"编辑原文档"）。 */
 export interface SharedTarget {
   source: string;
   path: string;
+  /**
+   * 打开这份文档时服务端给的版本标记（X-VOffice-Token）。
+   *
+   * 保存时回传它做一次 CAS：如果盘上已经不是这一版（别人改过），服务端会拒写，
+   * 避免拿"打开时的旧副本"整份写回、把别人刚写进去的内容抹掉。每次保存成功后
+   * 服务端会返回新的标记，编辑器要跟着更新。
+   */
+  token?: string;
 }
 
 /**
@@ -430,16 +572,26 @@ export async function saveSharedDocument(
   source: string,
   path: string,
   data: Uint8Array | ArrayBuffer,
-): Promise<void> {
+  ifMatchToken = "",
+): Promise<string> {
+  const query = new URLSearchParams({ path });
+  if (ifMatchToken) query.set("if-match-token", ifMatchToken);
   const response = await request(
-    `/sources/${encodeURIComponent(source)}/file?path=${encodeURIComponent(path)}`,
+    `/sources/${encodeURIComponent(source)}/file?${query.toString()}`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/octet-stream" },
       body: new Blob([data as ArrayBuffer]),
     },
   );
+  if (response.status === 409) throw new Error("SHARED_VERSION_CHANGED");
   if (!response.ok) {
     throw new Error(`Save shared document failed: ${response.status}`);
   }
+  // 返回写完之后的新标记：编辑器要拿它更新手里的凭据，否则下一次自动保存会
+  // 因为"凭据还是上一版的"而被自己刚写的这一版挡住。
+  const payload = (await response.json().catch(() => null)) as
+    | { token?: string }
+    | null;
+  return payload?.token || "";
 }

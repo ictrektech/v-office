@@ -15,6 +15,7 @@ import {
   Pencil,
   PenLine,
   RotateCcw,
+  History,
 } from "lucide-react";
 import { useExtracted } from "next-intl";
 import { toast } from "sonner";
@@ -32,6 +33,7 @@ import {
 import { useAppStore, useResolvedLanguage } from "@/store";
 import DocumentNameDialog from "@/components/document-name-dialog";
 import PublishConflictDialog from "@/components/publish-conflict-dialog";
+import SourceHistoryDialog from "@/components/source-history-dialog";
 import { sitePath } from "@/utils/site-path";
 import {
   getRecentFiles,
@@ -50,6 +52,7 @@ import {
   copyStoredFileToSource,
   copySourceFileToStorage,
   fetchSourceFileVersion,
+  fetchSourceHistoryFile,
   openSharedDocument,
   whoAmI,
   type PublishConflict,
@@ -92,6 +95,8 @@ export function OpenView({
   } | null>(null);
   /** 正在重新拉取"公共目录里那版"的最新信息 */
   const [refreshingPublish, setRefreshingPublish] = useState(false);
+  /** 「版本」：正在查看历史版本的共享盘文档（被覆盖时留下的旧版本可以回退） */
+  const [historyDoc, setHistoryDoc] = useState<NasDocument | null>(null);
   const [downloadingStoredFile, setDownloadingStoredFile] = useState<
     string | null
   >(null);
@@ -451,9 +456,11 @@ export function OpenView({
     if (nasBusyKey) return;
     setNasBusyKey(doc.key);
     try {
-      const file = await openSharedDocument(doc.sourceId, doc.path);
+      // 版本标记随内容一起拿到，交给编辑器：保存时回传它做 CAS，
+      // 避免拿"打开时的旧副本"整份写回、抹掉别人后来写进去的内容
+      const { file, token } = await openSharedDocument(doc.sourceId, doc.path);
       await server.open(file, {
-        sharedTarget: { source: doc.sourceId, path: doc.path },
+        sharedTarget: { source: doc.sourceId, path: doc.path, token },
       });
       router.push("/editor");
     } catch (error) {
@@ -528,6 +535,42 @@ export function OpenView({
           }
           onRename={() => void publishStoredFile(publishPrompt.file, "rename")}
           onRefresh={() => void refreshPublishConflict()}
+        />
+      )}
+      {historyDoc && (
+        <SourceHistoryDialog
+          language={language}
+          source={historyDoc.sourceId}
+          path={historyDoc.path}
+          name={historyDoc.name}
+          // 回退改了盘上内容：重扫这份文档所在的分类，时间/大小立刻跟着更新
+          onRestored={() => {
+            const owner =
+              nasCategories.find(
+                (item) => item.sourceId === historyDoc.sourceId,
+              ) ?? nasCategory;
+            if (owner) refreshNasCategory(owner);
+          }}
+          // 打开历史版本：取字节后按**本地文件**交给编辑器 —— 本地文件的保存只会
+          // 另存/下载，不会写回共享盘，所以"看一眼旧版本"不会碰到盘上任何东西。
+          onOpen={async (version) => {
+            const blob = await fetchSourceHistoryFile(
+              historyDoc.sourceId,
+              historyDoc.path,
+              version.id,
+            );
+            const file = new File(
+              [blob],
+              version.exportName || version.name,
+              { type: blob.type || "application/octet-stream" },
+            );
+            setHistoryDoc(null);
+            await server.open(file);
+            router.push("/editor");
+          }}
+          // 存进「我的文档」了：那份列表要跟着更新，否则切过去看不到刚存的文件
+          onSavedToMine={() => void initStoredFiles()}
+          onClose={() => setHistoryDoc(null)}
         />
       )}
       <div className="space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -855,6 +898,21 @@ export function OpenView({
                         ) : (
                           <HardDrive className="h-4 w-4" />
                         )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setHistoryDoc(doc);
+                        }}
+                        title={
+                          zh
+                            ? "历史版本：被覆盖时留下的旧版本，可以回退"
+                            : "Version history: restore a version that was overwritten"
+                        }
+                        className="rounded-lg bg-muted p-2 text-foreground transition-colors hover:bg-sidebar-hover"
+                      >
+                        <History className="h-4 w-4" />
                       </button>
                     </div>
                   </div>

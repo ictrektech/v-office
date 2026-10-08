@@ -46,6 +46,18 @@ from pydantic import BaseModel
 
 LOG = logging.getLogger("v-office-storage")
 
+# 让本服务自己的 INFO 日志真的落到容器输出。默认情况下根 logger 没有 handler，
+# 只有 WARNING 以上会被 Python 的 lastResort handler 兜到 stderr，于是"谁把哪个
+# 文件覆盖进了公共盘""谁给哪个文档开了协作会话"这类关键记录**在容器日志里根本
+# 看不到**——出了事只能靠猜。级别可用 V_OFFICE_LOG_LEVEL 调。
+if not LOG.handlers:
+    _log_handler = logging.StreamHandler()
+    _log_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    LOG.addHandler(_log_handler)
+LOG.setLevel(os.environ.get("V_OFFICE_LOG_LEVEL", "INFO").upper())
+# 自己带 handler 就不再上传根 logger：避免将来有人给根 logger 配 handler 时打两遍
+LOG.propagate = False
+
 DATA_ROOT = Path(os.environ.get("DATA_ROOT", "/data"))
 VOS_OIDC_USERINFO_URL = os.environ.get(
     "VOS_OIDC_USERINFO_URL", "http://172.17.0.1:8105/v1000/oauth2/userinfo"
@@ -155,6 +167,7 @@ USERNAME_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """启动 Collabora 冷启动探活后台任务，停机时回收。"""
+    _warn_if_single_process()
     task = asyncio.create_task(_collabora_warmup_loop())
     yield
     task.cancel()
@@ -243,6 +256,10 @@ async def current_username(request: Request) -> str:
         if not username:
             LOG.warning("userinfo returned no usable identity; claims=%s", list(claims)[:8])
             raise HTTPException(status_code=401, detail="username not resolvable")
+        # 记一次解析结果（只在缓存未命中时打，量很小）。用户名可能被 VOS 的两个账号
+        # 解析成同一个值，那样两个"不同的人"会共用一份私有存储；把 sub 一起打出来，
+        # 是同一个账号还是两个账号被解析成了一个，看日志就能断案。
+        LOG.info("resolved identity user=%s sub=%s", username, claims.get("sub"))
         _username_cache[token] = (username, time.monotonic() + USERNAME_CACHE_TTL)
         if len(_username_cache) > 1024:
             earliest = min(_username_cache.items(), key=lambda kv: kv[1][1])[0]
@@ -787,9 +804,52 @@ _source_scanning: dict[str, "asyncio.Task[dict]"] = {}
 
 
 def _invalidate_source_cache() -> None:
-    """共享盘发生写入后调用：丢弃所有列举缓存（粗粒度，但绝不会显示过期数据）。"""
+    """丢弃**所有**列举缓存。只在实在定位不到影响面时用（见 _invalidate_source_path）。"""
     if _source_cache:
         _source_cache.clear()
+
+
+def _invalidate_source_path(source: str, root: Path, target: Path) -> None:
+    """只失效"这次写入真正影响到"的缓存键，不再整表清空。
+
+    原来一写就 clear()：用户发布完切到「NAS 数据」，那一个分类要重扫整棵树
+    （最多 MAX_WALK_DOCUMENTS 个文件、深度 MAX_WALK_DEPTH），共享盘上就是几秒；
+    而且**别的分类和目录的缓存也被一起扔掉**，来回切标签每次都得重扫。
+
+    受影响的键只有两类，且都落在目标文件的**祖先目录**上：
+      · entries   —— 该目录的直接子项列表：新文件出现在它父目录这一项里；
+                     父目录自身的时间戳变了，又会体现在它上一级的列表里。
+      · documents —— 从某个分类根递归平铺的结果：目标文档在其中。
+    键的拼法与两个端点保持完全一致：entries 用"源内相对路径"，documents 用
+    "解析后的绝对目录"（见 list_source_entries / list_source_documents）。
+
+    祖先目录用 Path.parent 一路向上取：这样拿到的目录对象与端点里
+    source_target() 解析出来的**是同一个**，不会因为目录树里存在软链而对不上键。
+    """
+    try:
+        rel = _source_relpath(root, target)
+    except ValueError:
+        _invalidate_source_cache()
+        return
+    if not rel:
+        _invalidate_source_cache()
+        return
+
+    directory = target.parent
+    while True:
+        _source_cache.pop(f"documents\x00{source}\x00{directory}", None)
+        try:
+            _source_cache.pop(
+                f"entries\x00{source}\x00{_source_relpath(root, directory)}", None
+            )
+        except ValueError:
+            pass
+        if directory == root:
+            break
+        parent = directory.parent
+        if parent == directory:  # 已经到文件系统根：上面不会再有权重键
+            break
+        directory = parent
 
 
 async def _cached_scan(
@@ -912,8 +972,14 @@ async def get_source_file(source: str, request: Request, path: str) -> FileRespo
         raise HTTPException(status_code=404, detail="file not found")
     if target.suffix.lower() not in BROWSABLE_SUFFIXES:
         raise HTTPException(status_code=400, detail="unsupported file type")
+    # 版本标记随内容一起给客户端：编辑器保存时回传它（if-match-token），服务端
+    # 据此确认"你写的还是你收到的那一版"。用响应头而不是塞进响应体，是因为这里
+    # 返回的是原始字节流，没有位置放元数据。
     return FileResponse(
-        target, filename=target.name, media_type="application/octet-stream"
+        target,
+        filename=target.name,
+        media_type="application/octet-stream",
+        headers={"X-VOffice-Token": _file_token(target)},
     )
 
 
@@ -1109,7 +1175,8 @@ COPY_LOCK_TIMEOUT = float(os.environ.get("V_OFFICE_COPY_LOCK_TIMEOUT", "20"))
 
 # 覆盖前把旧文件留底到目标目录下的隐藏目录，每个文件保留最近 N 份；
 # 0 表示关掉（等于放弃"误覆盖可回滚"，共享盘上不建议关）。
-SHARED_HISTORY_KEEP = int(os.environ.get("V_OFFICE_SHARED_HISTORY_KEEP", "10"))
+# 默认 5：文件列表里「版本」那一栏就展示最近 5 个可回退的版本（见 source_history）。
+SHARED_HISTORY_KEEP = int(os.environ.get("V_OFFICE_SHARED_HISTORY_KEEP", "5"))
 if os.environ.get("V_OFFICE_SHARED_HISTORY", "1").lower() in ("0", "false", "no"):
     SHARED_HISTORY_KEEP = 0
 HISTORY_DIR_NAME = ".v-office-history"
@@ -1133,15 +1200,61 @@ class SharedWriteConflict(Exception):
         self.extra = extra
 
 
+def _warn_if_single_process() -> None:
+    """多 worker / 多副本时把"并发保护已经失效"这件事喊出来。
+
+    _copy_locks 是**进程内**的内存对象，进程之间互不可见。一旦本服务被起了多个
+    worker（或同一份存储被多个副本挂载），同一份文件的两次覆盖会各自持一把"互不
+    相干的锁"，于是双双通过 CAS、双双写盘 —— os.replace 是"最后写赢"，而**两边
+    都会收到成功**。这种失效不报错、日志全绿，只有内容少了一份。
+
+    检测手段（WEB_CONCURRENCY / UVICORN_WORKERS / GUNICORN_WORKERS）只是环境
+    变量的约定，uvicorn --workers 并不一定设置它们，所以这是**尽力而为的提醒**，
+    不是保证。真正的解法是把锁放到共享盘上做租约。
+    """
+    declared = (
+        os.environ.get("WEB_CONCURRENCY")
+        or os.environ.get("UVICORN_WORKERS")
+        or os.environ.get("GUNICORN_WORKERS")
+        or ""
+    ).strip()
+    if declared and declared not in ("1", "0"):
+        LOG.warning(
+            "detected %s workers: the in-process publish lock is NOT shared across "
+            "processes, concurrent overwrites of the same file can silently "
+            "overwrite each other. Keep a single worker, or move the lock to an "
+            "on-disk lease.",
+            declared,
+        )
+
+
+def _lock_key(target: Path) -> str:
+    """排队锁的键：优先用 inode，拿不到（文件还不存在）才退回路径字符串。
+
+    为什么不能直接拿路径字符串当键：在大小写不敏感（SMB/CIFS 默认如此）或存在
+    硬链接别名的挂载上，同一份文件可以有多个"看起来不同"的路径写法，而
+    Path.resolve() 在 Linux 上**不做大小写折叠** —— 于是 Report.docx 与
+    report.docx 会各拿一把锁，两个人同时覆盖同一份文件、双双通过检查。
+    inode 相同则说明是同一个文件，用它做键天然归一。
+    """
+    try:
+        stat = target.stat()
+    except OSError:
+        # 新建：这个名字此刻还没被任何 inode 占用，路径字符串就够——
+        # 同一时刻抢同一个新名字的请求会拿到同一个键。
+        return f"path:{target}"
+    return f"ino:{stat.st_dev}:{stat.st_ino}"
+
+
 @asynccontextmanager
 async def _copy_lock(target: Path):
-    """按目标的**最终绝对路径**排队。
+    """按目标排队（键的取法见 _lock_key）。
 
-    必须用 resolve 之后的路径：同一条共享盘路径常有两个别名（真实路径与
-    /exposed/volumes/<空间> 软链），按请求入参排队会让两条路各拿一把锁，
-    等于没锁。
+    这把锁在**进程内**生效，前提是单进程单 worker（server/Dockerfile 的 CMD
+    没有 --workers）。多 worker 时各进程持有的锁互不相干，覆盖会退化成"最后
+    写赢"且双方都收到成功——启动时会对此告警，见 _warn_if_single_process()。
     """
-    key = str(target)
+    key = _lock_key(target)
     lock = _copy_locks.setdefault(key, asyncio.Lock())
     try:
         await asyncio.wait_for(lock.acquire(), timeout=COPY_LOCK_TIMEOUT)
@@ -1156,17 +1269,75 @@ async def _copy_lock(target: Path):
             _copy_locks.pop(key, None)
 
 
+# 内容指纹缓存：目标路径 → ((mtime_ns, size), 指纹)。
+#
+# 一次覆盖原本要把同一份文件读三遍（算当前版本、给备份命名、写后算新版本），
+# 大文件走共享盘就是好几秒。这里按键缓存指纹，把重复读压掉：只有"文件真的变了"
+# 才重新读。
+#
+# 已知边界：命中判断依赖 (mtime_ns, size)。外部程序在**同一时间粒度内**改成
+# **同样大小**的内容会漏判（SMB 的 mtime 常是秒级）——这与 WOPI 的 Version
+# 是同一类取舍，且覆盖前有留底可回滚。
+_VERSION_CACHE: dict[str, tuple[tuple[int, int, int], str]] = {}
+_VERSION_CACHE_MAX = 512
+
+
+def _version_key(path: Path) -> tuple[int, int, int] | None:
+    """内容版本缓存的键：**mtime + 大小 + inode**。
+
+    只用 mtime+大小是不够的：这份代码在共享盘上真的遇到过"同一时刻、同样大小的两次写入"
+    （测试里 old/new 都是 3 字节），键撞上就会把**旧指纹**当成当前版本返回 —— 而它既是对外
+    展示的"当前版本"，也是「覆盖」的 CAS 凭据，错了会让覆盖判定失准。inode 每次都不同
+    （写入走 tmp + os.replace，换的是新文件），把它并进键里就分得开了。
+    """
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+
+
+def _remember_version(path: Path, digest: str) -> None:
+    """把某个文件"刚被我们写成什么内容"记进缓存，省掉紧接着的那次回读。"""
+    key = _version_key(path)
+    if key is None:
+        _VERSION_CACHE.pop(str(path), None)
+        return
+    if len(_VERSION_CACHE) >= _VERSION_CACHE_MAX:
+        _VERSION_CACHE.pop(next(iter(_VERSION_CACHE)), None)
+    _VERSION_CACHE[str(path)] = (key, digest)
+
+
+def _version_of_bytes(data: bytes) -> str:
+    """直接对内存里的字节算指纹。
+
+    写完盘要回一个"新版本号"，而那份字节就在手里（我们刚写下去的），
+    没有任何理由再把它从共享盘读回来算一遍。
+    """
+    return hashlib.blake2b(data, digest_size=16).hexdigest()
+
+
 def _content_version(path: Path) -> str:
     """共享盘文件的内容指纹，作为「覆盖」的 CAS 凭据。
 
-    只在覆盖判定这一条路上调用（每次操作一个文件），所以直接读内容算哈希。
-    不要挪到列目录里用：一次递归遍历最多 MAX_WALK_DOCUMENTS 个文件，逐个读
-    内容会把共享盘拖垮。
+    只用于"单个文件"的判定（覆盖、WOPI 版本、对话框展示），不要挪到列目录里：
+    一次递归遍历最多 MAX_WALK_DOCUMENTS 个文件，逐个读内容会把共享盘拖垮。
     """
+    stamp = _version_key(path)
+    if stamp is None:
+        return ""
+    key = str(path)
+    hit = _VERSION_CACHE.get(key)
+    if hit and hit[0] == stamp:
+        return hit[1]
     try:
-        return hashlib.blake2b(path.read_bytes(), digest_size=16).hexdigest()
+        digest = hashlib.blake2b(path.read_bytes(), digest_size=16).hexdigest()
     except OSError:
         return ""
+    if len(_VERSION_CACHE) >= _VERSION_CACHE_MAX:
+        _VERSION_CACHE.pop(next(iter(_VERSION_CACHE)), None)
+    _VERSION_CACHE[key] = (stamp, digest)
+    return digest
 
 
 def _file_token(path: Path) -> str:
@@ -1205,33 +1376,125 @@ def _describe_shared(path: Path, root: Path) -> dict:
 
 
 def _prune_history(history: Path, name: str, keep: int) -> None:
-    """每个文件只留最近 keep 份备份，按名字里的时间戳排序淘汰。"""
+    """每个文件只留最近 keep 份备份，淘汰最老的。
+
+    按**留底时刻**排（硬链接拿到的正是被覆盖那一版的 mtime，逐次递增），时刻相同再按
+    名字兜底：如果只按名字排，同一秒内连续覆盖几次会排成随机顺序，可能把最新的那份淘汰掉。
+
+    只认备份名那种形状：同一个目录里还有 `<原名>.author` 这种辅助记录，别把它当备份删了。
+    """
     try:
-        siblings = sorted(p for p in history.iterdir() if p.name.startswith(name + "."))
+        siblings = [
+            p
+            for p in history.iterdir()
+            if p.name.startswith(name + ".")
+            and _HISTORY_STAMP_RE.fullmatch(
+                p.name[len(name) + 1 :].split(".")[0]
+            )
+        ]
+        siblings.sort(key=lambda p: (p.stat().st_mtime_ns, p.name), reverse=True)
     except OSError:
         return
-    for stale in siblings[:-keep] if len(siblings) > keep else []:
+    for stale in siblings[keep:]:
         try:
             stale.unlink()
         except OSError:
             pass
 
 
-def _snapshot_before_overwrite(target: Path, keep: int) -> str:
+def _history_safe_user(name: str) -> str:
+    """备份文件名里的操作人标签：**不含 "."**、不含路径分隔符。
+
+    备份名是 `<原名>.<时间戳>[.<操作人>].<版本>`，而原名本身含 "."（如 .docx），所以
+    操作人这一段一旦带 "." 就没法从文件名反解出边界了。
+    """
+    safe = USERNAME_SAFE_RE.sub("_", str(name or "")).replace(".", "_")
+    return safe[:32].strip("_")
+
+
+def _history_author_file(target: Path) -> Path:
+    """记录"这一版是谁提交的"的辅助文件（与备份同目录，`<原名>.author`）。
+
+    只记一行内容版本、一行用户名。界面「版本」里要显示"谁提交的"，而备份是在**下一版
+    写进来的时候**才创建的——创建那一刻才知道被打包走的是谁的版本，所以得在写入时就
+    把提交人记下来。
+    """
+    return target.parent / HISTORY_DIR_NAME / f"{target.name}.author"
+
+
+def _remember_author(target: Path, by: str, version: str) -> None:
+    """记下"当前这一版是谁提交的"（写入成功后调用）。
+
+    记的是 **内容版本 + 提交人**：读取时只有版本对得上才作数。共享盘上的文件可能被别的
+    应用（SMB、另一个系统）直接改写，那种改写不经过我们，记录随之过期；带上版本号就能
+    识别出"这记录说的不是我眼前这一版"，宁可不显示提交人，也不显示错的人。
+
+    写不进去不该让写入失败：这只是界面上的一栏。
+    """
+    if not by or not version:
+        return
+    try:
+        sidecar = _history_author_file(target)
+        sidecar.parent.mkdir(parents=True, exist_ok=True)
+        sidecar.write_text(f"{version}\n{_history_safe_user(by)}\n", encoding="utf-8")
+    except OSError as exc:
+        LOG.warning("cannot remember the author of %s: %s", target, exc)
+
+
+def _archived_author(target: Path, version: str) -> str:
+    """被归档的那一版是谁提交的；没有记录、或记录已过期时返回空串。"""
+    try:
+        lines = _history_author_file(target).read_text("utf-8").splitlines()
+    except OSError:
+        return ""
+    if len(lines) < 2 or not version or lines[0].strip() != version:
+        return ""
+    return lines[1].strip()
+
+
+def _snapshot_before_overwrite(
+    target: Path, keep: int, known_version: str = ""
+) -> str:
     """覆盖前把旧字节留底到 <目录>/.v-office-history/，返回源内相对备份路径。
 
     留底失败必须让整个覆盖失败：它是覆盖的**前置条件**，不是顺手做一下的附加
     动作。目录本身以 "." 开头，浏览接口不会把它列出来。
+
+    实现上优先用**同卷硬链接**：备份只是多一个目录项，旧 inode 由它保活，
+    紧接着的 os.replace 换掉名字也不会丢内容 —— 零拷贝。原来用 shutil.copy2
+    要把整个文件从共享盘读一遍再写一遍，大文件上就是好几秒（而且是在持锁期间）。
+    跨卷或文件系统不支持时才退回复制。
+
+    by 是发起这次覆盖的用户，写进备份名，界面「版本」里要显示"谁在什么时候覆盖的"。
     """
     if keep <= 0:
         return ""
     history = target.parent / HISTORY_DIR_NAME
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    version8 = _content_version(target)[:8] or "unknown"
-    backup_name = f"{target.name}.{stamp}.{version8}"
+    # 版本号复用调用方已经算过的那一个：为了给备份起名而再读一遍整个文件，
+    # 是这份代码里最没必要的一笔开销。调用方没算过时用廉价的文件标记兜底——
+    # 这个名字只需要"可区分"，不值得为它读一遍文件（而调用方没算过，往往正是
+    # 因为它手上只有这个廉价标记）。
+    version8 = (known_version or _file_token(target).replace("-", ""))[:8] or "unknown"
+    # 名字里的这一段记的是"这一版是谁提交的"（不是"谁覆盖了它"）。只有作者记录真的存在时
+    # 才去算一次完整内容版本用于核对——那要读一遍文件，没有记录就没必要为它付这个代价。
+    operator = ""
+    if _history_author_file(target).is_file():
+        operator = _history_safe_user(
+            _archived_author(target, known_version or _content_version(target))
+        )
+    label = f"{stamp}.{operator}" if operator else stamp
+    backup_name = f"{target.name}.{label}.{version8}"
+    destination = history / backup_name
     try:
         history.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(target, history / backup_name)
+        try:
+            os.link(target, destination)
+        except FileExistsError:
+            # 同一秒内、同内容的重复覆盖会落到同一个名字上：内容本来就一样
+            pass
+        except OSError:
+            shutil.copy2(target, destination)
         _prune_history(history, target.name, keep)
     except OSError as exc:
         LOG.error("shared history snapshot failed for %s: %s", target, exc)
@@ -1241,37 +1504,165 @@ def _snapshot_before_overwrite(target: Path, keep: int) -> str:
     return f"{HISTORY_DIR_NAME}/{backup_name}"
 
 
-def _claim_exact(target: Path) -> bool:
-    """按原名字排他创建占位；已被别人占住返回 False。
+# 备份名里时间戳的形状，用来把"这个文件"和"这个文件的备份"分开
+_HISTORY_STAMP_RE = re.compile(r"\d{8}-\d{6}")
 
-    多进程/多副本下只有排他创建才真的排他（os.replace 是"最后写赢"，不排他）。
-    文件系统不支持时（部分 NFS 的 O_EXCL 不可靠）退化为存在性判断，那类部署
-    只能靠"单实例"这条约束兜底。
+
+def _history_entries(target: Path, keep: int) -> list[dict]:
+    """某个文件的留底版本，最新的在前。给界面「版本」用。
+
+    只认 _snapshot_before_overwrite 写出来的名字形状：`<原名>.<时间戳>[.<操作人>].<版本>`
+    （早期版本没有操作人那一段，这里按"第二段是不是时间戳"来兼容）。排序按**留底时刻**
+    （硬链接拿到的就是被覆盖那版的 mtime），同一秒内连续覆盖也能排出正确的新旧顺序。
     """
+    if keep <= 0:
+        return []
+    history = target.parent / HISTORY_DIR_NAME
     try:
-        fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-    except FileExistsError:
-        return False
+        candidates = [p for p in history.iterdir() if p.name.startswith(target.name + ".")]
     except OSError:
-        return not target.exists()
-    os.close(fd)
-    return True
+        return []
+
+    entries: list[dict] = []
+    for path in candidates:
+        parts = path.name[len(target.name) + 1 :].split(".")
+        if len(parts) < 2 or not _HISTORY_STAMP_RE.fullmatch(parts[0]):
+            continue
+        try:
+            if not path.is_file():
+                continue
+            stat = path.stat()
+        except OSError:
+            continue
+        entries.append(
+            {
+                # id 就是备份文件名，回退时原样回传；服务端会校验它确实属于这个文件
+                "id": path.name,
+                "name": target.name,
+                # 这一版"另存/打开"时该用的名字（带那一版的时刻）。由服务端给，界面不必
+                # 自己拼一遍，也就不会和「保存到我的文档」落盘时的名字对不上。
+                "exportName": _versioned_export_name(target, path.name),
+                "size": stat.st_size,
+                "modified": int(stat.st_mtime),
+                "by": parts[1] if len(parts) >= 3 else "",
+                "version": parts[-1],
+                "_mtime_ns": stat.st_mtime_ns,
+            }
+        )
+    entries.sort(key=lambda item: (item["_mtime_ns"], item["id"]), reverse=True)
+    for item in entries:
+        item.pop("_mtime_ns", None)
+    return entries[:keep]
 
 
-def _claim_unique(directory: Path, name: str, tries: int = 20) -> Path:
-    """在锁内挑一个不冲突的新名字并**占位**（xxx (1).docx …）。"""
+def _history_backup_path(target: Path, backup_id: str) -> Path:
+    """把回退请求里的 id 解析成一个**确实属于这个文件**的备份路径。
+
+    这是写入路径上的入参，必须挡住 `../` 之类的越权：只接受纯文件名、必须以
+    "<原名>." 开头、必须落在同一个隐藏目录里、时间戳段必须合法。
+    """
+    if not backup_id or Path(backup_id).name != backup_id:
+        raise HTTPException(status_code=400, detail="invalid history id")
+    if not backup_id.startswith(target.name + "."):
+        raise HTTPException(status_code=400, detail="history id does not match the file")
+    parts = backup_id[len(target.name) + 1 :].split(".")
+    if len(parts) < 2 or not _HISTORY_STAMP_RE.fullmatch(parts[0]):
+        raise HTTPException(status_code=400, detail="invalid history id")
+    path = target.parent / HISTORY_DIR_NAME / backup_id
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="history version not found")
+    return path
+
+
+def _versioned_export_name(target: Path, backup_id: str) -> str:
+    """给「保存到我的文档」起个能看出是哪一版的名字：原名 + 那一版的时刻。
+
+    时刻用连字符而不是冒号：这个名字会出现在下载文件名里，冒号在 Windows 上非法。
+    """
+    stamp = backup_id[len(target.name) + 1 :].split(".")[0]
+    pretty = f"{stamp[:4]}-{stamp[4:6]}-{stamp[6:8]} {stamp[9:11]}-{stamp[11:13]}"
+    stem, suffix = os.path.splitext(target.name)
+    return f"{stem} ({pretty}){suffix}"
+
+
+def _restore_from_history_sync(target: Path, backup: Path, keep: int, by: str) -> dict:
+    """把某个留底版本写回原文件（在锁内、工作线程里执行）。
+
+    回退**本身也先留底当前版本**：否则"回退错了"就变成新的不可逆操作。
+    """
+    previous_version = _content_version(target)
+    backup_path = _snapshot_before_overwrite(
+        target, keep, known_version=previous_version
+    )
+    data = backup.read_bytes()
+    _atomic_write(target, data)
+    # 版本号直接用刚写下去的那份字节算并回填缓存：回读一次既慢又可能被"同尺寸、同一
+    # 时刻"的新旧两份撞上图省事（见 _version_key 的说明），拿到的是上一个版本的指纹。
+    written_version = _version_of_bytes(data)
+    _remember_version(target, written_version)
+    # 记下"现在这一版是谁提交的"：它下次被覆盖时，「版本」列表里要显示提交人
+    _remember_author(target, by, written_version)
+    return {
+        "status": "restored",
+        "path": "",
+        "size": len(data),
+        "version": written_version,
+        "previousVersion": previous_version,
+        "restoredFrom": backup.name,
+        "backup": backup_path,
+    }
+
+
+def _write_new_exclusive(target: Path, body: bytes) -> None:
+    """创建路径专用：**排他创建 + 带内容落位**，一步完成。
+
+    先把内容写进同目录临时文件，再用 os.link 落位：目标已存在时 link 失败
+    （这就是排他创建），而且失败时盘上什么都没被改动。
+
+    此前分两步（O_CREAT|O_EXCL 建一个 0 字节占位 → os.replace 盖上内容）：两步
+    之间进程被杀，公共目录里就留下一个 0 字节文件，在别人眼里就是"文档损坏"。
+    与 os.replace 不同，os.link 在多进程/多副本下同样排他——这是"最后写赢"之外
+    唯一能真正互斥的原语。硬链接不可用的文件系统（跨卷、部分 NFS）退回
+    "存在性判断 + os.replace"，那类部署只能靠"单实例"这条约束兜底。
+    """
+    tmp = target.with_name(target.name + ".v-office-tmp")
+    try:
+        tmp.write_bytes(body)
+        try:
+            os.link(tmp, target)
+        except FileExistsError:
+            raise SharedWriteConflict("target-exists")
+        except OSError:
+            if target.exists():
+                raise SharedWriteConflict("target-exists")
+            os.replace(tmp, target)
+    except SharedWriteConflict:
+        raise
+    except OSError as exc:
+        LOG.warning("shared write failed at %s: %s", target, exc)
+        raise HTTPException(status_code=403, detail="shared source is not writable")
+    finally:
+        # link 成功后临时文件仍在（只是多了一个目录项），replace 成功后它已被
+        # 消费掉 —— 两种情况下这里都是"删一个不存在的文件"，静默忽略。
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
+def _write_new_unique(directory: Path, name: str, body: bytes, tries: int = 20) -> Path:
+    """挑一个不冲突的新名字并排他创建，返回真正落位的路径（xxx (1).docx …）。
+
+    挑名字和占位必须在同一处、同一把锁内完成：让前端挑好名字再发请求，中间
+    必然有人能插进去。
+    """
     stem, suffix = os.path.splitext(name)
     for index in range(1, tries + 1):
         candidate = directory / f"{stem} ({index}){suffix}"
         try:
-            fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        except FileExistsError:
+            _write_new_exclusive(candidate, body)
+        except SharedWriteConflict:
             continue
-        except OSError:
-            if not candidate.exists():
-                return candidate
-            continue
-        os.close(fd)
         return candidate
     raise SharedWriteConflict("name-exhausted")
 
@@ -1306,6 +1697,7 @@ def _publish_to_source_sync(
     mode: str,
     if_match: str,
     history_keep: int,
+    by: str = "",
 ) -> dict:
     """在锁内执行的整段同步逻辑（由调用方丢进工作线程）。
 
@@ -1320,8 +1712,6 @@ def _publish_to_source_sync(
     current = _describe_shared(plain_target, root) if exists else None
 
     target = plain_target
-    claimed = False
-
     if exists and mode == "overwrite":
         if if_match and if_match == (current or {}).get("version"):
             pass
@@ -1333,60 +1723,71 @@ def _publish_to_source_sync(
             raise SharedWriteConflict("target-exists", current=current)
     elif exists and mode == "fail":
         raise SharedWriteConflict("target-exists", current=current)
-    elif exists and mode == "rename":
-        target = _claim_unique(directory, blob.name)
-        exists = False
-        claimed = True
 
-    if not exists and not claimed:
-        # 新建：排他占位，避免多实例/多进程同时把同一个新名字写进去
-        if not _claim_exact(target):
+    # 冲突判定全部走完、确认要写之后，才读源文件字节（只读一次）
+    data = blob.read_bytes()
+
+    if mode == "rename" and exists:
+        # 挑名字 + 占位 + 落内容一次完成，不存在"建了空文件再盖内容"的窗口
+        target = _write_new_unique(directory, blob.name, data)
+        status = "renamed"
+        backup = ""
+    elif exists:
+        status = "overwritten"
+        # 备份名复用刚算出来的当前版本；留底走硬链接，零拷贝
+        backup = _snapshot_before_overwrite(
+            target, history_keep, (current or {}).get("version", "")
+        )
+        _atomic_write(target, data)
+    else:
+        status = "created"
+        backup = ""
+        try:
+            _write_new_exclusive(target, data)
+        except SharedWriteConflict:
+            # 别人抢先建了同名文件：按"目标已存在"回报当前信息
             raise SharedWriteConflict(
                 "target-exists", current=_describe_shared(target, root)
             )
-        claimed = True
 
-    if target != plain_target:
-        status = "renamed"
-    elif exists:
-        status = "overwritten"
-    else:
-        status = "created"
-
-    backup = ""
-    if status == "overwritten":
-        backup = _snapshot_before_overwrite(target, history_keep)
-
-    data = blob.read_bytes()
-    try:
-        _atomic_write(target, data)
-    except HTTPException:
-        if claimed:
-            # 占位失败要清掉，否则公共目录里留下一个 0 字节的空文件
-            try:
-                target.unlink()
-            except OSError:
-                pass
-        raise
-
+    # 新版本号直接对**刚写下去的那份字节**算：它就在手里，没有任何理由再从共享盘
+    # 把整份读回来算一遍（这是原来三遍全量读里的第三遍）
+    written_version = _version_of_bytes(data)
+    _remember_version(target, written_version)
+    # 记下"现在这一版是谁提交的"：它下次被覆盖时，「版本」列表里要显示提交人
+    _remember_author(target, by, written_version)
     return {
         "status": status,
         "path": _source_relpath(root, target),
         "size": len(data),
-        "version": _content_version(target),
+        "version": written_version,
         "previousVersion": (current or {}).get("version"),
         "backup": backup,
     }
 
 
 @app.put("/api/v1/sources/{source}/file")
-async def put_source_file(source: str, request: Request, path: str) -> JSONResponse:
+async def put_source_file(
+    source: str,
+    request: Request,
+    path: str,
+    if_match_token: str = Query("", alias="if-match-token"),
+) -> JSONResponse:
     """把编辑后的文档写回共享源——即"编辑 NAS 上的原文档"。
 
     覆盖已有文件；文件不存在时作为新文档创建（父目录必须已存在）。写回始终
     落在原路径上，因此共享盘上的文件名/位置保持不变。
+
+    if-match-token：编辑器打开这份文档时服务端随内容一起给它的版本标记
+    （见 GET .../file 的 X-VOffice-Token 响应头）。带上就做一次 CAS —— 盘上
+    已经不是他看到的那一版就拒写。
+
+    为什么必须补这一刀：共享盘里刻意排除协同的那几类（pdf / txt / md / csv /
+    rtf）走的就是单机内核保存 → 这条路径。它此前**既没有排队锁、也没有版本
+    校验、也没有留底**，是共享盘写入里唯一还敞着的口子：A 刚发布上去的内容，
+    会被 B 手里那份"打开时的旧副本"整份写回抹掉，而且不可恢复。
     """
-    await current_username(request)
+    username = await current_username(request)
     if not path:
         raise HTTPException(status_code=400, detail="missing path")
     _require_writable(source)
@@ -1402,20 +1803,82 @@ async def put_source_file(source: str, request: Request, path: str) -> JSONRespo
     length = request.headers.get("Content-Length")
     if length and length.isdigit() and int(length) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file too large")
+    # 请求体先读出来：读 body 不需要进临界区
     body = await request.body()
     if not body:
         raise HTTPException(status_code=400, detail="empty body")
     if len(body) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file too large")
 
-    written = await asyncio.to_thread(_write_source_or_skip, target, body)
+    backup = ""
+    async with _copy_lock(target):
+        # 判定必须在锁内：锁外判等于没判
+        exists = target.is_file()
+        current_token = _file_token(target) if exists else ""
+        if exists and if_match_token and if_match_token != current_token:
+            LOG.warning(
+                "shared save rejected (version changed) user=%s path=%s "
+                "expected=%s on disk=%s",
+                username,
+                path,
+                if_match_token,
+                current_token,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail={"reason": "version-changed", "token": current_token},
+            )
+
+        # 没带凭据（旧版前端 / 直连 API）就无从判断这次写入基于哪一版，因此留一份底，
+        # 让覆盖至少可回滚；带了且匹配的，说明用户就是对着"他看到的那一版"保存的，
+        # 属于正常保存 —— 不留底，否则编辑器每 10 秒一次自动保存会把留底目录刷满，
+        # 真正有价值的历史点反而被挤掉。
+        if exists and not if_match_token:
+            backup = await asyncio.to_thread(
+                _snapshot_before_overwrite, target, SHARED_HISTORY_KEEP, ""
+            )
+
+        written = await asyncio.to_thread(_write_source_or_skip, target, body)
+        if written:
+            # 记下这一版是谁提交的：下一次它被覆盖时，界面「版本」里要显示出来
+            saved_version = await asyncio.to_thread(_content_version, target)
+            await asyncio.to_thread(_remember_author, target, username, saved_version)
+
+    new_token = _file_token(target)
     if not written:
+        # 内容与扩展名不符（PDF 这一类）：原文件不动，照旧回成功让 Ctrl+S 可用
         size = target.stat().st_size if target.is_file() else 0
-        return JSONResponse({"status": "ok", "path": path, "size": size, "unchanged": True})
-    # 共享盘内容变了：丢掉列举缓存，用户回到列表立刻看到新的时间/大小
-    _invalidate_source_cache()
-    LOG.info("shared saved %s (%d bytes)", target, len(body))
-    return JSONResponse({"status": "ok", "path": path, "size": len(body)})
+        return JSONResponse(
+            {
+                "status": "ok",
+                "path": path,
+                "size": size,
+                "token": new_token,
+                "unchanged": True,
+            }
+        )
+
+    # 共享盘内容变了：精确失效受影响的列举缓存（不再整表清空，免得别的目录跟着重扫），
+    # 用户回到列表立刻看到新的时间/大小
+    _invalidate_source_path(source, source_root(source), target)
+    LOG.info(
+        "shared saved user=%s path=%s size=%d from=%s to=%s backup=%s",
+        username,
+        path,
+        len(body),
+        if_match_token or "-",
+        new_token,
+        backup or "-",
+    )
+    return JSONResponse(
+        {
+            "status": "ok",
+            "path": path,
+            "size": len(body),
+            "token": new_token,
+            "backup": backup,
+        }
+    )
 
 
 @app.post("/api/v1/sources/{source}/copy-from-file")
@@ -1503,6 +1966,7 @@ async def copy_file_to_source(
                 mode,
                 if_match,
                 SHARED_HISTORY_KEEP,
+                username,
             )
         except SharedWriteConflict as conflict:
             raise HTTPException(
@@ -1510,8 +1974,9 @@ async def copy_file_to_source(
                 detail={"reason": conflict.reason, **conflict.extra},
             )
 
-    # 共享盘内容变了：丢掉列举缓存，否则除操作者外的人最多 10s 看不到新文件
-    _invalidate_source_cache()
+    # 共享盘内容变了：精确失效受影响的列举缓存，否则除操作者外的人最多 10s
+    # 看不到新文件（rename 改的也是同一个目录，祖先集合相同，用原 target 即可）
+    _invalidate_source_path(source, root, target)
     LOG.info(
         "shared-publish user=%s source=%s path=%s status=%s from=%s to=%s size=%d backup=%s",
         username,
@@ -1545,6 +2010,147 @@ async def source_file_version(
     if not target.is_file():
         raise HTTPException(status_code=404, detail="file not found")
     return JSONResponse(_describe_shared(target, root))
+
+
+@app.get("/api/v1/sources/{source}/history")
+async def source_file_history(
+    source: str, request: Request, path: str
+) -> JSONResponse:
+    """某个共享文件的留底版本（最近的在前），供界面「版本」用。
+
+    文件被覆盖时服务端会先把旧内容留底到同目录的隐藏目录；这里把它读出来，让用户可以
+    回退到之前某一版（"反悔"）。留底与读取都在服务端做，前端不需要知道目录结构。
+    """
+    await current_username(request)
+    if not path:
+        raise HTTPException(status_code=400, detail="missing path")
+    target = source_target(source, path)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    if not SHARED_WRITABLE:
+        # 只读挂载下回退是不可能的，列表也就不必给（免得界面给出一个按不动的按钮）
+        return JSONResponse({"versions": [], "keep": 0, "writable": False})
+    return JSONResponse(
+        {
+            "versions": await asyncio.to_thread(
+                _history_entries, target, SHARED_HISTORY_KEEP
+            ),
+            "keep": SHARED_HISTORY_KEEP,
+            "writable": True,
+        }
+    )
+
+
+@app.post("/api/v1/sources/{source}/history/restore")
+async def source_file_history_restore(
+    source: str, request: Request, path: str, id: str
+) -> JSONResponse:
+    """把某个留底版本写回原文件（用户点「回退」）。
+
+    回退本身也先给"当前版本"留底，所以回退错了还能再回退回来 —— 不留底的回退等于
+    用一个不可逆操作去修另一个不可逆操作。
+
+    与「覆盖添加」共用同一把按目标的排队锁和同一套审计日志：两者都是对同一个文件的
+    整份写入，必须串行。
+    """
+    username = await current_username(request)
+    if not path or not id:
+        raise HTTPException(status_code=400, detail="missing path or id")
+    _require_writable(source)
+
+    root = source_root(source)
+    target = source_target(source, path)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    # id 只允许是"这个文件自己的"备份文件名（挡住 ../ 之类的越权与串文件回退）
+    backup = _history_backup_path(target, id)
+
+    async with _copy_lock(target):
+        result = await asyncio.to_thread(
+            _restore_from_history_sync, target, backup, SHARED_HISTORY_KEEP, username
+        )
+    result["path"] = _source_relpath(root, target)
+
+    _invalidate_source_path(source, root, target)
+    LOG.info(
+        "shared-history-restore user=%s source=%s path=%s id=%s from=%s to=%s size=%d backup=%s",
+        username,
+        source,
+        result["path"],
+        id,
+        result.get("previousVersion") or "-",
+        result["version"],
+        result["size"],
+        result.get("backup") or "-",
+    )
+    return JSONResponse(result)
+
+
+@app.post("/api/v1/sources/{source}/history/export")
+async def source_file_history_export(
+    source: str, request: Request, path: str, id: str
+) -> JSONResponse:
+    """把某个留底版本「保存到我的文档」，**不动公共盘上的原文件**。
+
+    这是"想反悔但先不急着回退"的出路：把旧版本取回自己名下看一眼、接着改，确认了再
+    决定要不要回退。落到私有目录一律不覆盖同名文件（撞名自动加 (1)(2)…），文件名带上
+    那一版的时刻，方便一眼看出拿的是哪一版。
+    """
+    username = await current_username(request)
+    if not path or not id:
+        raise HTTPException(status_code=400, detail="missing path or id")
+
+    target = source_target(source, path)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    backup = _history_backup_path(target, id)
+
+    data = await asyncio.to_thread(backup.read_bytes)
+    try:
+        written = await asyncio.to_thread(
+            _write_new_unique,
+            storage_dir(username),
+            _versioned_export_name(target, id),
+            data,
+        )
+    except SharedWriteConflict:
+        raise HTTPException(status_code=409, detail="too many files with that name")
+
+    LOG.info(
+        "shared-history-export user=%s source=%s path=%s id=%s -> %s (%d bytes)",
+        username,
+        source,
+        path,
+        id,
+        written.name,
+        len(data),
+    )
+    return JSONResponse(
+        {"status": "saved", "name": written.name, "size": len(data)}
+    )
+
+
+@app.get("/api/v1/sources/{source}/history/file")
+async def source_file_history_file(
+    source: str, request: Request, path: str, id: str
+) -> FileResponse:
+    """取某个留底版本的字节，用于界面上「打开」看内容。
+
+    只读、不改任何东西：界面里"打开一个历史版本"就是把这份字节当成**本地文件**交给
+    编辑器（保存只可能另存或下载），公共盘上的原文件与留底都不受影响。
+    """
+    await current_username(request)
+    if not path or not id:
+        raise HTTPException(status_code=400, detail="missing path or id")
+    target = source_target(source, path)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    backup = _history_backup_path(target, id)
+    return FileResponse(
+        backup,
+        media_type="application/octet-stream",
+        filename=_versioned_export_name(target, id),
+    )
 
 
 @app.post("/api/v1/sources/{source}/copy-to-file")
@@ -1699,24 +2305,35 @@ def _collabora_effective_state() -> str:
 # 是看不出持有者的。
 _wopi_locks: dict[str, dict] = {}
 
-# 协同锁的存活上限。Collabora 崩溃/断连时不会再来 UNLOCK，锁会永远留在表里；
-# 不许超时的话这份文件就被永久锁死、谁也保存不了。Collabora 编辑期间会周期性
-# REFRESH_LOCK，只有真的没续期的锁才会过期。
-WOPI_LOCK_TTL = float(os.environ.get("V_OFFICE_WOPI_LOCK_TTL", "86400"))
+# 协同锁的**空闲**存活上限（不是会话时长）。这个时间是从"该锁最近一次被用到"算起
+# 的，任何一个带该令牌的 WOPI 请求都会把时刻往后推（见 _wopi_identity），所以真正
+# 在编辑的会话不会被判过期；过期只会发生在会话已经彻底不再发请求之后。
+#
+# 为什么不能设成"永久"：Collabora 不一定有机会发 UNLOCK —— 浏览器直接关掉、容器被
+# 杀、令牌先到期（UNLOCK 拿 401）都会留下**僵尸锁**，把文件锁到天荒地老。这个坑真的
+# 踩过：一把 24 小时的僵尸锁把用户后来自己打开的同一个文件挡在门外，保存直接报
+# savefailed。
+WOPI_LOCK_TTL = float(os.environ.get("V_OFFICE_WOPI_LOCK_TTL", "7200"))
 
 
 def _wopi_lock_key(data: dict, name: str) -> str:
-    """协同锁的键。
+    """锁记录的键。**只用来记"谁正在编辑"，不用来做互斥**（见 wopi_file_operations）。
 
-    共享源文档**不带用户名**：它是盘上同一份文件，按用户各拿一把锁就等于没有
-    任何互斥（两个会话各自整份保存，后保存的赢、先保存的静默丢失），"互见光标"
-    只在同一会话内成立，跨会话保护不了。私有文档本来就是按用户隔离的目录，
-    保留用户名以免不同用户撞到同一个键。
+    共享源文档按文件算（源 + 源内相对路径，不带用户名）：那是盘上同一份文件，
+    多个用户的会话共享同一个 WOPISrc、本来就在同一个 Collabora 会话里，键就该归到一起
+    （「覆盖添加」要据此告诉用户"谁正在编辑"）。
+
+    私有文档按"用户 + 文件名"算：不同用户永远不同，同一个人的同一个文件归到一起。
     """
     source = str(data.get("s") or "")
     if source:
         return f"{source}/{_normalize_relpath(name)}"
-    return f"private/{data['u']}/{name}"
+    owner = str(data.get("u") or "")
+    rel = _normalize_relpath(name)
+    prefix = f"{owner}/"
+    if rel.startswith(prefix):
+        rel = rel[len(prefix) :]
+    return f"private/{owner}/{rel}"
 
 
 def _wopi_lock_of(key: str) -> dict:
@@ -1793,15 +2410,30 @@ def _wopi_identity(request: Request, name: str) -> dict:
     data = parse_wopi_token(token)
     if data.get("n") != name:
         raise HTTPException(status_code=403, detail="token does not match file")
+    # 这个会话还活着（每一个 WOPI 请求都会走到这里），把它的锁的"最近活动时刻"往后
+    # 推。这样"空闲多久算过期"衡量的才是**会话是否还在发请求**，而不是"锁创建了多久"：
+    # 真在编辑的会话不会被判过期，而彻底死掉、再也发不出 UNLOCK 的会话留下的僵尸锁
+    # 会在 TTL 后自动消失，不会把文件锁死。
+    entry = _wopi_locks.get(_wopi_lock_key(data, name))
+    if entry:
+        entry["at"] = time.monotonic()
     return data
 
 
 def _wopi_target(data: dict, name: str) -> Path:
-    """按令牌解析文档落点：共享源走源内相对路径，否则走用户私有目录。"""
+    """按令牌解析文档落点：共享源走源内相对路径，否则走用户私有目录。
+
+    私有文档的 name 形如 "<用户>/<文件名>"（见 wopi_session）。前缀必须与令牌里的
+    用户一致，否则就成了"拿着 A 的令牌去读写 B 的文件"。
+    """
     source = str(data.get("s") or "")
     if source:
         return source_target(source, name)
-    return safe_target(str(data["u"]), name)
+    owner = str(data["u"])
+    prefix = f"{owner}/"
+    if not name.startswith(prefix):
+        raise HTTPException(status_code=403, detail="token does not match file")
+    return safe_target(owner, name[len(prefix) :])
 
 
 def _wopi_can_write(data: dict) -> bool:
@@ -1947,19 +2579,36 @@ async def wopi_session(
         target = safe_target(username, name)
         if not target.is_file():
             raise HTTPException(status_code=404, detail="file not found")
-        doc_name = name
+        # 私有文档的文档标识必须带用户维度。Collabora 判定"是不是同一份文档"靠的是
+        # WOPISrc（容器日志里就是 docKey）：只带文件名的话，两个用户的同名私有文档会
+        # 算成同一个文档 —— 第二个人会并进第一个人的会话，读得到对方内容、保存还写进
+        # 对方的文件（跨用户串号）。
+        #
+        # 反过来，**同一个人的两次打开刻意共用同一个标识**：同一账号在两处登录进入同一个
+        # 会话、改动互相可见，这是正常且需要的（本来就是他自己的同一份文件）。所以这里
+        # 只带用户名，不带"每次打开都不同"的会话标识。
+        doc_name = f"{username}/{name}"
         can_write = want_write
         token = issue_wopi_token(username, doc_name, can_write)
+        LOG.info("private session user=%s doc=%s", username, doc_name)
 
-    # 共享源的相对路径保留正斜杠（{name:path} 路由可接住多级路径），
-    # 私有文件名照旧整体转义。
-    safe_for_url = "/" if source else ""
+    # 两类文档的路径都保留正斜杠：{name:path} 路由本来就能接住多级路径，而私有
+    # 文档现在也带 "<用户>/" 前缀（见上面的原因）。整体转义会把那个分隔符变成
+    # %2F，令牌里的 n 与路由收到的 name 就对不上了。
+    safe_for_url = "/"
     wopi_src = (
         f"{WOPI_PUBLIC_BASE.rstrip('/')}/wopi/files/"
         f"{quote(doc_name, safe=safe_for_url)}"
     )
     editor_url = await _collabora_editor_url(wopi_src, token, lang)
-    LOG.info("wopi session for %s (%s, source=%s)", doc_name, username, source or "-")
+    # wopiSrc 就是 Collabora 用来判定"是不是同一份文档"的键：两个会话会不会被合并
+    # 成一个，看这一行就能断案，不用去翻 Collabora 的 docKey。
+    LOG.info(
+        "wopi session user=%s canWrite=%s wopiSrc=%s",
+        username,
+        can_write,
+        wopi_src,
+    )
     return JSONResponse(
         {
             "editorUrl": editor_url,
@@ -1989,37 +2638,27 @@ async def wopi_put_contents(name: str, request: Request) -> Response:
         raise HTTPException(status_code=403, detail="read-only token")
 
     username = str(data["u"])
-    key = _wopi_lock_key(data, name)
-    lock = request.headers.get("X-WOPI-Lock", "")
-    current = _wopi_lock_of(key).get("lock", "")
-    # 已被别人持锁且锁不一致 → 按 WOPI 规范回 409 并带上当前锁
-    if current and lock != current:
-        return JSONResponse(
-            {"error": "lock mismatch"},
-            status_code=409,
-            headers={"X-WOPI-Lock": current},
+    # 锁**不作为写入门槛**（原因见 wopi_file_operations 里那段说明）：这里只留一条痕迹，
+    # 方便事后排查"保存时是否握着与记录不一致的锁"，但绝不用 409 把保存打死。
+    holder = _wopi_lock_of(_wopi_lock_key(data, name))
+    client_lock = request.headers.get("X-WOPI-Lock", "")
+    if holder and client_lock and holder.get("lock") != client_lock:
+        LOG.warning(
+            "wopi save carries a lock id that differs from the recorded one: %s (holder=%s)",
+            name,
+            holder.get("user"),
         )
 
     target = _wopi_target(data, name)
-    # 版本校验：CheckFileInfo 已经把 Version 交给了 Collabora，它保存时会回传
-    # X-WOPI-ItemVersion。盘上版本已经变过（别人用「覆盖添加」写进来了）就必须
-    # 拒 —— 否则 Collabora 手里那份基于旧内容的完整副本写回去，会把别人刚写进去
-    # 的内容整份抹掉，而且双方都不会收到任何提示。这是"无声丢数据"最典型的来路。
-    expected = request.headers.get("X-WOPI-ItemVersion", "")
-    actual = _file_token(target)
-    if expected and actual and expected != actual:
-        LOG.warning(
-            "wopi version mismatch for %s: expected %s, on disk %s",
-            name,
-            expected,
-            actual,
-        )
-        return JSONResponse(
-            {"error": "version mismatch"},
-            status_code=409,
-            headers={"X-WOPI-ItemVersion": actual},
-        )
-
+    # 这里刻意**没有**做"盘上版本变过就拒写"的校验。曾经按 WOPI 规范写过一版：比对
+    # 请求里的 X-WOPI-ItemVersion 与盘上版本。但查过 Collabora 26.04 的二进制后确认，
+    # 它**根本不发这个头**（一次都不会命中）——是一段永远不执行的代码，还容易让人误以为
+    # 这条链上已经有版本保护。留着它只会误导，因此删掉。
+    #
+    # 共享盘写入的真正保护在另外两处：
+    #   · 「覆盖添加」入口的 423：有人正握着这份文件的写锁时不允许从外面覆盖；
+    #   · API 路径的 if-match-token（见 put_source_file）：编辑器保存时回传它打开的
+    #     那一版，盘上已经不是那一版就拒写 —— 这条路是我们自己的接口，凭据靠得住。
     length = request.headers.get("Content-Length")
     if length and length.isdigit() and int(length) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file too large")
@@ -2029,16 +2668,29 @@ async def wopi_put_contents(name: str, request: Request) -> Response:
     if len(body) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file too large")
     if not _accepts_body(target, body):
-        return Response(status_code=200)
+        # 没写盘（内容与扩展名不符，跳过），盘上版本没变：照实回当前版本
+        return Response(
+            status_code=200, headers={"X-WOPI-ItemVersion": _file_token(target)}
+        )
     if data.get("s"):
         # 共享源：写盘是网络调用（SMB/NFS），必须出事件循环，否则一次保存就会
         # 卡住所有其他用户；内容与扩展名不符时跳过（保持原文件不动）。
         if await asyncio.to_thread(_write_source_or_skip, target, body):
-            _invalidate_source_cache()
+            source_id = str(data["s"])
+            _invalidate_source_path(source_id, source_root(source_id), target)
+            # 记下这一版是谁提交的：它下次被覆盖时，文件列表里「版本」要显示提交人
+            saved_version = await asyncio.to_thread(_content_version, target)
+            await asyncio.to_thread(_remember_author, target, username, saved_version)
     else:
         await asyncio.to_thread(_atomic_write_private, target, body)
     LOG.info("wopi saved %s for %s (%d bytes)", name, username, len(body))
-    return Response(status_code=200)
+    # 把写盘后的**新版本**回给编辑器：它保存成功后会把自己手上那版更新成这个值，
+    # 下一次保存才会用新版本号来做校验。不回这个头，它只能一直拿打开时的老版本号，
+    # 于是同一个会话里的**第二次保存必然被版本校验判 409**（表现就是 savefailed）。
+    # 这是 WOPI 对 PutFile 的标准要求，不是可选项。
+    return Response(
+        status_code=200, headers={"X-WOPI-ItemVersion": _file_token(target)}
+    )
 
 
 @app.get("/wopi/files/{name:path}")
@@ -2053,9 +2705,11 @@ async def wopi_check_file_info(name: str, request: Request) -> JSONResponse:
         {
             "BaseFileName": name.rsplit("/", 1)[-1],
             "Size": stat.st_size,
-            # Collabora 会把这个值当作"它打开的版本"，保存时经 X-WOPI-ItemVersion
-            # 回传；用 mtime+size 而不是秒级 mtime，避免同一秒内的两次写入撞成
-            # 同一个版本号（版本一样就检查不出"盘上已经变了"）
+            # 文件版本标记。用 mtime+size 而不是秒级 mtime：共享盘上同一秒内的两次
+            # 写入会撞成同一个版本号，这个值一旦被用来判断"文件变没变"就会失效。
+            # （注意：Collabora 26.04 并不会在保存时回传 X-WOPI-ItemVersion，所以它
+            # 现在只出现在这里和保存的响应里，不构成任何写入门槛；见 wopi_put_contents
+            # 里那段说明。保留是因为这是 WOPI 对 PutFile 的标准字段。）
             "Version": _file_token(target),
             "OwnerId": username,
             "UserId": username,
@@ -2086,15 +2740,18 @@ async def wopi_file_operations(name: str, request: Request) -> Response:
         return Response(status_code=200, content=b"", headers=headers)
 
     if override in ("LOCK", "REFRESH_LOCK", "UNLOCK_AND_RELOCK"):
-        if current and current != client_lock and override != "UNLOCK_AND_RELOCK":
-            return Response(
-                status_code=409,
-                content=b"",
-                headers={"X-WOPI-Lock": current},
-            )
+        # **这里一律成功，绝不上报冲突。**
+        #
+        # 锁在本服务里只承担一个职责：记下"谁正在编辑"，供「覆盖添加」提示持有者、
+        # 供会话签发时决定要不要降级只读。它不做互斥 —— 一旦拿它互斥，任何一个"退出得
+        # 不干净"的会话（浏览器直接关掉、容器被杀、令牌先到期导致 UNLOCK 拿到 401）都会
+        # 留下僵尸锁，把用户**自己**后来打开的同一个文件挡成只读，一保存就报
+        # savefailed（真实事故，2026-10-08）。
+        #
+        # 同一份文档的多个视图本来就落在同一个 Collabora 会话（同一个 docKey）里，写
+        # 操作由 coolwsd 自己串行化，不需要这里再加一道会误伤的闸。跨用户写同一份公共
+        # 文档的风险由「覆盖添加」入口的 423 检查挡住（它读的正是这里的记录）。
         if client_lock:
-            # 记下持有者与时刻：持有者用于「覆盖添加」提示"谁正在编辑"，时刻用于
-            # 识别 Collabora 崩溃后遗留、永远不会被 UNLOCK 的僵尸锁。
             _wopi_locks[key] = {
                 "lock": client_lock,
                 "user": username,
@@ -2103,12 +2760,6 @@ async def wopi_file_operations(name: str, request: Request) -> Response:
         return Response(status_code=200, content=b"")
 
     if override == "UNLOCK":
-        if current and current != client_lock:
-            return Response(
-                status_code=409,
-                content=b"",
-                headers={"X-WOPI-Lock": current},
-            )
         _wopi_locks.pop(key, None)
         return Response(status_code=200, content=b"")
 
