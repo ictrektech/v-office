@@ -41,7 +41,7 @@ import {
   isHybragInstalled,
   uploadKnowledgeFile,
 } from "@/utils/hybrag/client";
-import { clientLog, renameStoredFile } from "@/utils/vos/storage";
+import { clientLog, listStoredFiles, renameStoredFile } from "@/utils/vos/storage";
 import { useRouter } from "next/navigation";
 import {
   getVOSAccessToken,
@@ -49,6 +49,22 @@ import {
 } from "@/utils/vos/fastpath";
 
 const AUTO_SAVE_INTERVAL_MS = 10_000;
+
+/**
+ * 「我的文档」里是否已经有这个文件名。
+ *
+ * 换 Collabora 会话前要先往私有存储推一份原文件副本，而那个 PUT 是**覆盖写**：
+ * 模板 / 外链的文件名是固定的，一旦用户按原名保存过，推副本就会把用户的成果换成
+ * 一份干净模板。取不到列表（非 VOS 部署）时返回 false —— 那种环境下推副本本来
+ * 就会失败并回退，不会误判。
+ */
+async function storedNameTaken(name: string): Promise<boolean> {
+  try {
+    return (await listStoredFiles()).some((file) => file.name === name);
+  } catch {
+    return false;
+  }
+}
 
 interface NameRequest {
   id: number;
@@ -714,19 +730,54 @@ export default function Page() {
       const startEditor = async (useCollabora: boolean) => {
         // 共享源文档、老格式（doc/xls/ppt）即使不在"手动可切"名单里也强制走协同
         if (useCollabora && (collaboraDoc || forcedCollaborative)) {
-          const name =
-            original?.name ||
-            searchParams.get("fileName") ||
-            document.title;
-          // 本地文件只在浏览器内存里，Collabora 服务端取不到，先原样推一份
-          // 到 storage；?url= 指向存储时文件本来就在，不必重复上传。
+          // 只有 openUrl 打开（模板 / 外链）才会"决策时还没有字节"：本地文件、
+          // 我的文档、共享源都是 open(file)，open 里已经同步留底了。
+          const lazyUrlOpened = !sharedTarget && !original;
+          if (lazyUrlOpened) {
+            // 原文件字节是"装载时才留底"的，不等装载完成就是 null，会话必然取不到
+            // 文件——模板换了半天 Collabora 却总是回退 OnlyOffice，根因就在这里。
+            try {
+              await server.ensureLoaded();
+            } catch (error) {
+              // 装载失败（模板文件 404 / 转换失败）不在这里炸：让下面的 ready
+              // 落空、正常回退 OnlyOffice，由它把加载错误照旧呈现给用户。
+              console.warn(
+                "[editor] document load failed before the Collabora session",
+                error,
+              );
+            }
+          }
+          const source = sharedTarget
+            ? null
+            : (server.getOriginalDocument() ?? original);
+
+          // 推副本用的是 PUT（覆盖写），而模板 / 外链的文件名是固定的：用户"点模板
+          // → 编辑 → 直接保存"过之后，「我的文档」里就躺着同名文件，这里会把他的
+          // 成果悄悄换成一份干净模板。所以撞名时不推、退回 OnlyOffice（那条路只从
+          // URL 读，不写盘）。拖拽 / 我的文档打开不走这一支——推上去的就是他自己
+          // 那份，覆盖是预期内的。
+          const taken =
+            lazyUrlOpened && source ? await storedNameTaken(source.name) : false;
+
+          const name = source?.name || searchParams.get("fileName") || document.title;
+          // 本地文件只在浏览器内存里，Collabora 服务端取不到，先原样推一份到
+          // storage；?url= 直接指向存储时文件本来就在，不必重复上传。
           // 共享源（平台授权目录 / NAS）文档本来就在服务端：不推副本，让
           // Collabora 通过 WOPI 直接读写原文件，保存即写回共享盘。
-          const ready = sharedTarget
-            ? true
-            : original
-              ? await pushDocumentToStorage(original.name, original.data)
-              : Boolean(fileUrl);
+          let ready = false;
+          if (taken) {
+            toast.error(
+              language.toLowerCase().startsWith("zh")
+                ? `「我的文档」里已有同名文件 ${name}，为避免覆盖它，请先重命名后再用 Collabora 打开`
+                : `"${name}" already exists in My Documents. Rename it first, or keep using OnlyOffice.`,
+            );
+          } else if (sharedTarget) {
+            ready = true;
+          } else if (source) {
+            ready = await pushDocumentToStorage(source.name, source.data);
+          } else {
+            ready = Boolean(fileUrl);
+          }
           const sessionStarted = performance.now();
           const session = ready
             ? await fetchCollaboraSession(

@@ -40,8 +40,22 @@ export const COLLABORA_WORD_ENGINE =
  * 这些格式，而 Collabora 就是服务端 LibreOffice，原生读写并按原格式保存——它自己的
  * discovery 对 doc/xls/ppt 都声明了 edit 动作，对 pdf 只有 view_comment（所以 PDF
  * 仍走 OnlyOffice）。
+ *
+ * 现代格式 xlsx/pptx 也一并纳入：它们是不是**默认**走 Collabora 仍由部署默认
+ * （NEXT_PUBLIC_WORD_ENGINE）决定，这里只决定"能不能交给它"——包括编辑器里的手动
+ * 切换、以及模板库（13 个模板里 6 个 pptx、2 个 xlsx）。此前漏了这两个，于是模板
+ * 里绝大多数连 Collabora 的入口都不出现，和 shouldUseCollabora 注释里写的
+ * "现代格式按部署默认"对不上；共享盘文档也早已在用 Collabora 打开 pptx/xlsx
+ * （见 SHARED_COLLABORATIVE_EXTS），能力是验证过的。
  */
-const COLLABORA_EXTS = new Set(["doc", "docx", "ppt", "xls"]);
+const COLLABORA_EXTS = new Set([
+  "doc",
+  "docx",
+  "ppt",
+  "pptx",
+  "xls",
+  "xlsx",
+]);
 
 /**
  * 老版二进制格式：默认就走 Collabora，不看引擎偏好。
@@ -52,7 +66,10 @@ const COLLABORA_EXTS = new Set(["doc", "docx", "ppt", "xls"]);
  */
 const LEGACY_EXTS = new Set(["doc", "ppt", "xls"]);
 
-/** 该扩展名是否可交给 Collabora 内核（doc/docx/ppt/xls），供编辑器 UI 判断。 */
+/**
+ * 该扩展名是否可交给 Collabora 内核（doc/docx/ppt/pptx/xls/xlsx），供编辑器 UI 判断
+ * ——它决定"使用 Collabora 打开"这个入口出不出现，不代表默认内核。
+ */
 export function isCollaboraExt(ext: string | undefined | null): boolean {
   return COLLABORA_EXTS.has(normalizeExt(ext));
 }

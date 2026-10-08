@@ -254,6 +254,16 @@ export class EditorServer {
   }
 
   /**
+   * 等当前文档装载完成（惰性下载 + x2t 转换）。
+   *
+   * 换 Collabora 会话前必须等它：原文件字节是装载时才留底的，不等的话
+   * `getOriginalDocument()` 还是 null，「模板 / 外链」这类文档就换不到会话。
+   */
+  async ensureLoaded(): Promise<void> {
+    if (this.loadPromise) await this.loadPromise;
+  }
+
+  /**
    * 当前文档的共享源落点（非空表示编辑的是共享盘上的原文件）。
    *
    * 编辑器页据此决定 Collabora 会话参数：共享源文档不再往私有存储推副本，
@@ -270,15 +280,23 @@ export class EditorServer {
     let data: ArrayBuffer =
       typeof buffer == "function" ? await buffer() : buffer;
 
+    // 留底原文件字节。Collabora 是服务端渲染，只能通过 WOPI 从 storage 取文件，
+    // 而 fsMap 里只有 x2t 转换后的 Editor.bin（回写不出可用的原文件）。
+    //
+    // 必须在**转换之前**留：一来 .doc 转换后字节就变成 docx 了，而 Collabora
+    // 是按原格式读写；二来 openUrl（模板 / 外链）是惰性下载，字节要到这里才拿
+    // 得到——之前只有 pdf 分支留了底，于是模板这类"只给了 URL"的文档永远换不到
+    // Collabora 会话（点了「使用 Collabora 打开」只会回退 OnlyOffice）。
+    this.originalData = data;
+    this.originalName = this.originalName || this.title;
+
     let output: Uint8Array | null = null;
     let media: { [key: string]: Uint8Array } = {};
 
     if (fileType == "pdf") {
-      // PDF 的"原始字节"就是内核直接拿到的那一份（我的文档 / 共享盘是惰性下载，
-      // 这里才真正拿到字节）。保存时若导出没产出真 PDF，就把它写回去——保证写进
-      // 去的一定是这份文件自己的内容，不会串到别的文档。
-      this.originalData = data;
-      this.originalName = this.originalName || this.title;
+      // PDF 不走 x2t：内核直接拿原始字节渲染（上面已经留底了那一份）。保存时若
+      // 导出没产出真 PDF，就把留底的那份写回去——保证写进去的一定是这份文件自己
+      // 的内容，不会串到别的文档。
       output = new Uint8Array(data);
     } else {
       // 老版 .doc：x2t 直接解析排版会错乱，先用 LibreOffice 转成 docx 副本
