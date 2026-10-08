@@ -290,28 +290,128 @@ export async function copySourceFileToStorage(
   }
 }
 
+/** 共享盘上一个文件的当前信息（含内容版本）。 */
+export interface SharedFileInfo {
+  name?: string;
+  path?: string;
+  size?: number;
+  modified?: number;
+  /** 内容指纹；「覆盖」时要原样回传作为 if-match 凭据 */
+  version?: string;
+}
+
+/** 目标已存在（或写入无法继续）时的冲突描述。 */
+export interface PublishConflict {
+  reason:
+    | "target-exists"
+    | "version-changed"
+    | "in-use"
+    | "name-exhausted"
+    | "busy";
+  /** 公共目录里当前那一份，供界面和"我这版"做对比 */
+  current?: SharedFileInfo;
+  /** in-use：正在编辑它的用户 */
+  holder?: string;
+}
+
+export type PublishOutcome =
+  | {
+      status: "created" | "overwritten" | "renamed";
+      path: string;
+      size: number;
+      version: string;
+      previousVersion?: string | null;
+      /** 覆盖时被留底的旧版本，源内相对路径（形如 .v-office-history/...） */
+      backup?: string;
+    }
+  | { status: "conflict"; conflict: PublishConflict };
+
+/** 409/423 的响应体里是 {detail:{reason,…}}，个别错误里 detail 是 JSON 字符串。 */
+function readConflict(payload: unknown): PublishConflict {
+  const raw = (payload as { detail?: unknown } | null)?.detail;
+  let detail: Record<string, unknown> = {};
+  if (typeof raw === "string") {
+    try {
+      detail = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      detail = {};
+    }
+  } else if (raw && typeof raw === "object") {
+    detail = raw as Record<string, unknown>;
+  }
+  return {
+    reason: (detail.reason as PublishConflict["reason"]) ?? "target-exists",
+    current: detail.current as SharedFileInfo | undefined,
+    holder: detail.holder as string | undefined,
+  };
+}
+
 /**
- * 把「我的文档」里的一个文件复制到共享源目录（例如 NAS 的公共目录）。
+ * 把「我的文档」里的一个文件写入共享源目录（例如 NAS 的公共目录）。
  *
- * 服务端直接读私有目录写共享盘，不经浏览器；默认不覆盖同名文件。
- * 抛出 TARGET_EXISTS / READ_ONLY 供调用方给出明确提示。
+ * 服务端直接读私有目录写共享盘，不经浏览器。三种落点：
+ *
+ *   fail（默认）—— 目标存在即返回 conflict（含当前文件信息），由界面让用户决定；
+ *   overwrite    —— 必须带 ifMatch（用户看到的那一版的版本号）：服务端只接受
+ *                   "用我看过的那版换掉"，不带凭据的覆盖会被拒（退化为 fail）；
+ *   rename       —— 由服务端在锁内挑一个新名字（xxx (1).docx），不覆盖任何东西。
+ *
+ * 冲突不抛异常而是返回结果：它不是"出错"，是界面必须处理的一个正常分支。
+ * 只有真正无法继续的情况（只读、网络、服务端 5xx）才抛。
  */
 export async function copyStoredFileToSource(
   name: string,
   source: string,
   path = "",
-): Promise<void> {
+  options: {
+    mode?: "fail" | "overwrite" | "rename";
+    ifMatch?: string;
+    /**
+     * 同一次用户操作复用它，服务端只写一遍：请求超时（前端 30s 断开）但服务端
+     * 其实已经写成功时，用户再点一次不会变成第二次覆盖。
+     */
+    idempotencyKey?: string;
+  } = {},
+): Promise<PublishOutcome> {
   const params = new URLSearchParams({ name });
   if (path) params.set("path", path);
+  if (options.mode) params.set("on-conflict", options.mode);
+  if (options.ifMatch) params.set("if-match", options.ifMatch);
+  if (options.idempotencyKey) {
+    params.set("idempotency-key", options.idempotencyKey);
+  }
   const response = await request(
     `/sources/${encodeURIComponent(source)}/copy-from-file?${params.toString()}`,
     { method: "POST" },
   );
-  if (response.status === 409) throw new Error("TARGET_EXISTS");
   if (response.status === 403) throw new Error("READ_ONLY");
+  if (response.status === 409 || response.status === 423) {
+    const payload = await response.json().catch(() => null);
+    return { status: "conflict", conflict: readConflict(payload) };
+  }
   if (!response.ok) {
     throw new Error(`Copy to shared folder failed: ${response.status}`);
   }
+  return (await response.json()) as PublishOutcome;
+}
+
+/**
+ * 读共享盘上一个文件的当前版本。
+ *
+ * 「同名文件」对话框点"刷新"时用：别人可能在我们犹豫的这几秒里又改过一次，
+ * 需要在不产生任何写入的前提下重新拿一份对比信息。
+ */
+export async function fetchSourceFileVersion(
+  source: string,
+  path: string,
+): Promise<SharedFileInfo> {
+  const response = await request(
+    `/sources/${encodeURIComponent(source)}/version?path=${encodeURIComponent(path)}`,
+  );
+  if (!response.ok) {
+    throw new Error(`Read shared file version failed: ${response.status}`);
+  }
+  return (await response.json()) as SharedFileInfo;
 }
 
 /** 编辑器的保存落点：共享源 + 源内相对路径（即"编辑原文档"）。 */

@@ -198,11 +198,15 @@ export interface CollaboraSession {
 /**
  * 为某个文档换取 Collabora 会话。失败返回 null，调用方据此回退到
  * 原有编辑器，保证“新内核不可用也不会打不开文档”。
+ *
+ * lang 为界面语言（BCP-47，见 utils/editor/locale.ts）：Collabora 默认只跟随
+ * 浏览器语言，不传这个参数时应用内切了语言编辑器也不会跟着变。
  */
 export async function fetchCollaboraSession(
   name: string,
   edit = true,
   sharedTarget?: SharedTarget | null,
+  lang?: string,
   retry = true,
 ): Promise<CollaboraSession | null> {
   const token = await getVOSAccessToken();
@@ -212,6 +216,7 @@ export async function fetchCollaboraSession(
     params.push(`source=${encodeURIComponent(sharedTarget.source)}`);
     params.push(`path=${encodeURIComponent(sharedTarget.path)}`);
   }
+  if (lang) params.push(`lang=${encodeURIComponent(lang)}`);
   const url = `${STORAGE_API}/wopi/session?${params.join("&")}`;
 
   let resp: Response;
@@ -229,7 +234,7 @@ export async function fetchCollaboraSession(
 
   if (resp.status === 401 && retry) {
     clearVOSAuthCache();
-    return fetchCollaboraSession(name, edit, sharedTarget, false);
+    return fetchCollaboraSession(name, edit, sharedTarget, lang, false);
   }
   if (!resp.ok) return null;
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useAppStore } from "@/store";
+import { useAppStore, useResolvedLanguage } from "@/store";
 import {
   Globe,
   Palette,
@@ -13,7 +13,7 @@ import {
 import * as Illustration from "@/components/svg";
 import { useExtracted } from "next-intl";
 import { cn } from "@/lib/utils";
-import { languages, LocaleName, LocaleExtend, Language } from "@ziziyi/utils";
+import { LocaleName, LocaleExtend, Locale, Language } from "@ziziyi/utils";
 import {
   Select,
   SelectContent,
@@ -33,18 +33,46 @@ function getLanguageLabel(code: Language): string {
   return LocaleName[code as keyof typeof LocaleName] || code;
 }
 
-// Sort languages: Auto first, then alphabetically by display name
-const sortedLanguages = [
+/**
+ * 上架的语言：主流语言，且编辑器内核（OnlyOffice / Collabora）都真正支持。
+ *
+ * 这里选什么，网站和编辑器界面就会一起切过去（换算见 utils/editor/locale.ts）。
+ * 不再从 @ziziyi/utils 的 languages 全量里筛：可选语言是产品决定，不是"能显示
+ * 多少就列多少"——每多列一门都要多维护一份译文，而内核不认的语言只会让编辑器
+ * 静默退回英文。新增语言前先确认 toOnlyOfficeLang / toCollaboraLang 认它。
+ */
+const FEATURED_LANGUAGES: Language[] = [
   LocaleExtend.Auto,
-  ...languages
-    .filter((code) => code !== LocaleExtend.Auto)
-    .sort((a, b) => getLanguageLabel(a).localeCompare(getLanguageLabel(b))),
+  Locale.ZH_CN,
+  Locale.ZH_TW,
+  Locale.EN,
+  Locale.JA,
+  Locale.KO,
+  Locale.RU,
+  Locale.ES,
+  Locale.FR,
 ];
 
 export function SettingsView() {
   const t = useExtracted();
   usePageTitle(t("Settings — V-Office"));
   const { language, theme, plugins, setState } = useAppStore();
+  const zh = useResolvedLanguage().toLowerCase().startsWith("zh");
+
+  // 老用户可能存着一门已被下架的语言（如 hi）：仍然列出来，否则下拉里看不到
+  // 当前值，用户会以为自己选的语言丢了。
+  const options = FEATURED_LANGUAGES.includes(language)
+    ? FEATURED_LANGUAGES
+    : [...FEATURED_LANGUAGES, language];
+
+  // "自动"这一项原先写死英文，中文界面里显得很突兀；其余语言名用母语写法，
+  // 本来就是给人认自己语言的，不翻译。
+  const label = (code: Language) =>
+    code === LocaleExtend.Auto
+      ? zh
+        ? "自动（跟随浏览器语言）"
+        : "Auto (detect browser language)"
+      : getLanguageLabel(code);
 
   const themes: {
     id: OfficeTheme;
@@ -117,20 +145,18 @@ export function SettingsView() {
           >
             <SelectTrigger className="w-80">
               <SelectValue placeholder={t("Select language")}>
-                {getLanguageLabel(language)}
+                {label(language)}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              {sortedLanguages.map((code) => (
+              {options.map((code) => (
                 <SelectItem
                   key={code}
                   value={code}
-                  textValue={`${code} ${getLanguageLabel(code)}`}
+                  textValue={`${code} ${label(code)}`}
                 >
                   <span className="flex flex-col">
-                    <span className="font-semibold">
-                      {getLanguageLabel(code)}
-                    </span>
+                    <span className="font-semibold">{label(code)}</span>
                     <span className="text-muted-foreground text-xs">
                       {code === LocaleExtend.Auto ? "auto" : code}
                     </span>
@@ -139,6 +165,11 @@ export function SettingsView() {
               ))}
             </SelectContent>
           </Select>
+          <p className="text-xs text-muted-foreground">
+            {zh
+              ? "这里选什么，编辑器（OnlyOffice / Collabora）的界面语言就会跟着变成什么；内核不支持的语言已从列表中去掉。"
+              : "The editor (OnlyOffice / Collabora) UI follows whatever you pick here. Languages the engines do not ship are not listed."}
+          </p>
         </section>
 
         {/* Theme Section */}

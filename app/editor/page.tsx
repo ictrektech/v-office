@@ -33,6 +33,7 @@ import {
   pushDocumentToStorage,
   shouldUseCollabora,
 } from "@/utils/editor/collabora";
+import { toCollaboraLang, toOnlyOfficeLang } from "@/utils/editor/locale";
 import InstallExtensionDialog from "@/components/install-extension-dialog";
 import DocumentNameDialog from "@/components/document-name-dialog";
 import KnowledgeBaseUploadDialog from "@/components/knowledge-base-upload-dialog";
@@ -410,7 +411,11 @@ export default function Page() {
     const paramTheme = searchParams.get("theme");
 
     const editing = paramEditing === null ? true : paramEditing !== "0";
-    const lang = paramLang || language;
+    // 界面语言要按内核各自的码表换算，不能原样下发：OnlyOffice 只认 zh / zh-tw，
+    // Collabora 认 zh-CN 这类 BCP-47，码对不上就被内核静默忽略、退回英文界面。
+    const uiLang = paramLang || language;
+    const onlyOfficeLang = toOnlyOfficeLang(uiLang);
+    const collaboraLang = toCollaboraLang(uiLang);
     const uiTheme = paramTheme || theme;
 
     let editor: DocEditor | null = null;
@@ -532,7 +537,8 @@ export default function Page() {
         },
         documentType: documentType,
         editorConfig: {
-          lang: lang,
+          // 换算后的内核语言码（zh / zh-tw…）；对不上的码 OnlyOffice 会静默退回英文
+          lang: onlyOfficeLang,
           coEditing: {
             mode: "fast",
             change: false,
@@ -727,6 +733,7 @@ export default function Page() {
                 name,
                 editingRef.current,
                 sharedTarget,
+                collaboraLang,
               )
             : null;
           mark(
