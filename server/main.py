@@ -1181,11 +1181,6 @@ if os.environ.get("V_OFFICE_SHARED_HISTORY", "1").lower() in ("0", "false", "no"
     SHARED_HISTORY_KEEP = 0
 HISTORY_DIR_NAME = ".v-office-history"
 
-# 幂等键 → 上一次的成功响应。双击、请求超时后用户再点一次都只写一遍。
-COPY_IDEMPOTENCY_TTL = float(os.environ.get("V_OFFICE_COPY_IDEMPOTENCY_TTL", "600"))
-COPY_IDEMPOTENCY_MAX = 256
-_copy_idempotency: dict[tuple[str, str], tuple[float, dict]] = {}
-
 # 目标最终绝对路径 → 排队锁（只在本进程内有效，见上面的 4.）
 _copy_locks: dict[str, asyncio.Lock] = {}
 
@@ -1360,48 +1355,6 @@ def _normalize_relpath(rel: str) -> str:
     return (rel or "").strip().replace("\\", "/").lstrip("/")
 
 
-def _describe_shared(path: Path, root: Path) -> dict:
-    """给前端决策用的当前文件信息（含内容版本）。"""
-    try:
-        stat = path.stat()
-    except OSError:
-        return {}
-    return {
-        "name": path.name,
-        "path": _source_relpath(root, path),
-        "size": stat.st_size,
-        "modified": int(stat.st_mtime),
-        "version": _content_version(path),
-    }
-
-
-def _prune_history(history: Path, name: str, keep: int) -> None:
-    """每个文件只留最近 keep 份备份，淘汰最老的。
-
-    按**留底时刻**排（硬链接拿到的正是被覆盖那一版的 mtime，逐次递增），时刻相同再按
-    名字兜底：如果只按名字排，同一秒内连续覆盖几次会排成随机顺序，可能把最新的那份淘汰掉。
-
-    只认备份名那种形状：同一个目录里还有 `<原名>.author` 这种辅助记录，别把它当备份删了。
-    """
-    try:
-        siblings = [
-            p
-            for p in history.iterdir()
-            if p.name.startswith(name + ".")
-            and _HISTORY_STAMP_RE.fullmatch(
-                p.name[len(name) + 1 :].split(".")[0]
-            )
-        ]
-        siblings.sort(key=lambda p: (p.stat().st_mtime_ns, p.name), reverse=True)
-    except OSError:
-        return
-    for stale in siblings[keep:]:
-        try:
-            stale.unlink()
-        except OSError:
-            pass
-
-
 def _history_safe_user(name: str) -> str:
     """备份文件名里的操作人标签：**不含 "."**、不含路径分隔符。
 
@@ -1452,6 +1405,31 @@ def _archived_author(target: Path, version: str) -> str:
     return lines[1].strip()
 
 
+def _prune_history(history: Path, name: str, keep: int) -> None:
+    """每个文件只留最近 keep 份备份，淘汰最老的。
+
+    按**留底时刻**排（硬链接拿到的正是被覆盖那一版的 mtime，逐次递增），时刻相同再按
+    名字兜底：如果只按名字排，同一秒内连续覆盖几次会排成随机顺序，可能把最新那份淘汰掉。
+
+    只认备份名那种形状：同一个目录里还有 `<原名>.author` 这种辅助记录，别把它当备份删了。
+    """
+    try:
+        siblings = [
+            p
+            for p in history.iterdir()
+            if p.name.startswith(name + ".")
+            and _HISTORY_STAMP_RE.fullmatch(p.name[len(name) + 1 :].split(".")[0])
+        ]
+        siblings.sort(key=lambda p: (p.stat().st_mtime_ns, p.name), reverse=True)
+    except OSError:
+        return
+    for stale in siblings[keep:]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+
+
 def _snapshot_before_overwrite(
     target: Path, keep: int, known_version: str = ""
 ) -> str:
@@ -1465,7 +1443,8 @@ def _snapshot_before_overwrite(
     要把整个文件从共享盘读一遍再写一遍，大文件上就是好几秒（而且是在持锁期间）。
     跨卷或文件系统不支持时才退回复制。
 
-    by 是发起这次覆盖的用户，写进备份名，界面「版本」里要显示"谁在什么时候覆盖的"。
+    known_version：当前这一版的内容指纹，用来给备份起一个能区分"同一秒内多次覆盖"的
+    名字。界面「版本」里显示的那一段（谁提交的）来自写入时留下的作者记录，不在这里传。
     """
     if keep <= 0:
         return ""
@@ -1491,8 +1470,19 @@ def _snapshot_before_overwrite(
         try:
             os.link(target, destination)
         except FileExistsError:
-            # 同一秒内、同内容的重复覆盖会落到同一个名字上：内容本来就一样
-            pass
+            # 撞名只说明"名字一样"，不代表"内容一样"：同一秒内连续覆盖两次、而文件标记
+            # （mtime + 大小）恰好也相同，就会走到这里。这种时候**必须换个名字也要把这一版
+            # 留下**——静默跳过等于凭空丢掉一版历史，而留底正是"强制覆盖"能被接受的前提。
+            # 判断依据用 inode：真要是同一份内容，硬链接过去的备份和目标就是同一个 inode。
+            same = False
+            try:
+                same = destination.stat().st_ino == target.stat().st_ino
+            except OSError:
+                same = False
+            if not same:
+                destination = _history_extra_path(history, backup_name)
+                backup_name = destination.name
+                os.link(target, destination)
         except OSError:
             shutil.copy2(target, destination)
         _prune_history(history, target.name, keep)
@@ -1502,6 +1492,18 @@ def _snapshot_before_overwrite(
             status_code=500, detail="cannot snapshot the file before overwriting"
         )
     return f"{HISTORY_DIR_NAME}/{backup_name}"
+
+
+def _history_extra_path(history: Path, backup_name: str, tries: int = 20) -> Path:
+    """撞名又不是同一份内容时，给备份找一个没被占用的名字（原名字后加 -2、-3…）。
+
+    后缀加在最后一段后面，名字形状（`<原名>.<时间戳>[.<操作人>].<版本>`）仍然保持可解析。
+    """
+    for index in range(2, tries + 2):
+        candidate = history / f"{backup_name}-{index}"
+        if not candidate.exists():
+            return candidate
+    raise OSError(f"cannot find a free history name for {backup_name}")
 
 
 # 备份名里时间戳的形状，用来把"这个文件"和"这个文件的备份"分开
@@ -1667,101 +1669,49 @@ def _write_new_unique(directory: Path, name: str, body: bytes, tries: int = 20) 
     raise SharedWriteConflict("name-exhausted")
 
 
-def _idempotent_replay(username: str, key: str) -> Optional[dict]:
-    entry = _copy_idempotency.get((username, key))
-    if not entry:
-        return None
-    at, payload = entry
-    if time.monotonic() - at > COPY_IDEMPOTENCY_TTL:
-        _copy_idempotency.pop((username, key), None)
-        return None
-    return payload
-
-
-def _idempotent_remember(username: str, key: str, payload: dict) -> None:
-    now = time.monotonic()
-    # 顺手清过期项：长跑进程不能靠 TTL 自然失效来控内存
-    for stale_key, (at, _) in list(_copy_idempotency.items()):
-        if now - at > COPY_IDEMPOTENCY_TTL:
-            _copy_idempotency.pop(stale_key, None)
-    if len(_copy_idempotency) >= COPY_IDEMPOTENCY_MAX:
-        oldest = min(_copy_idempotency.items(), key=lambda kv: kv[1][0])[0]
-        _copy_idempotency.pop(oldest, None)
-    _copy_idempotency[(username, key)] = (now, payload)
-
-
 def _publish_to_source_sync(
     blob: Path,
     directory: Path,
     root: Path,
-    mode: str,
-    if_match: str,
     history_keep: int,
     by: str = "",
 ) -> dict:
-    """在锁内执行的整段同步逻辑（由调用方丢进工作线程）。
+    """把「我的文档」里的一份文件写进共享目录（由调用方丢进工作线程）。
 
-    顺序是刻意排的：
-      · 冲突判定、以及 409 里回报的 current，都必须在锁内取——锁外取等于没判；
-      · 冲突直接抛，**先不读源文件字节**：前端"刷新对比信息"就是再打一次
-        on-conflict=fail，不该顺带把整个文件读一遍；
-      · 只有确定要写之后才读字节、才留底。
+    语义就是**同名直接覆盖**：用户点「存入公共目录」时已经确认过，不需要再来一次
+    "你看到的是哪一版"的比对（那套凭据只在"多人同时改同一份"时才有意义，而这个入口
+    本来就是"把我的这份放上去"）。共享盘上被覆盖掉的那一版会被留底，用户随时能从
+    「版本」里取回来或退回去 —— 强制覆盖之所以能接受，靠的就是这一步。
+
+    写入路径的互斥由调用方的按目标排队锁 + 原子写负责：这里只管"留底、写、记账"。
     """
-    plain_target = directory / blob.name
-    exists = plain_target.is_file()
-    current = _describe_shared(plain_target, root) if exists else None
+    target = directory / blob.name
+    existed = target.is_file()
 
-    target = plain_target
-    if exists and mode == "overwrite":
-        if if_match and if_match == (current or {}).get("version"):
-            pass
-        elif if_match:
-            # 我看到的版本已经不是盘上那一版了：让别人先改的内容活下来
-            raise SharedWriteConflict("version-changed", current=current)
-        else:
-            # 没带凭据就不能覆盖（退化成 fail），否则就是无条件覆盖
-            raise SharedWriteConflict("target-exists", current=current)
-    elif exists and mode == "fail":
-        raise SharedWriteConflict("target-exists", current=current)
-
-    # 冲突判定全部走完、确认要写之后，才读源文件字节（只读一次）
-    data = blob.read_bytes()
-
-    if mode == "rename" and exists:
-        # 挑名字 + 占位 + 落内容一次完成，不存在"建了空文件再盖内容"的窗口
-        target = _write_new_unique(directory, blob.name, data)
-        status = "renamed"
-        backup = ""
-    elif exists:
-        status = "overwritten"
-        # 备份名复用刚算出来的当前版本；留底走硬链接，零拷贝
+    # 覆盖前留底，并把"被覆盖掉的那一版是谁提交的"写进备份名（见 _snapshot_before_overwrite）。
+    # 留底失败会抛 500，让整个覆盖失败：它是覆盖的前置条件，不是顺手做一下的附加动作。
+    backup = ""
+    if existed:
+        # 交给留底的是当前这一版的**内容指纹**：备份名要能区分"同一秒内的多次覆盖"，
+        # 而廉价的文件标记（mtime + 大小）在共享盘上同一秒内可能完全相同、名字会撞。
         backup = _snapshot_before_overwrite(
-            target, history_keep, (current or {}).get("version", "")
+            target, history_keep, _content_version(target)
         )
-        _atomic_write(target, data)
-    else:
-        status = "created"
-        backup = ""
-        try:
-            _write_new_exclusive(target, data)
-        except SharedWriteConflict:
-            # 别人抢先建了同名文件：按"目标已存在"回报当前信息
-            raise SharedWriteConflict(
-                "target-exists", current=_describe_shared(target, root)
-            )
+
+    data = blob.read_bytes()
+    _atomic_write(target, data)
 
     # 新版本号直接对**刚写下去的那份字节**算：它就在手里，没有任何理由再从共享盘
-    # 把整份读回来算一遍（这是原来三遍全量读里的第三遍）
+    # 把整份读回来算一遍
     written_version = _version_of_bytes(data)
     _remember_version(target, written_version)
     # 记下"现在这一版是谁提交的"：它下次被覆盖时，「版本」列表里要显示提交人
     _remember_author(target, by, written_version)
     return {
-        "status": status,
+        "status": "overwritten" if existed else "created",
         "path": _source_relpath(root, target),
         "size": len(data),
         "version": written_version,
-        "previousVersion": (current or {}).get("version"),
         "backup": backup,
     }
 
@@ -1883,50 +1833,19 @@ async def put_source_file(
 
 @app.post("/api/v1/sources/{source}/copy-from-file")
 async def copy_file_to_source(
-    source: str,
-    request: Request,
-    name: str,
-    path: str = "",
-    overwrite: bool = False,
-    # 查询参数名必须和前端一致（带连字符）；FastAPI 默认按 Python 标识符取名，
-    # 不写 alias 的话 on-conflict / if-match / idempotency-key 会一个都绑不上，
-    # 于是"覆盖"永远退化成 fail —— 静默降级成最安全的行为，但功能是坏的。
-    on_conflict: str = Query("", alias="on-conflict"),
-    if_match: str = Query("", alias="if-match"),
-    idempotency_key: str = Query("", alias="idempotency-key"),
+    source: str, request: Request, name: str, path: str = ""
 ) -> JSONResponse:
     """把「我的文档」里的一个文件写入共享源目录（例如 NAS 的公共目录）。
 
     服务端直接读私有目录、写共享盘，不需要把文件下载到浏览器再上传一遍。
-    目标已存在时怎么处理由 on-conflict 决定：
-
-      fail（默认）—— 目标存在即 409，并回报当前文件信息，交给用户决定；
-      overwrite    —— 仅当 if-match 等于盘上当前版本才写（CAS）；
-      rename       —— 在锁内挑一个不冲突的新名字占位，不覆盖任何东西；
-
-    为什么覆盖必须带 if-match：用户确认的是"他看到的那个版本"，不是"当前随便
-    哪个版本"。不带凭据的覆盖等于无条件覆盖，会把别人刚写进去的内容静默冲掉
-    —— 所以缺凭据时退化成 fail，宁可让用户重新决策。
+    同名**直接覆盖**：用户点这个入口本来就是"把我这份放上去"，不需要再来一次
+    "你看到的是哪一版"的比对。覆盖掉的那一版会留底，随时能从文件列表的「版本」
+    里取回来或退回去 —— 强制覆盖之所以能接受，靠的就是这一步。
     """
     username = await current_username(request)
     if not name:
         raise HTTPException(status_code=400, detail="missing name")
     _require_writable(source)
-
-    # 旧的 overwrite=true 仍然接受，但语义上等价于 on-conflict=overwrite：
-    # 没有 if-match 时会在下面退化成 fail，不会变成无条件覆盖。
-    mode = (on_conflict or "").strip().lower() or (
-        "overwrite" if overwrite else "fail"
-    )
-    if mode not in ("fail", "overwrite", "rename"):
-        raise HTTPException(status_code=400, detail="unsupported on-conflict")
-
-    if idempotency_key:
-        replayed = _idempotent_replay(username, idempotency_key)
-        if replayed is not None:
-            # 命中说明这个请求已经成功写过一次（超时重试/双击）：原样回放，
-            # 不重复写盘、不重复留底。
-            return JSONResponse(replayed, status_code=200)
 
     blob = safe_target(username, name)
     if not blob.is_file():
@@ -1947,9 +1866,9 @@ async def copy_file_to_source(
     if target != root and root not in target.parents:
         raise HTTPException(status_code=400, detail="path escapes source root")
 
-    # 正在被别人用协同内核编辑的文件不能从外面覆盖：Collabora 手里握着整份内存
-    # 副本，它下一次保存会把我们刚写进去的内容整份抹掉，而且不会有任何提示。
-    # （这是"软"防护：锁可能在检查之后才出现，真正的兜底是 WOPI 侧的版本校验。）
+    # 正在被别人用协同内核编辑的文件不能从外面覆盖：Collabora 手里握着整份内存副本，
+    # 它下一次保存会把我们刚写进去的内容整份抹掉，而且双方都不会收到提示。
+    # （这是"软"防护：锁可能在检查之后才出现。真正让覆盖可挽回的是留底 + 「版本」。）
     holder = _shared_lock_holder(source, _source_relpath(root, target))
     if holder and holder != username:
         raise HTTPException(
@@ -1957,59 +1876,29 @@ async def copy_file_to_source(
         )
 
     async with _copy_lock(target):
-        try:
-            result = await asyncio.to_thread(
-                _publish_to_source_sync,
-                blob,
-                directory,
-                root,
-                mode,
-                if_match,
-                SHARED_HISTORY_KEEP,
-                username,
-            )
-        except SharedWriteConflict as conflict:
-            raise HTTPException(
-                status_code=conflict.status,
-                detail={"reason": conflict.reason, **conflict.extra},
-            )
+        result = await asyncio.to_thread(
+            _publish_to_source_sync,
+            blob,
+            directory,
+            root,
+            SHARED_HISTORY_KEEP,
+            username,
+        )
 
     # 共享盘内容变了：精确失效受影响的列举缓存，否则除操作者外的人最多 10s
-    # 看不到新文件（rename 改的也是同一个目录，祖先集合相同，用原 target 即可）
+    # 看不到新文件
     _invalidate_source_path(source, root, target)
     LOG.info(
-        "shared-publish user=%s source=%s path=%s status=%s from=%s to=%s size=%d backup=%s",
+        "shared-publish user=%s source=%s path=%s status=%s to=%s size=%d backup=%s",
         username,
         source,
         result["path"],
         result["status"],
-        result.get("previousVersion") or "-",
         result["version"],
         result["size"],
         result.get("backup") or "-",
     )
-    if idempotency_key:
-        _idempotent_remember(username, idempotency_key, result)
     return JSONResponse(result, status_code=201 if result["status"] == "created" else 200)
-
-
-@app.get("/api/v1/sources/{source}/version")
-async def source_file_version(
-    source: str, request: Request, path: str
-) -> JSONResponse:
-    """单个共享文件的当前版本与信息。
-
-    供「同名文件」对话框刷新对比用：用户看到"公共目录里那版"之后，别人可能又
-    改过一次，界面需要在不产生任何写入的前提下重新拿一份当前信息。
-    """
-    await current_username(request)
-    if not path:
-        raise HTTPException(status_code=400, detail="missing path")
-    root = source_root(source)
-    target = source_target(source, path)
-    if not target.is_file():
-        raise HTTPException(status_code=404, detail="file not found")
-    return JSONResponse(_describe_shared(target, root))
 
 
 @app.get("/api/v1/sources/{source}/history")

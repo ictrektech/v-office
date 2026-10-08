@@ -32,7 +32,7 @@ import {
 } from "@/hooks/use-nas-documents";
 import { useAppStore, useResolvedLanguage } from "@/store";
 import DocumentNameDialog from "@/components/document-name-dialog";
-import PublishConflictDialog from "@/components/publish-conflict-dialog";
+import PublishOverwriteDialog from "@/components/publish-overwrite-dialog";
 import SourceHistoryDialog from "@/components/source-history-dialog";
 import { sitePath } from "@/utils/site-path";
 import {
@@ -51,11 +51,9 @@ import {
   renameStoredFile,
   copyStoredFileToSource,
   copySourceFileToStorage,
-  fetchSourceFileVersion,
   fetchSourceHistoryFile,
   openSharedDocument,
   whoAmI,
-  type PublishConflict,
   type StoredFile,
 } from "@/utils/vos/storage";
 
@@ -88,13 +86,10 @@ export function OpenView({
   const [publishingStoredFile, setPublishingStoredFile] = useState<string | null>(
     null,
   );
-  /** 「存入公共」撞名后的决策对话框：待写的文件 + 服务端回报的当前文件信息 */
-  const [publishPrompt, setPublishPrompt] = useState<{
-    file: StoredFile;
-    conflict: PublishConflict;
-  } | null>(null);
-  /** 正在重新拉取"公共目录里那版"的最新信息 */
-  const [refreshingPublish, setRefreshingPublish] = useState(false);
+  /** 「存入公共」撞名时的轻确认：只记待写入的文件 */
+  const [publishPrompt, setPublishPrompt] = useState<{ file: StoredFile } | null>(
+    null,
+  );
   /** 「版本」：正在查看历史版本的共享盘文档（被覆盖时留下的旧版本可以回退） */
   const [historyDoc, setHistoryDoc] = useState<NasDocument | null>(null);
   const [downloadingStoredFile, setDownloadingStoredFile] = useState<
@@ -262,19 +257,14 @@ export function OpenView({
     nasCategories.find((item) => item.kind === "public") ?? null;
 
   /**
-   * 把「我的文档」里的文件写入 NAS 公共目录。
+   * 把「我的文档」里的文件写入 NAS 公共目录。**同名直接覆盖。**
    *
-   * 分成「尝试 → 决策」两段：第一次一律用 fail，绝不覆盖任何东西；撞名时服务端
-   * 会回报公共目录里那份的当前信息，交给对话框让用户选 覆盖 / 保留两者 / 取消。
-   *
-   * 覆盖时必须回传用户看到的那一版的版本号（if-match）：服务端只接受"用我看过
-   * 的那版换掉"，所以在用户犹豫的这几秒里别人写进去的内容不会被冲掉。
+   * 用户点这个入口本来就是"把我这份放上去"，所以不再做"你看过的是哪一版"的比对。
+   * 覆盖掉的那一版由服务端留底：切到「NAS 数据」在那一行点「版本」就能取回或退回。
+   * 唯一会挡住我们的是有人正用编辑器改这份文件（服务端 423）——那种情况下对方的
+   * 整份内存副本会在它下次保存时把我们刚写进去的内容冲掉，所以宁可让用户等一等。
    */
-  const publishStoredFile = async (
-    file: StoredFile,
-    mode: "fail" | "overwrite" | "rename",
-    ifMatch?: string,
-  ) => {
+  const publishStoredFile = async (file: StoredFile) => {
     if (!publicCategory || publishingStoredFile) return;
     const isZh = language.toLowerCase().startsWith("zh");
     setPublishingStoredFile(file.name);
@@ -283,39 +273,16 @@ export function OpenView({
         file.name,
         publicCategory.sourceId,
         publicCategory.path,
-        {
-          mode,
-          ifMatch,
-          // 同一次决策复用它：请求超时（前端 30s 先断）但服务端其实已经写成功时，
-          // 用户再点一次只会回放上次结果，不会变成第二次覆盖
-          idempotencyKey: [
-            publicCategory.sourceId,
-            publicCategory.path,
-            file.name,
-            mode,
-            ifMatch ?? "-",
-          ].join(":"),
-        },
       );
-      if (outcome.status === "conflict") {
-        // 冲突不是"出错"，是让用户决策的正常分支
-        setPublishPrompt({ file, conflict: outcome.conflict });
-        return;
-      }
       setPublishPrompt(null);
-      const savedAs = outcome.path.split("/").pop();
       toast.success(
-        outcome.status === "renamed"
+        outcome.status === "overwritten"
           ? isZh
-            ? `公共目录里已有同名文件，已另存为：${savedAs}`
-            : `That name was taken, so it was saved as: ${savedAs}`
-          : outcome.status === "overwritten"
-            ? isZh
-              ? `已覆盖公共目录里的同名文件：${file.name}（旧版本已归档）`
-              : `Overwrote the file in the public folder: ${file.name} (previous version archived)`
-            : isZh
-              ? `已存入公共目录：${file.name}`
-              : `Saved to the public folder: ${file.name}`,
+            ? `已覆盖公共目录里的同名文件：${file.name}（旧版本已归档，可在「版本」里取回）`
+            : `Overwrote the file in the public folder: ${file.name} (previous version archived — see Version history)`
+          : isZh
+            ? `已存入公共目录：${file.name}`
+            : `Saved to the public folder: ${file.name}`,
       );
       // 清掉该分类的扫描缓存：否则切到「NAS 数据」看到的还是旧列表
       refreshNasCategory(publicCategory);
@@ -326,6 +293,13 @@ export function OpenView({
           isZh
             ? "公共目录当前不可写（平台授权为只读或磁盘权限不足）"
             : "The public folder is not writable (read-only grant or permissions)",
+        );
+      } else if (detail.startsWith("IN_USE:")) {
+        const holder = detail.slice("IN_USE:".length);
+        toast.error(
+          isZh
+            ? `${holder || "有人"}正在编辑这份文件，请稍后再存`
+            : `${holder || "Someone"} is editing this file — try again in a moment`,
         );
       } else {
         toast.error(
@@ -341,40 +315,18 @@ export function OpenView({
   };
 
   /**
-   * 重新拉取公共目录里那份文件的最新信息。
+   * 点「存入公共」：公共目录里已经有同名文件时，先让用户确认一次再覆盖。
    *
-   * 用户对着对话框犹豫的这几秒里别人可能又改过一次，刷新能让他基于最新情况做
-   * 决定，而不是拿着过期信息按下"覆盖"。
+   * 覆盖本身可回退（服务端留底 + 「版本」），所以这里只弹一句确认，不做版本比对、
+   * 不给"另存为"这类分支 —— 那套复杂度换来的信息，用户其实都不看。
    */
-  const refreshPublishConflict = async () => {
-    const prompt = publishPrompt;
-    const category = publicCategory;
-    if (!prompt || !category || refreshingPublish) return;
-    const relative =
-      prompt.conflict.current?.path ||
-      (category.path
-        ? `${category.path}/${prompt.file.name}`
-        : prompt.file.name);
-    setRefreshingPublish(true);
-    try {
-      const info = await fetchSourceFileVersion(category.sourceId, relative);
-      setPublishPrompt((prev) =>
-        prev
-          ? {
-              ...prev,
-              conflict: { reason: "target-exists", current: info },
-            }
-          : prev,
-      );
-    } catch (error) {
-      // 文件可能已经被删掉/改名了：让用户重新走一次「存入」就能拿到最新状态
-      toast.error(
-        zh ? "刷新失败，请重试" : "Refresh failed. Try again.",
-      );
-      console.error("Refresh publish conflict failed:", error);
-    } finally {
-      setRefreshingPublish(false);
+  const requestPublish = (file: StoredFile) => {
+    const taken = nasDocuments.some((doc) => doc.name === file.name && !doc.folder);
+    if (taken) {
+      setPublishPrompt({ file });
+      return;
     }
+    void requestPublish(file);
   };
 
   const handleStoredFileClick = async (file: StoredFile) => {
@@ -518,23 +470,12 @@ export function OpenView({
         />
       )}
       {publishPrompt && (
-        <PublishConflictDialog
+        <PublishOverwriteDialog
           language={language}
-          mine={publishPrompt.file}
-          conflict={publishPrompt.conflict}
+          name={publishPrompt.file.name}
           busy={publishingStoredFile !== null}
-          refreshing={refreshingPublish}
           onCancel={() => setPublishPrompt(null)}
-          onOverwrite={() =>
-            void publishStoredFile(
-              publishPrompt.file,
-              "overwrite",
-              // 用户确认的是"他看到的这一版"：凭据就是对话框里那份的版本号
-              publishPrompt.conflict.current?.version,
-            )
-          }
-          onRename={() => void publishStoredFile(publishPrompt.file, "rename")}
-          onRefresh={() => void refreshPublishConflict()}
+          onConfirm={() => void publishStoredFile(publishPrompt.file)}
         />
       )}
       {historyDoc && (
@@ -1046,13 +987,13 @@ export function OpenView({
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          void publishStoredFile(file, "fail");
+                          void requestPublish(file);
                         }}
                         disabled={publishingStoredFile !== null}
                         className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-sidebar-hover disabled:opacity-50"
                         title={
                           zh
-                            ? "存入公共目录（撞名时由你选择覆盖或另存）"
+                            ? "存入公共目录（同名直接覆盖，旧版本可在「版本」里取回）"
                             : "Save to the shared public folder (you decide if the name is taken)"
                         }
                       >

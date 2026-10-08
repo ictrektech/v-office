@@ -297,128 +297,49 @@ export async function copySourceFileToStorage(
   }
 }
 
-/** 共享盘上一个文件的当前信息（含内容版本）。 */
-export interface SharedFileInfo {
-  name?: string;
-  path?: string;
-  size?: number;
-  modified?: number;
-  /** 内容指纹；「覆盖」时要原样回传作为 if-match 凭据 */
-  version?: string;
-}
-
-/** 目标已存在（或写入无法继续）时的冲突描述。 */
-export interface PublishConflict {
-  reason:
-    | "target-exists"
-    | "version-changed"
-    | "in-use"
-    | "name-exhausted"
-    | "busy";
-  /** 公共目录里当前那一份，供界面和"我这版"做对比 */
-  current?: SharedFileInfo;
-  /** in-use：正在编辑它的用户 */
-  holder?: string;
-}
-
-export type PublishOutcome =
-  | {
-      status: "created" | "overwritten" | "renamed";
-      path: string;
-      size: number;
-      version: string;
-      previousVersion?: string | null;
-      /** 覆盖时被留底的旧版本，源内相对路径（形如 .v-office-history/...） */
-      backup?: string;
-    }
-  | { status: "conflict"; conflict: PublishConflict };
-
-/** 409/423 的响应体里是 {detail:{reason,…}}，个别错误里 detail 是 JSON 字符串。 */
-function readConflict(payload: unknown): PublishConflict {
-  const raw = (payload as { detail?: unknown } | null)?.detail;
-  let detail: Record<string, unknown> = {};
-  if (typeof raw === "string") {
-    try {
-      detail = JSON.parse(raw) as Record<string, unknown>;
-    } catch {
-      detail = {};
-    }
-  } else if (raw && typeof raw === "object") {
-    detail = raw as Record<string, unknown>;
-  }
-  return {
-    reason: (detail.reason as PublishConflict["reason"]) ?? "target-exists",
-    current: detail.current as SharedFileInfo | undefined,
-    holder: detail.holder as string | undefined,
-  };
+/** 把「我的文档」里的一个文件写进共享目录之后的结果。 */
+export interface PublishOutcome {
+  /** created：目标原本不存在；overwritten：覆盖了公共目录里的同名文件 */
+  status: "created" | "overwritten";
+  path: string;
+  size: number;
+  version: string;
+  /** 覆盖时被留底的旧版本（源内相对路径）；新建时是空串 */
+  backup?: string;
 }
 
 /**
  * 把「我的文档」里的一个文件写入共享源目录（例如 NAS 的公共目录）。
  *
- * 服务端直接读私有目录写共享盘，不经浏览器。三种落点：
+ * **同名直接覆盖**：用户点这个入口本来就是"把我这份放上去"，不再要
+ * "你看过的是哪一版"这种凭据。覆盖掉的那一版由服务端留底，用户随时能从文件列表的
+ * 「版本」里取回或退回——强制覆盖之所以能接受，靠的就是这一步。
  *
- *   fail（默认）—— 目标存在即返回 conflict（含当前文件信息），由界面让用户决定；
- *   overwrite    —— 必须带 ifMatch（用户看到的那一版的版本号）：服务端只接受
- *                   "用我看过的那版换掉"，不带凭据的覆盖会被拒（退化为 fail）；
- *   rename       —— 由服务端在锁内挑一个新名字（xxx (1).docx），不覆盖任何东西。
- *
- * 冲突不抛异常而是返回结果：它不是"出错"，是界面必须处理的一个正常分支。
- * 只有真正无法继续的情况（只读、网络、服务端 5xx）才抛。
+ * 抛出的错误：READ_ONLY（目录只读）、IN_USE:<用户名>（有人正用编辑器改这份文件，
+ * 从外面覆盖会把对方正在改的内容冲掉，服务端会挡住）、以及网络/服务端错误。
  */
 export async function copyStoredFileToSource(
   name: string,
   source: string,
   path = "",
-  options: {
-    mode?: "fail" | "overwrite" | "rename";
-    ifMatch?: string;
-    /**
-     * 同一次用户操作复用它，服务端只写一遍：请求超时（前端 30s 断开）但服务端
-     * 其实已经写成功时，用户再点一次不会变成第二次覆盖。
-     */
-    idempotencyKey?: string;
-  } = {},
 ): Promise<PublishOutcome> {
   const params = new URLSearchParams({ name });
   if (path) params.set("path", path);
-  if (options.mode) params.set("on-conflict", options.mode);
-  if (options.ifMatch) params.set("if-match", options.ifMatch);
-  if (options.idempotencyKey) {
-    params.set("idempotency-key", options.idempotencyKey);
-  }
   const response = await request(
     `/sources/${encodeURIComponent(source)}/copy-from-file?${params.toString()}`,
     { method: "POST" },
   );
   if (response.status === 403) throw new Error("READ_ONLY");
-  if (response.status === 409 || response.status === 423) {
-    const payload = await response.json().catch(() => null);
-    return { status: "conflict", conflict: readConflict(payload) };
+  if (response.status === 423) {
+    const payload = (await response.json().catch(() => null)) as {
+      detail?: { holder?: string };
+    } | null;
+    throw new Error(`IN_USE:${payload?.detail?.holder ?? ""}`);
   }
   if (!response.ok) {
     throw new Error(`Copy to shared folder failed: ${response.status}`);
   }
   return (await response.json()) as PublishOutcome;
-}
-
-/**
- * 读共享盘上一个文件的当前版本。
- *
- * 「同名文件」对话框点"刷新"时用：别人可能在我们犹豫的这几秒里又改过一次，
- * 需要在不产生任何写入的前提下重新拿一份对比信息。
- */
-export async function fetchSourceFileVersion(
-  source: string,
-  path: string,
-): Promise<SharedFileInfo> {
-  const response = await request(
-    `/sources/${encodeURIComponent(source)}/version?path=${encodeURIComponent(path)}`,
-  );
-  if (!response.ok) {
-    throw new Error(`Read shared file version failed: ${response.status}`);
-  }
-  return (await response.json()) as SharedFileInfo;
 }
 
 /** 共享盘上一个文件被覆盖时留下的旧版本（可回退）。 */
@@ -431,7 +352,7 @@ export interface SharedFileVersion {
   size?: number;
   /** 留底时刻（秒） */
   modified?: number;
-  /** 这一版的提交人；早期留下的版本没有这个信息，会是空串 */
+  /** 这一版的提交人；记录功能上线前留下的版本没有这个信息，会是空串 */
   by?: string;
   version?: string;
 }
@@ -479,10 +400,10 @@ export interface RestoreOutcome {
 }
 
 /**
- * 把某个留底版本写回原文件（用户点「回退」）。
+ * 把某个留底版本写回原文件（用户点「还原」）。
  *
- * 服务端在回退前也会给"当前版本"留底，所以回退错了还能再回退回来 —— 这里不需要
- * 前端做二次确认之外的任何防护；只读挂载（403）会让它抛出来给界面提示。
+ * 服务端在回退前也会给"当前版本"留底，所以回退错了还能再回退回来。
+ * 只读挂载会抛 READ_ONLY，由界面提示。
  */
 export async function restoreSourceHistory(
   source: string,
@@ -504,8 +425,8 @@ export async function restoreSourceHistory(
 /**
  * 把某个留底版本「保存到我的文档」（私有目录），**不动公共盘上的原文件**。
  *
- * 给"想反悔但先不急着回退"用：把旧版本取回自己名下看一眼、接着改。服务端按
- * 那一版的时刻命名（撞名自动加后缀），所以这里不传名字，用返回的名字告诉用户存成了什么。
+ * 给"想反悔但先不急着回退"用：把旧版本取回自己名下看一眼、接着改。服务端按那一版的
+ * 时刻命名（撞名自动加后缀），所以这里不传名字，用返回的名字告诉用户存成了什么。
  */
 export async function exportSourceHistory(
   source: string,

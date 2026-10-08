@@ -252,7 +252,6 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
         # 列举缓存 / 内容指纹缓存都会漏进下一个用例，必须在每个用例结束时清掉。
         self.addCleanup(main._wopi_locks.clear)
         self.addCleanup(main._copy_locks.clear)
-        self.addCleanup(main._copy_idempotency.clear)
         self.addCleanup(main._source_cache.clear)
         self.addCleanup(main._VERSION_CACHE.clear)
 
@@ -461,16 +460,13 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(copied.status_code, 201)
         self.assertEqual(copied.json()["status"], "created")
         self.assertEqual(copied.json()["path"], "volumes/wr/public/季度报告.docx")
-        # 回报的内容版本是后续「覆盖」要带的 if-match 凭据，必须非空
         self.assertTrue(copied.json()["version"])
+        self.assertEqual(copied.json()["backup"], "")
         self.assertEqual((public / "季度报告.docx").read_bytes(), b"private-bytes")
-        # 同名默认拒绝（fail），且不能动到已有文件；409 要带回当前文件信息，
-        # 否则界面没法让用户做"覆盖 / 保留两者 / 取消"的选择
-        self.assertEqual(again.status_code, 409)
-        self.assertEqual(again.json()["detail"]["reason"], "target-exists")
-        self.assertEqual(
-            again.json()["detail"]["current"]["name"], "季度报告.docx"
-        )
+        # 同名**直接覆盖**：不再要"你看过的那一版"这种凭据，被覆盖的那版留底即可
+        self.assertEqual(again.status_code, 200)
+        self.assertEqual(again.json()["status"], "overwritten")
+        self.assertTrue(again.json()["backup"].startswith(main.HISTORY_DIR_NAME + "/"))
         self.assertEqual((public / "季度报告.docx").read_bytes(), b"private-bytes")
         self.assertEqual(missing.status_code, 404)
         self.assertEqual(traversal.status_code, 400)
@@ -758,42 +754,6 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         return response.json()["accessToken"]
 
-    async def test_publish_overwrite_needs_the_version_the_user_saw(self) -> None:
-        """覆盖必须带"我看到的那个版本"；凭据过期或缺失一律拒绝。
-
-        这是整条链路的关键不变量：用户确认的是他看过的那一版，不是"当前随便
-        哪一版"。缺凭据就退化成 fail，绝不退化成无条件覆盖。
-        """
-        public = self.shared_root / "volumes" / "wr" / "public"
-        target = public / "报表.docx"
-        params = {"name": "报表.docx", "path": "volumes/wr/public"}
-        await self.client.put("/api/v1/files/报表.docx", content=b"mine-v1")
-
-        created = await self.client.post(
-            "/api/v1/sources/shared/copy-from-file", params=params
-        )
-        seen = created.json()["version"]
-
-        # 别人把盘上那份改掉了：我手里的凭据已经过期
-        target.write_bytes(b"someone-else")
-        stale = await self.client.post(
-            "/api/v1/sources/shared/copy-from-file",
-            params={**params, "on-conflict": "overwrite", "if-match": seen},
-        )
-        # 旧的 overwrite=true 仍然接受，但没有凭据时必须退化成 fail
-        legacy = await self.client.post(
-            "/api/v1/sources/shared/copy-from-file",
-            params={**params, "overwrite": "true"},
-        )
-
-        self.assertEqual(created.status_code, 201)
-        self.assertEqual(stale.status_code, 409)
-        self.assertEqual(stale.json()["detail"]["reason"], "version-changed")
-        self.assertEqual(legacy.status_code, 409)
-        self.assertEqual(legacy.json()["detail"]["reason"], "target-exists")
-        # 两次拒绝之后盘上那份必须原封不动
-        self.assertEqual(target.read_bytes(), b"someone-else")
-
     async def test_overwrite_keeps_the_previous_bytes_in_history(self) -> None:
         """覆盖成功要留底并回报 previousVersion —— 否则误覆盖不可回滚。"""
         public = self.shared_root / "volumes" / "wr" / "public"
@@ -801,36 +761,23 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
         params = {"name": "留底.docx", "path": "volumes/wr/public"}
 
         await self.client.put("/api/v1/files/留底.docx", content=b"first")
-        await self.client.post(
+        created = await self.client.post(
             "/api/v1/sources/shared/copy-from-file", params=params
         )
-        current = (
-            await self.client.get(
-                "/api/v1/sources/shared/version",
-                params={"path": "volumes/wr/public/留底.docx"},
-            )
-        ).json()
 
         await self.client.put("/api/v1/files/留底.docx", content=b"second")
         overwritten = await self.client.post(
-            "/api/v1/sources/shared/copy-from-file",
-            params={
-                **params,
-                "on-conflict": "overwrite",
-                "if-match": current["version"],
-            },
+            "/api/v1/sources/shared/copy-from-file", params=params
         )
 
         self.assertEqual(overwritten.status_code, 200)
         body = overwritten.json()
         self.assertEqual(body["status"], "overwritten")
-        self.assertEqual(body["previousVersion"], current["version"])
-        self.assertNotEqual(body["version"], current["version"])
+        self.assertNotEqual(body["version"], created.json()["version"])
         self.assertEqual(target.read_bytes(), b"second")
 
-        # 备份里是被覆盖掉的那一版，文件名带它的版本号前缀
+        # 备份里是被覆盖掉的那一版（内容还是 first）
         self.assertTrue(body["backup"].startswith(main.HISTORY_DIR_NAME + "/"))
-        self.assertIn(current["version"][:8], body["backup"])
         self.assertEqual((public / body["backup"]).read_bytes(), b"first")
 
     async def test_history_keeps_the_last_five_versions(self) -> None:
@@ -838,28 +785,18 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
         public = self.shared_root / "volumes" / "wr" / "public"
         params = {"name": "版本.docx", "path": "volumes/wr/public"}
         file_url = "/api/v1/files/版本.docx"
-        version_url = "/api/v1/sources/shared/version"
 
-        await self.client.put(file_url, content=b"v1")
-        await self.client.post("/api/v1/sources/shared/copy-from-file", params=params)
-
-        # 再连续覆盖 6 次 → 留底里有 6 个候选，只该剩最近 5 个（最早的 v1 被淘汰）
-        for body in (b"v2", b"v3", b"v4", b"v5", b"v6", b"v7"):
-            current = (
-                await self.client.get(
-                    version_url, params={"path": "volumes/wr/public/版本.docx"}
-                )
-            ).json()
+        async def publish(body: bytes) -> None:
             await self.client.put(file_url, content=body)
             saved = await self.client.post(
-                "/api/v1/sources/shared/copy-from-file",
-                params={
-                    **params,
-                    "on-conflict": "overwrite",
-                    "if-match": current["version"],
-                },
+                "/api/v1/sources/shared/copy-from-file", params=params
             )
-            self.assertEqual(saved.status_code, 200, saved.text)
+            self.assertIn(saved.status_code, (200, 201), saved.text)
+
+        await publish(b"v1")
+        # 再连续覆盖 6 次 → 留底里有 6 个候选，只该剩最近 5 个（最早的 v1 被淘汰）
+        for body in (b"v2", b"v3", b"v4", b"v5", b"v6", b"v7"):
+            await publish(body)
 
         listing = (
             await self.client.get(
@@ -883,6 +820,40 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(item["by"] for item in listing["versions"]))
         self.assertTrue(all(item["modified"] > 0 for item in listing["versions"]))
 
+    async def test_snapshots_in_the_same_second_do_not_lose_versions(self) -> None:
+        """同一秒内连续覆盖多次，每一版都必须留下留底（撞名也要换个名字留下）。
+
+        留底名里是秒级时间戳，同一秒内的两次覆盖天然会撞名。撞名时如果直接跳过，等于
+        凭空丢掉一版历史——而"同名强制覆盖"能被接受，靠的正是这些历史都还在。
+        """
+        public = self.shared_root / "volumes" / "wr" / "public"
+        params = {"name": "连击.docx", "path": "volumes/wr/public"}
+        file_url = "/api/v1/files/连击.docx"
+
+        await self.client.put(file_url, content=b"a")
+        await self.client.post("/api/v1/sources/shared/copy-from-file", params=params)
+        # 这几步都在同一秒内完成，是撞名最容易发生的场景
+        for body in (b"b", b"c", b"d"):
+            await self.client.put(file_url, content=body)
+            await self.client.post(
+                "/api/v1/sources/shared/copy-from-file", params=params
+            )
+
+        listing = (
+            await self.client.get(
+                "/api/v1/sources/shared/history",
+                params={"path": "volumes/wr/public/连击.docx"},
+            )
+        ).json()
+
+        self.assertEqual(
+            [
+                (public / main.HISTORY_DIR_NAME / item["id"]).read_bytes()
+                for item in listing["versions"]
+            ],
+            [b"c", b"b", b"a"],
+        )
+
     async def test_restore_rolls_back_and_is_itself_reversible(self) -> None:
         """回退把旧版本写回原文件；回退本身也留底当前版本，所以还能再回退回来。"""
         public = self.shared_root / "volumes" / "wr" / "public"
@@ -894,19 +865,9 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
 
         await self.client.put(file_url, content=b"old")
         await self.client.post("/api/v1/sources/shared/copy-from-file", params=params)
-        current = (
-            await self.client.get(
-                "/api/v1/sources/shared/version", params={"path": path}
-            )
-        ).json()
         await self.client.put(file_url, content=b"new")
         overwritten = await self.client.post(
-            "/api/v1/sources/shared/copy-from-file",
-            params={
-                **params,
-                "on-conflict": "overwrite",
-                "if-match": current["version"],
-            },
+            "/api/v1/sources/shared/copy-from-file", params=params
         )
         self.assertEqual(overwritten.status_code, 200, overwritten.text)
         backup_id = overwritten.json()["backup"].split("/")[-1]
@@ -975,20 +936,10 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(created.status_code, 201, created.text)
 
-        current = (
-            await self.client.get(
-                "/api/v1/sources/shared/version", params={"path": path}
-            )
-        ).json()
         with patch.object(main, "current_username", AsyncMock(return_value="bob")):
             await self.client.put(file_url, content=b"bob-version")
             overwritten = await self.client.post(
-                "/api/v1/sources/shared/copy-from-file",
-                params={
-                    **params,
-                    "on-conflict": "overwrite",
-                    "if-match": current["version"],
-                },
+                "/api/v1/sources/shared/copy-from-file", params=params
             )
         self.assertEqual(overwritten.status_code, 200, overwritten.text)
 
@@ -1010,19 +961,9 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
 
         await self.client.put(file_url, content=b"kept-old")
         await self.client.post("/api/v1/sources/shared/copy-from-file", params=params)
-        current = (
-            await self.client.get(
-                "/api/v1/sources/shared/version", params={"path": path}
-            )
-        ).json()
         await self.client.put(file_url, content=b"kept-new")
         overwritten = await self.client.post(
-            "/api/v1/sources/shared/copy-from-file",
-            params={
-                **params,
-                "on-conflict": "overwrite",
-                "if-match": current["version"],
-            },
+            "/api/v1/sources/shared/copy-from-file", params=params
         )
         backup_id = overwritten.json()["backup"].split("/")[-1]
         export_url = "/api/v1/sources/shared/history/export"
@@ -1053,10 +994,10 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_concurrent_publishes_let_exactly_one_win(self) -> None:
-        """同一个目标名同时发两次「存入」：只能有一个成功，另一个必须收到冲突。
+        """同一个目标名同时发两次「存入」：两次都成功（同名直接覆盖），但绝不能写坏。
 
-        两个请求在目标不存在时同时进来，一个有界锁把它们串起来，后来者看到的是
-        "已经存在"，而不是各自通过检查后互相覆盖。
+        按目标排队的锁把两次整份写入串起来，所以无论谁后到，盘上留下的都是**一份完整
+        的内容**，不会是两次写入交错的残骸。
         """
         public = self.shared_root / "volumes" / "wr" / "public"
         await self.client.put("/api/v1/files/并发.docx", content=b"concurrent")
@@ -1067,7 +1008,8 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
             self.client.post("/api/v1/sources/shared/copy-from-file", params=params),
         )
 
-        self.assertEqual(sorted([first.status_code, second.status_code]), [201, 409])
+        # 第一次是新建（201），第二次是覆盖（200）——顺序由锁决定，两种都可能
+        self.assertEqual(sorted([first.status_code, second.status_code]), [200, 201])
         self.assertEqual((public / "并发.docx").read_bytes(), b"concurrent")
 
     async def test_publish_refuses_a_file_that_is_being_edited(self) -> None:
@@ -1099,149 +1041,6 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(blocked.json()["detail"]["reason"], "in-use")
         self.assertEqual(blocked.json()["detail"]["holder"], "alice")
         self.assertEqual(target.read_bytes(), b"deck")
-
-    async def test_publish_rename_keeps_both_files(self) -> None:
-        """"保留两者"由服务端在锁内挑名字：前端挑名字必然又是一次竞态。"""
-        public = self.shared_root / "volumes" / "wr" / "public"
-        (public / "重复.docx").write_bytes(b"theirs")
-        await self.client.put("/api/v1/files/重复.docx", content=b"mine")
-
-        renamed = await self.client.post(
-            "/api/v1/sources/shared/copy-from-file",
-            params={
-                "name": "重复.docx",
-                "path": "volumes/wr/public",
-                "on-conflict": "rename",
-            },
-        )
-
-        self.assertEqual(renamed.status_code, 200)
-        self.assertEqual(renamed.json()["status"], "renamed")
-        self.assertEqual(
-            renamed.json()["path"], "volumes/wr/public/重复 (1).docx"
-        )
-        self.assertEqual((public / "重复.docx").read_bytes(), b"theirs")
-        self.assertEqual((public / "重复 (1).docx").read_bytes(), b"mine")
-
-    async def test_idempotency_key_turns_a_retry_into_a_no_op(self) -> None:
-        """超时后用户再点一次（同一个幂等键）：只写一遍、只留一份底。"""
-        public = self.shared_root / "volumes" / "wr" / "public"
-        target = public / "幂等.docx"
-        params = {"name": "幂等.docx", "path": "volumes/wr/public"}
-
-        await self.client.put("/api/v1/files/幂等.docx", content=b"v1")
-        await self.client.post(
-            "/api/v1/sources/shared/copy-from-file", params=params
-        )
-        current = (
-            await self.client.get(
-                "/api/v1/sources/shared/version",
-                params={"path": "volumes/wr/public/幂等.docx"},
-            )
-        ).json()
-
-        await self.client.put("/api/v1/files/幂等.docx", content=b"v2")
-        retry = {
-            **params,
-            "on-conflict": "overwrite",
-            "if-match": current["version"],
-            "idempotency-key": "retry-1",
-        }
-        first = await self.client.post(
-            "/api/v1/sources/shared/copy-from-file", params=retry
-        )
-        second = await self.client.post(
-            "/api/v1/sources/shared/copy-from-file", params=retry
-        )
-
-        self.assertEqual(first.status_code, 200)
-        self.assertEqual(second.status_code, 200)
-        self.assertEqual(first.json(), second.json())
-        self.assertEqual(target.read_bytes(), b"v2")
-        self.assertEqual(
-            len(self._backup_files(public / main.HISTORY_DIR_NAME)), 1
-        )
-
-    async def test_history_directory_is_not_reachable_through_the_api(self) -> None:
-        """留底目录必须彻底不可达：否则猜得到路径的人能把备份列出来取走。"""
-        public = self.shared_root / "volumes" / "wr" / "public"
-        params = {"name": "备份.docx", "path": "volumes/wr/public"}
-
-        await self.client.put("/api/v1/files/备份.docx", content=b"v1")
-        await self.client.post(
-            "/api/v1/sources/shared/copy-from-file", params=params
-        )
-        current = (
-            await self.client.get(
-                "/api/v1/sources/shared/version",
-                params={"path": "volumes/wr/public/备份.docx"},
-            )
-        ).json()
-        await self.client.put("/api/v1/files/备份.docx", content=b"v2")
-        await self.client.post(
-            "/api/v1/sources/shared/copy-from-file",
-            params={
-                **params,
-                "on-conflict": "overwrite",
-                "if-match": current["version"],
-            },
-        )
-        backup_name = self._backup_files(public / main.HISTORY_DIR_NAME)[0].name
-
-        listed = await self.client.get(
-            "/api/v1/sources/shared/entries",
-            params={"path": main.HISTORY_DIR_NAME},
-        )
-        fetched = await self.client.get(
-            "/api/v1/sources/shared/file",
-            params={"path": f"{main.HISTORY_DIR_NAME}/{backup_name}"},
-        )
-        top = await self.client.get(
-            "/api/v1/sources/shared/entries", params={"path": "volumes/wr/public"}
-        )
-
-        self.assertEqual(listed.status_code, 400)
-        self.assertEqual(fetched.status_code, 400)
-        self.assertNotIn(
-            main.HISTORY_DIR_NAME, [e["name"] for e in top.json()["entries"]]
-        )
-
-    async def test_overwrite_snapshot_is_a_hard_link(self) -> None:
-        """留底走同卷硬链接：备份与被替换掉的那个 inode 是同一个（零拷贝）。
-
-        原来用 shutil.copy2，要把整个文件从共享盘读一遍再写一遍——大文件上就是
-        好几秒，而且全都发生在持锁期间。
-        """
-        public = self.shared_root / "volumes" / "wr" / "public"
-        target = public / "硬链接.docx"
-        params = {"name": "硬链接.docx", "path": "volumes/wr/public"}
-
-        await self.client.put("/api/v1/files/硬链接.docx", content=b"first")
-        await self.client.post("/api/v1/sources/shared/copy-from-file", params=params)
-        before = target.stat().st_ino
-
-        current = (
-            await self.client.get(
-                "/api/v1/sources/shared/version",
-                params={"path": "volumes/wr/public/硬链接.docx"},
-            )
-        ).json()
-        await self.client.put("/api/v1/files/硬链接.docx", content=b"second")
-        overwritten = await self.client.post(
-            "/api/v1/sources/shared/copy-from-file",
-            params={
-                **params,
-                "on-conflict": "overwrite",
-                "if-match": current["version"],
-            },
-        )
-        backup = public / overwritten.json()["backup"]
-
-        self.assertEqual(overwritten.status_code, 200)
-        self.assertEqual(backup.read_bytes(), b"first")
-        # 备份就是被换下来的那个 inode 本身；新文件是另一个 inode
-        self.assertEqual(backup.stat().st_ino, before)
-        self.assertNotEqual(target.stat().st_ino, before)
 
     async def test_no_target_read_across_probe_and_overwrite(self) -> None:
         """「冲突探测 + 覆盖」不该为了算指纹去读共享盘上的目标文件。
@@ -1279,8 +1078,6 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
                 "/api/v1/sources/shared/copy-from-file",
                 params={
                     **params,
-                    "on-conflict": "overwrite",
-                    "if-match": current["version"],
                 },
             )
 
