@@ -10,6 +10,10 @@ set -euo pipefail
 #
 # Pure CPU images (static frontend + small Python storage service) — no CUDA
 # involved; amd builds on x86_64 hosts, arm builds on aarch64 hosts.
+#
+# v-office-collabora（Word 文档内核）不在本脚本构建：它要按架构分别构建
+# （amd64 用 docker build，arm64 用 buildx 跨架构），构建命令见
+# collabora/Dockerfile 头部说明。
 
 # App images always live under the ictrek org with the architecture in the
 # tag (amd_YYYYMMDD / arm_YYYYMMDD) — the single-repo convention package.sh
@@ -19,7 +23,6 @@ APP_REGISTRY_PREFIX="swr.cn-southwest-2.myhuaweicloud.com/ictrek"
 BASE_REGISTRY_PREFIX=""
 WEB_IMAGE=""
 STORAGE_IMAGE=""
-COLLABORA_IMAGE=""
 
 FEISHU_CONFIG_FILE="${FEISHU_CONFIG_FILE:-${HOME}/.feishu.json}"
 FEISHU_SPREADSHEET_TOKEN="Htotsn3oahO1zxt73YMcaB1zn8e"
@@ -33,9 +36,6 @@ TARGET_SHEET_TITLES=()
 DS_VERSION="${V_OFFICE_DS_VERSION:-9.3.1}"
 # Cache-bust revision for the versioned OnlyOffice asset directory.
 HASH="${V_OFFICE_ASSET_HASH:-1}"
-# Collabora Online —— Word 文档（doc/docx）的编辑器内核版本。
-# 生产建议锁定具体版本号（如 26.04.3.2），latest 会随上游滚动。
-COLLABORA_VERSION="${V_OFFICE_COLLABORA_VERSION:-latest}"
 # VOS serves the app under /app/com.ictrek.v-office after stripping the
 # prefix; root-path deployments build with NEXT_PUBLIC_BASE_PATH="".
 NEXT_PUBLIC_BASE_PATH="${NEXT_PUBLIC_BASE_PATH:-/app/com.ictrek.v-office}"
@@ -46,7 +46,6 @@ NEXT_PUBLIC_WORD_ENGINE="${NEXT_PUBLIC_WORD_ENGINE:-collabora}"
 
 BUILD_WEB=1
 BUILD_STORAGE=1
-BUILD_COLLABORA=1
 PUSH_IMAGES=1
 UPDATE_FEISHU=1
 DRY_RUN=0
@@ -69,7 +68,6 @@ Builds the V-Office images and records each service tag in Feishu.
 Options:
   --web-only             Build only swr.../v-office
   --storage-only         Build only swr.../v-office-storage
-  --collabora-only       Build only swr.../v-office-collabora
   --no-push              Build locally without docker push
   --no-feishu            Do not update Feishu after push
   --feishu-only          Do not build or push; only write selected service tags to Feishu
@@ -478,8 +476,6 @@ update_feishu() {
     [[ "$BUILD_WEB" == "1" ]] && update_feishu_cell "$token" "$sheet_id" "$sheet_title" "v-office" "$WEB_IMAGE" "$date_row" "$tag"
     token="$(get_feishu_token "$app_id" "$app_secret")"
     [[ "$BUILD_STORAGE" == "1" ]] && update_feishu_cell "$token" "$sheet_id" "$sheet_title" "v-office-storage" "$STORAGE_IMAGE" "$date_row" "$tag"
-    token="$(get_feishu_token "$app_id" "$app_secret")"
-    [[ "$BUILD_COLLABORA" == "1" ]] && update_feishu_cell "$token" "$sheet_id" "$sheet_title" "v-office-collabora" "$COLLABORA_IMAGE" "$date_row" "$tag"
   done
 
   return 0
@@ -493,19 +489,11 @@ while [[ $# -gt 0 ]]; do
     --web-only)
       BUILD_WEB=1
       BUILD_STORAGE=0
-      BUILD_COLLABORA=0
       shift
       ;;
     --storage-only)
       BUILD_WEB=0
       BUILD_STORAGE=1
-      BUILD_COLLABORA=0
-      shift
-      ;;
-    --collabora-only)
-      BUILD_WEB=0
-      BUILD_STORAGE=0
-      BUILD_COLLABORA=1
       shift
       ;;
     --no-push)
@@ -593,8 +581,6 @@ esac
 
 WEB_IMAGE="${APP_REGISTRY_PREFIX}/v-office"
 STORAGE_IMAGE="${APP_REGISTRY_PREFIX}/v-office-storage"
-# Word 文档（doc/docx）的编辑器内核，见 collabora/Dockerfile
-COLLABORA_IMAGE="${APP_REGISTRY_PREFIX}/v-office-collabora"
 
 IFS=',' read -r -a TARGET_SHEET_TITLES <<< "$TARGET_SHEET_SPEC"
 if [[ "${#TARGET_SHEET_TITLES[@]}" -eq 0 ]]; then
@@ -620,7 +606,6 @@ BASE_TAG="${PROFILE_TAG}_${DATE}"
 IMAGES_TO_BUILD=()
 [[ "$BUILD_WEB" == "1" ]] && IMAGES_TO_BUILD+=("$WEB_IMAGE")
 [[ "$BUILD_STORAGE" == "1" ]] && IMAGES_TO_BUILD+=("$STORAGE_IMAGE")
-[[ "$BUILD_COLLABORA" == "1" ]] && IMAGES_TO_BUILD+=("$COLLABORA_IMAGE")
 
 # tag 已被占用 = 本地有同名镜像，或远端仓库已存在该 tag。同日第二次构建若沿用
 # 同一个 tag，会覆盖掉飞书发布表里已记录的那一版，所以这里自动让位。
@@ -672,7 +657,6 @@ log "TARGET_SHEETS=${TARGET_SHEET_TITLES[*]}"
 log "TAG=${TAG}"
 log "WEB_IMAGE=${WEB_IMAGE}:${TAG}"
 log "STORAGE_IMAGE=${STORAGE_IMAGE}:${TAG}"
-log "COLLABORA_IMAGE=${COLLABORA_IMAGE}:${TAG}"
 log "DS_VERSION=${DS_VERSION} HASH=${HASH}"
 log "NEXT_PUBLIC_BASE_PATH=${NEXT_PUBLIC_BASE_PATH}"
 log "NEXT_PUBLIC_WORD_ENGINE=${NEXT_PUBLIC_WORD_ENGINE}"
@@ -699,17 +683,11 @@ if [[ "$SKIP_BUILD" != "1" ]]; then
   STORAGE_BASE_IMAGES=(
     "python:3.12-slim|python:3.12-slim"
   )
-  COLLABORA_BASE_IMAGES=(
-    "collabora/code:${COLLABORA_VERSION}|collabora-code:${COLLABORA_VERSION}"
-  )
   if [[ "$BUILD_WEB" == "1" ]]; then
     ensure_base_images "${WEB_BASE_IMAGES[@]}"
   fi
   if [[ "$BUILD_STORAGE" == "1" ]]; then
     ensure_base_images "${STORAGE_BASE_IMAGES[@]}"
-  fi
-  if [[ "$BUILD_COLLABORA" == "1" ]]; then
-    ensure_base_images "${COLLABORA_BASE_IMAGES[@]}"
   fi
 fi
 
@@ -736,17 +714,9 @@ if [[ "$SKIP_BUILD" != "1" && "$BUILD_STORAGE" == "1" ]]; then
     ./server
 fi
 
-if [[ "$SKIP_BUILD" != "1" && "$BUILD_COLLABORA" == "1" ]]; then
-  docker_build_image \
-    --build-arg "COLLABORA_BASE=${BASE_REGISTRY_PREFIX}/collabora-code:${COLLABORA_VERSION}" \
-    -t "${COLLABORA_IMAGE}:${TAG}" \
-    ./collabora
-fi
-
 if [[ "$PUSH_IMAGES" == "1" ]]; then
   [[ "$BUILD_WEB" == "1" ]] && docker push "${WEB_IMAGE}:${TAG}"
   [[ "$BUILD_STORAGE" == "1" ]] && docker push "${STORAGE_IMAGE}:${TAG}"
-  [[ "$BUILD_COLLABORA" == "1" ]] && docker push "${COLLABORA_IMAGE}:${TAG}"
 fi
 
 if [[ "$UPDATE_FEISHU" == "1" ]]; then
