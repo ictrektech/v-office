@@ -28,7 +28,8 @@ import { usePageTitle } from "@/hooks/use-page-title";
 // Get display name for a language code
 function getLanguageLabel(code: Language): string {
   if (code === LocaleExtend.Auto) {
-    return "Auto (Detect browser language)";
+    // 兜底：`label()` 已经把「自动」这一项单独处理了，这里保持一致免得出现两种说法
+    return "Auto (follow VOS language)";
   }
   return LocaleName[code as keyof typeof LocaleName] || code;
 }
@@ -57,7 +58,9 @@ export function SettingsView() {
   const t = useExtracted();
   usePageTitle(t("Settings — V-Office"));
   const { language, theme, plugins, setState } = useAppStore();
-  const zh = useResolvedLanguage().toLowerCase().startsWith("zh");
+  const resolvedLanguage = useResolvedLanguage();
+  const zh = resolvedLanguage.toLowerCase().startsWith("zh");
+  const zhTw = resolvedLanguage === Locale.ZH_TW;
 
   // 老用户可能存着一门已被下架的语言（如 hi）：仍然列出来，否则下拉里看不到
   // 当前值，用户会以为自己选的语言丢了。
@@ -67,11 +70,16 @@ export function SettingsView() {
 
   // "自动"这一项原先写死英文，中文界面里显得很突兀；其余语言名用母语写法，
   // 本来就是给人认自己语言的，不翻译。
+  //
+  // 「自动」的实际含义是**跟随 VOS 门户的语言**，读不到门户（独立部署）才回落
+  // 浏览器语言——所以标签直接写"跟随 VOS"，别让用户以为只跟浏览器。
   const label = (code: Language) =>
     code === LocaleExtend.Auto
-      ? zh
-        ? "自动（跟随浏览器语言）"
-        : "Auto (detect browser language)"
+      ? zhTw
+        ? "自動（跟隨 VOS 語言）"
+        : zh
+          ? "自动（跟随 VOS 语言）"
+          : "Auto (follow VOS language)"
       : getLanguageLabel(code);
 
   const themes: {
@@ -158,7 +166,11 @@ export function SettingsView() {
                   <span className="flex flex-col">
                     <span className="font-semibold">{label(code)}</span>
                     <span className="text-muted-foreground text-xs">
-                      {code === LocaleExtend.Auto ? "auto" : code}
+                      {/* 跟随 VOS 时把"当前实际解析到哪门语言"露出来：用户一眼能
+                          确认跟随是否生效，排查时也不用猜 */}
+                      {code === LocaleExtend.Auto
+                        ? `auto · ${resolvedLanguage}`
+                        : code}
                     </span>
                   </span>
                 </SelectItem>
@@ -166,9 +178,11 @@ export function SettingsView() {
             </SelectContent>
           </Select>
           <p className="text-xs text-muted-foreground">
-            {zh
-              ? "这里选什么，编辑器（OnlyOffice / Collabora）的界面语言就会跟着变成什么；内核不支持的语言已从列表中去掉。"
-              : "The editor (OnlyOffice / Collabora) UI follows whatever you pick here. Languages the engines do not ship are not listed."}
+            {zhTw
+              ? "「自動」跟隨 VOS 入口網站的語言（讀不到時改用瀏覽器語言）；這裡選什麼，OnlyOffice / Collabora 的介面語言就跟著變成什麼。內核不支援的語言已從清單中移除。"
+              : zh
+                ? "「自动」跟随 VOS 门户的语言（读不到门户时改用浏览器语言）；这里选什么，编辑器（OnlyOffice / Collabora）的界面语言就会跟着变成什么。内核不支持的语言已从列表中去掉。"
+                : '"Auto" follows the VOS portal language (and the browser language when no portal is present). The editor (OnlyOffice / Collabora) UI follows whatever you pick here. Languages the engines do not ship are not listed.'}
           </p>
         </section>
 
