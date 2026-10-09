@@ -7,7 +7,9 @@ routers:
   - id: v-office
     kind: page
     title:
-      zh-CN: 文档办公
+      # 品牌名不翻译：与 manifest.yml 的应用名、页面标题保持一致
+      # （同平台的 Model-Hub 也是两种语言都写 Model-Hub）
+      zh-CN: V-Office
       en: V-Office
     icon: lucide:file-text
     order: 200
