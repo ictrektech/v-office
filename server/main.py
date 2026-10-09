@@ -343,12 +343,27 @@ async def get_file(name: str, request: Request) -> FileResponse:
     target = safe_target(username, name)
     if not target.is_file():
         raise HTTPException(status_code=404, detail="file not found")
-    return FileResponse(target, filename=name)
+    # 内容指纹随文件一起给客户端：编辑器保存时回传它（if-match-token），做一次 CAS。
+    # 私有文档的这层校验防的是"同一个账号在两处登录、各改各的"——那两条会话互相看不见，
+    # 保存时谁后写谁赢，先写的人改动会被静默抹掉。带上凭据后，后写的那次会被拒。
+    # 算指纹要读一遍文件（阻塞 I/O），按本文件的约定丢进工作线程
+    token = await asyncio.to_thread(_content_version, target)
+    return FileResponse(
+        target, filename=name, headers={"X-VOffice-Token": token}
+    )
 
 
 @app.put("/api/v1/files/{name}")
 @app.put("/files/{name}", include_in_schema=False)
-async def put_file(name: str, request: Request) -> JSONResponse:
+async def put_file(
+    name: str,
+    request: Request,
+    # 打开这份文档时服务端给的版本标记（见 GET .../files/{name} 的响应头）：带上就做一次
+    # CAS —— 盘上已经不是那一版，说明别处（同一个账号的另一个窗口/设备）改过了，这次
+    # 保存必须拒，否则后来者整份写回会把先写的人的改动静默抹掉。
+    # 不传（新建文档、旧客户端）时保持原行为：直接写。
+    if_match_token: str = Query("", alias="if-match-token"),
+) -> JSONResponse:
     username = await current_username(request)
     target = safe_target(username, name)
     length = request.headers.get("Content-Length")
@@ -360,13 +375,43 @@ async def put_file(name: str, request: Request) -> JSONResponse:
     if not body:
         raise HTTPException(status_code=400, detail="empty body")
     if not _accepts_body(target, body):
-        # 内容不是 PDF（内核写不出）：原文件保持不动，但仍回成功，让 Ctrl+S 可用
+        # 内容不是 PDF（内核写不出）：原文件保持不动，但仍回成功，让 Ctrl+S 可用。
+        # 没写盘，版本自然没变，照实回给客户端让它继续用同一份凭据。
         size = target.stat().st_size if target.is_file() else 0
-        return JSONResponse({"status": "ok", "name": name, "size": size, "unchanged": True})
+        return JSONResponse(
+            {
+                "status": "ok",
+                "name": name,
+                "size": size,
+                "unchanged": True,
+                "token": await asyncio.to_thread(_content_version, target),
+            }
+        )
+
+    if if_match_token:
+        current_token = await asyncio.to_thread(_content_version, target)
+        if current_token and current_token != if_match_token:
+            LOG.warning(
+                "private save rejected (version changed) user=%s name=%s expected=%s on disk=%s",
+                username,
+                name,
+                if_match_token,
+                current_token,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail={"reason": "version-changed", "token": current_token},
+            )
+
     # 写盘是阻塞调用，必须出事件循环（见文件末尾"阻塞 I/O"一节）
     await asyncio.to_thread(_atomic_write_private, target, body)
+    written_version = _version_of_bytes(body)
+    _remember_version(target, written_version)
     LOG.info("saved %s for %s (%d bytes)", name, username, len(body))
-    return JSONResponse({"status": "ok", "name": name, "size": len(body)})
+    # 回新凭据：客户端据此更新手里那一版，否则下一次自动保存会被它自己刚写的那版挡住
+    return JSONResponse(
+        {"status": "ok", "name": name, "size": len(body), "token": written_version}
+    )
 
 
 @app.delete("/api/v1/files/{name}")

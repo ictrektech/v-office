@@ -169,6 +169,53 @@ class MountedDirectoryContractTest(unittest.IsolatedAsyncioTestCase):
             ["legacy.doc", "legacy2.doc", "report.pdf"],
         )
 
+    async def test_private_save_is_rejected_when_the_file_changed_elsewhere(self) -> None:
+        """私有文档保存的版本校验：拿旧凭据保存时若盘上已变 → 409，绝不整份覆盖。
+
+        防的场景：同一个账号在两处登录、各改各的（私有文档两处是彼此独立的会话，互相
+        看不见），保存时谁后写谁赢，先写那个人的改动会被静默抹掉。
+        """
+        target = self.data_root / "local" / "并发编辑.docx"
+
+        created = await self.client.put("/files/并发编辑.docx", content=b"v1")
+        token = created.json()["token"]
+        self.assertTrue(token)
+        opened = await self.client.get("/files/并发编辑.docx")
+        self.assertEqual(opened.headers.get("X-VOffice-Token"), token)
+
+        # 另一个窗口先保存成功
+        early = await self.client.put(
+            "/files/并发编辑.docx",
+            params={"if-match-token": token},
+            content=b"v2-from-other-window",
+        )
+        # 第一个窗口这时才保存：它手里的凭据已经过期 → 必须被拒，且不能覆盖
+        late = await self.client.put(
+            "/files/并发编辑.docx",
+            params={"if-match-token": token},
+            content=b"v2-from-first-window",
+        )
+
+        self.assertEqual(early.status_code, 200)
+        self.assertTrue(early.json()["token"])
+        self.assertEqual(late.status_code, 409)
+        self.assertEqual(late.json()["detail"]["reason"], "version-changed")
+        self.assertEqual(target.read_bytes(), b"v2-from-other-window")
+
+        # 拿到新凭据（编辑器保存成功后服务端会回一个）再存就正常通过
+        again = await self.client.put(
+            "/files/并发编辑.docx",
+            params={"if-match-token": early.json()["token"]},
+            content=b"v3",
+        )
+        self.assertEqual(again.status_code, 200)
+        self.assertEqual(target.read_bytes(), b"v3")
+
+        # 不带凭据（新建文档 / 旧版客户端）保持原行为：直接写
+        blind = await self.client.put("/files/并发编辑.docx", content=b"v4")
+        self.assertEqual(blind.status_code, 200)
+        self.assertEqual(target.read_bytes(), b"v4")
+
     async def test_accepts_real_world_document_titles(self) -> None:
         """网页标题那种名字要能存下来：全角引号 / 顿号 / 空格都不是路径隐患。
 

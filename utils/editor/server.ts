@@ -85,6 +85,8 @@ export class EditorServer {
    * 用户私有目录（Collabora 会话同样按它走 WOPI 直接编辑原文件）。
    */
   private sharedTarget: SharedTarget | null = null;
+  /** 私有文档的版本凭据：打开时拿到，保存时回传，防止别处改过之后被整份覆盖 */
+  private privateTarget: { token: string } | null = null;
   /** 新建文档在编辑期间静默保存用的默认文件名（退出时 UI 据此弹框改名） */
   private untitledSavedAs: string | null = null;
   private requestFileName:
@@ -123,11 +125,14 @@ export class EditorServer {
       fileType,
       fileName,
       sharedTarget,
+      privateToken,
     }: {
       fileType?: string;
       fileName?: string;
       /** 共享源文档：保存时写回该路径（编辑原文档） */
       sharedTarget?: SharedTarget | null;
+      /** 私有文档：打开时拿到的版本凭据，保存时回传做一次 CAS */
+      privateToken?: string;
     } = {},
   ) {
     const title = fileName || file.name;
@@ -137,6 +142,7 @@ export class EditorServer {
     this.title = title;
     this.isNewDocument = false;
     this.sharedTarget = sharedTarget ?? null;
+    this.privateTarget = privateToken ? { token: privateToken } : null;
     const buffer = await file.arrayBuffer();
     this.originalData = buffer;
     this.originalName = title;
@@ -775,13 +781,31 @@ export class EditorServer {
         // A failed server save must remain an error instead of silently changing
         // the operation into a browser download.
         if (vosMode) {
-          clientLog(`save-begin: ${saveName} (${finalOutput.byteLength} bytes)`);
+          const target = this.privateTarget;
+          clientLog(
+            `save-begin: ${saveName} (${finalOutput.byteLength} bytes, token=${target?.token || "-"})`,
+          );
           try {
-            await saveStoredFile(saveName, finalOutput);
-            clientLog(`save-ok: ${saveName}`);
+            const nextToken = await saveStoredFile(
+              saveName,
+              finalOutput,
+              target?.token || "",
+            );
+            // 更新手里的凭据：不更新的话，下一次自动保存会被我们自己刚写进去的那一版挡住
+            if (target && nextToken) {
+              this.privateTarget = { ...target, token: nextToken };
+            }
+            clientLog(`save-ok: ${saveName} (token=${nextToken || "-"})`);
             return { status: "ok" };
           } catch (error) {
-            clientLog(`save-failed: ${saveName} :: ${error}`);
+            // 版本冲突：这份私有文档在我们打开之后被别处改过了（同一个账号的另一个
+            // 窗口/设备）。绝不能自动重试覆盖——那会把对方的改动整份抹掉。保持错误
+            // 状态，让用户自己决定（另存 / 重新打开）。
+            const reason =
+              error instanceof Error && error.message === "VERSION_CHANGED"
+                ? "version-changed"
+                : String(error);
+            clientLog(`save-failed: ${saveName} :: ${reason}`);
             console.error("Failed to save document to VOS storage", error);
             return { status: "error" };
           }

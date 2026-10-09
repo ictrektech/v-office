@@ -333,8 +333,9 @@ export function OpenView({
     if (loadingStoredFile) return;
     setLoadingStoredFile(file.name);
     try {
-      const downloaded = await openStoredFile(file.name);
-      await server.open(downloaded);
+      const { file: downloaded, token } = await openStoredFile(file.name);
+      // 把打开时拿到的版本凭据交给编辑器：保存时回传，别处改过就拒写而不是整份覆盖
+      await server.open(downloaded, { privateToken: token });
       router.push("/editor");
     } catch (error) {
       console.error("Failed to open document:", error);
@@ -361,7 +362,7 @@ export function OpenView({
     if (downloadingStoredFile) return;
     setDownloadingStoredFile(file.name);
     try {
-      const downloaded = await openStoredFile(file.name);
+      const { file: downloaded } = await openStoredFile(file.name);
       const url = URL.createObjectURL(downloaded);
       const anchor = document.createElement("a");
       anchor.href = url;

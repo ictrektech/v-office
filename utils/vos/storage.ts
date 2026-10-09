@@ -148,27 +148,54 @@ export async function listStoredFiles(): Promise<StoredFile[]> {
   return Array.isArray(data?.files) ? data.files : [];
 }
 
-export async function openStoredFile(name: string): Promise<File> {
+/**
+ * 打开「我的文档」里的一个文件。
+ *
+ * 返回值里的 token 是这份内容的版本标记（服务端随文件一起给）：保存时回传它做一次
+ * CAS，防止"同一个账号在两处登录、各改各的"时后来者把先写的人整份覆盖掉。
+ */
+export async function openStoredFile(
+  name: string,
+): Promise<{ file: File; token: string }> {
   const response = await request(`/files/${encodeURIComponent(name)}`);
   if (!response.ok) {
     throw new Error(`Open file failed: ${response.status}`);
   }
+  const token = response.headers.get("X-VOffice-Token") || "";
   const blob = await response.blob();
-  return new File([blob], name);
+  return { file: new File([blob], name), token };
 }
 
+/**
+ * 保存「我的文档」里的一个文件，返回写完之后的新版本标记。
+ *
+ * 带 ifMatchToken 时服务端会校验：盘上已经不是那一版（别处改过了）就回 409，这里抛
+ * VERSION_CHANGED。**绝不**自动改用对方的版本号重试——那等于把对方刚写进去的内容抹掉。
+ */
 export async function saveStoredFile(
   name: string,
   data: Uint8Array | ArrayBuffer,
-): Promise<void> {
-  const response = await request(`/files/${encodeURIComponent(name)}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/octet-stream" },
-    body: new Blob([data as ArrayBuffer]),
-  });
+  ifMatchToken = "",
+): Promise<string> {
+  const query = new URLSearchParams();
+  if (ifMatchToken) query.set("if-match-token", ifMatchToken);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const response = await request(
+    `/files/${encodeURIComponent(name)}${suffix}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: new Blob([data as ArrayBuffer]),
+    },
+  );
+  if (response.status === 409) throw new Error("VERSION_CHANGED");
   if (!response.ok) {
     throw new Error(`Save file failed: ${response.status}`);
   }
+  const payload = (await response.json().catch(() => null)) as
+    | { token?: string }
+    | null;
+  return payload?.token || "";
 }
 
 export async function deleteStoredFile(name: string): Promise<void> {

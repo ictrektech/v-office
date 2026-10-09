@@ -1225,7 +1225,7 @@ export function WritingView() {
                       : null
                   }
                   onSelect={(name) =>
-                    void selectMaterial(name, () => openStoredFile(name))
+                    void selectMaterial(name, async () => (await openStoredFile(name)).file)
                   }
                 />
               )}

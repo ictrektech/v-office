@@ -39,6 +39,10 @@ COLLABORA_VERSION="${V_OFFICE_COLLABORA_VERSION:-latest}"
 # VOS serves the app under /app/com.ictrek.v-office after stripping the
 # prefix; root-path deployments build with NEXT_PUBLIC_BASE_PATH="".
 NEXT_PUBLIC_BASE_PATH="${NEXT_PUBLIC_BASE_PATH:-/app/com.ictrek.v-office}"
+# 现代格式（docx/xlsx/pptx）默认用哪个内核。只有服务端内核（collabora）能让同一份文档的
+# 多个会话进同一个文档会话，即真正的多人协同；本地内核跑在浏览器里，每个标签页各一份、
+# 保存时互相整份覆盖。需要退回本地内核时显式传 NEXT_PUBLIC_WORD_ENGINE=onlyoffice。
+NEXT_PUBLIC_WORD_ENGINE="${NEXT_PUBLIC_WORD_ENGINE:-collabora}"
 
 BUILD_WEB=1
 BUILD_STORAGE=1
@@ -84,6 +88,7 @@ Environment:
   V_OFFICE_DS_VERSION           OnlyOffice DocumentServer version (default 9.3.1)
   V_OFFICE_ASSET_HASH           Versioned asset directory revision (default 1)
   NEXT_PUBLIC_BASE_PATH       Sub-path prefix baked into the web image
+  NEXT_PUBLIC_WORD_ENGINE     Default editor kernel: collabora | onlyoffice
   NPM_REGISTRY                Optional npm registry for the web build
   PIP_INDEX_URL               Optional PyPI index for the storage image
 EOF
@@ -670,6 +675,7 @@ log "STORAGE_IMAGE=${STORAGE_IMAGE}:${TAG}"
 log "COLLABORA_IMAGE=${COLLABORA_IMAGE}:${TAG}"
 log "DS_VERSION=${DS_VERSION} HASH=${HASH}"
 log "NEXT_PUBLIC_BASE_PATH=${NEXT_PUBLIC_BASE_PATH}"
+log "NEXT_PUBLIC_WORD_ENGINE=${NEXT_PUBLIC_WORD_ENGINE}"
 
 if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
@@ -715,6 +721,7 @@ if [[ "$SKIP_BUILD" != "1" && "$BUILD_WEB" == "1" ]]; then
     --build-arg "NODE_IMAGE=${BASE_REGISTRY_PREFIX}/node:22-alpine" \
     --build-arg "CADDY_IMAGE=${BASE_REGISTRY_PREFIX}/caddy:2-alpine" \
     --build-arg "NEXT_PUBLIC_BASE_PATH=${NEXT_PUBLIC_BASE_PATH}" \
+    --build-arg "NEXT_PUBLIC_WORD_ENGINE=${NEXT_PUBLIC_WORD_ENGINE}" \
     --build-arg "NPM_REGISTRY=${NPM_REGISTRY:-https://registry.npmmirror.com}" \
     -t "${WEB_IMAGE}:${TAG}" \
     .

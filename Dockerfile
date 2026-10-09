@@ -46,6 +46,14 @@ ARG HASH
 # deployments that strip the prefix before proxying; empty for root deploys.
 ARG NEXT_PUBLIC_BASE_PATH
 
+# Default editor kernel for modern formats (docx/xlsx/pptx): `collabora` uses the
+# server-side kernel, anything else keeps the in-browser one (OnlyOffice-as-wasm).
+#
+# 默认给 collabora：只有服务端内核能让"同一份文档的多个会话"落在同一个文档会话里，
+# 也就是真正的多人协同（本地内核跑在浏览器里，每个标签页各一份，保存会互相整份覆盖）。
+# 老格式（doc/xls/ppt）与共享盘文档本来就走服务端内核，这里改的是现代格式的默认值。
+ARG NEXT_PUBLIC_WORD_ENGINE=collabora
+
 # npm registry override for mirror-rich environments (defaults to upstream).
 ARG NPM_REGISTRY=https://registry.npmjs.org
 ENV COREPACK_NPM_REGISTRY=${NPM_REGISTRY}
@@ -57,6 +65,7 @@ ENV npm_config_registry=${NPM_REGISTRY}
 # strips the prefix.
 ENV NEXT_PUBLIC_BASE_PATH=${NEXT_PUBLIC_BASE_PATH}
 ENV NEXT_PUBLIC_APP_ROOT=${NEXT_PUBLIC_BASE_PATH}/v${DS_VERSION}-${HASH}
+ENV NEXT_PUBLIC_WORD_ENGINE=${NEXT_PUBLIC_WORD_ENGINE}
 
 WORKDIR /app
 
