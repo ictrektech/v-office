@@ -754,6 +754,47 @@ class SharedSourceBrowsingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         return response.json()["accessToken"]
 
+    async def test_both_users_can_edit_the_same_public_document(self) -> None:
+        """公共盘文档的多人协同：两个用户都必须可写，且落在**同一个**文档标识上。
+
+        两个人拿到的 wopiSrc 完全相同，而 Collabora 认的就是 wopiSrc —— 所以他们本来
+        就在同一个文档会话里协同（互见光标、共用一份副本、保存由 coolwsd 串行化）。
+        曾经在这里把后来者降级成只读，唯一的实际效果是"一个人能改、另一个人只能看"，
+        把协同编辑这件事直接废掉了。
+        """
+        path = "volumes/wr/public/report.pptx"
+
+        async def session(user: str) -> dict:
+            with (
+                patch.object(main, "current_username", AsyncMock(return_value=user)),
+                patch.object(
+                    main,
+                    "_collabora_editor_url",
+                    AsyncMock(return_value="http://collabora/editor"),
+                ),
+            ):
+                response = await self.client.post(
+                    "/api/v1/wopi/session",
+                    params={"source": "shared", "path": path, "edit": "1"},
+                )
+            self.assertEqual(response.status_code, 200, response.text)
+            return response.json()
+
+        alice = await session("alice")
+        bob = await session("bob")
+
+        self.assertTrue(alice["canWrite"])
+        self.assertTrue(bob["canWrite"])
+        # 同一个文档标识 → 同一个 Collabora 会话 → 真正在一起协同
+        self.assertEqual(alice["wopiSrc"], bob["wopiSrc"])
+        # 而且 WOPI 层面两个人拿到的都是可写（Collabora 就是按 UserCanWrite 决定能不能改）
+        for token in (alice["accessToken"], bob["accessToken"]):
+            info = await self.client.get(
+                f"/wopi/files/{path}", params={"access_token": token}
+            )
+            self.assertEqual(info.status_code, 200)
+            self.assertTrue(info.json()["UserCanWrite"])
+
     async def test_overwrite_keeps_the_previous_bytes_in_history(self) -> None:
         """覆盖成功要留底并回报 previousVersion —— 否则误覆盖不可回滚。"""
         public = self.shared_root / "volumes" / "wr" / "public"

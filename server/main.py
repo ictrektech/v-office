@@ -2448,19 +2448,14 @@ async def wopi_session(
         if target.suffix.lower() not in BROWSABLE_SUFFIXES:
             raise HTTPException(status_code=400, detail="unsupported file type")
         doc_name = path
+        # 公共盘文档**人人可写**：这里绝不能因为"已经有人在编辑"就把后来者降级成只读。
+        #
+        # 曾经这么做过（怕"两个会话各持一份内存副本、各整份保存，后保存的抹掉先保存的"），
+        # 但那个担心不成立：公共文档的 WOPISrc 只由路径决定，所有用户拿到的都是同一个，
+        # 而 Collabora 认的正是 WOPISrc —— 于是所有人本来就落在**同一个文档会话**里协同
+        # （互见光标、共用一份副本、保存由 coolwsd 串行化）。当时那道降级唯一的效果，就是
+        # 把"多人协同"变成"一个人能改、其余人只能看"，把功能直接废掉了。
         can_write = want_write and SHARED_WRITABLE
-        # 同一份公共文件只允许一个可写会话：第二个人进来时降级为只读。否则两个
-        # 会话各自持有整份内存副本、各自整份保存，后保存的会把先保存的静默抹掉
-        # （"互见光标"只在同一会话内成立，跨会话保护不了）。
-        holder = _shared_lock_holder(source, doc_name)
-        if holder and holder != username:
-            can_write = False
-            LOG.info(
-                "wopi session read-only for %s: %s is editing %s",
-                username,
-                holder,
-                doc_name,
-            )
         token = issue_wopi_token(username, doc_name, can_write, source)
     else:
         if not name:

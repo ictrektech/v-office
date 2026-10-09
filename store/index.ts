@@ -67,7 +67,7 @@ export const useAppStore = create<AppState>()(
       name: "office-state",
       // Only persist settings, skip server instance
       partialize: (state) => ({
-        language: state.language,
+        language: state.language, 
         theme: state.theme,
         plugins: state.plugins,
         wordEngine: state.wordEngine,
