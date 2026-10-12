@@ -47,11 +47,11 @@ next-env.d.ts
 .env
 .edgeone/*
 .tef_dist/*
-
-# AI 助手插件本地镜像（用 scripts/sync-ai-assistant.sh 从 agentic-search 仓库
-# 生成，不进 git；生产由 agentic-search 应用经网关托管）
-/public/ai-assistant
   
+# 构建时从技能仓库同步进来的技能包（见 server/skills/README.md）
+/server/skills/*
+!/server/skills/README.md
+
 # local test scripts only — never commit
 .trae-test
 
@@ -61,3 +61,7 @@ __pycache__/
 
 # 文档/素材目录（使用文档、宣传稿件等，不进 git；同样已在 .dockerignore 中排除）
 /docs/
+
+# 本地 OnlyOffice 内核（从平台镜像拷的，仅本地 dev 用；生产由应用镜像自带，永不入库）
+/public/v9.3.1-1/
+/public/runtime-config.js

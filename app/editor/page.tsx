@@ -23,6 +23,7 @@ import { createXHRProxy } from "@/utils/editor/xhr";
 import { DocEditor } from "@/utils/editor/types";
 import { createExtensionLoader } from "@/utils/extension";
 import {
+  alignCollaboraHost,
   fetchCollaboraSession,
   fetchCollaboraStatus,
   guessExtension,
@@ -797,7 +798,7 @@ export default function Page() {
             editor?.destroyEditor?.();
             editor = null;
             activeEngineRef.current = "collabora";
-            setCollaboraUrl(session.editorUrl);
+            setCollaboraUrl(alignCollaboraHost(session.editorUrl));
             return;
           }
           if (forcedCollaborative) {

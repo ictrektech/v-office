@@ -705,10 +705,25 @@ if [[ "$SKIP_BUILD" != "1" && "$BUILD_WEB" == "1" ]]; then
     .
 fi
 
+# 技能随镜像走（VOS 是 pull 模式，宿主机没有技能仓库可挂）：
+# 把技能仓库的子包同步进 server/skills/，不存在就跳过（AI 仍可用，只是没有专用技能）。
+PATENT_SKILLS_DIR="${PATENT_SKILLS_DIR:-../patent-disclosure-skill/skills}"
 if [[ "$SKIP_BUILD" != "1" && "$BUILD_STORAGE" == "1" ]]; then
+  if [[ -d "$PATENT_SKILLS_DIR" ]]; then
+    log "Sync patent skills: ${PATENT_SKILLS_DIR} -> server/skills"
+    mkdir -p server/skills
+    find server/skills -mindepth 1 -maxdepth 1 ! -name README.md -exec rm -rf {} +
+    cp -r "$PATENT_SKILLS_DIR"/. server/skills/
+  else
+    log "Patent skills not found at ${PATENT_SKILLS_DIR}; storage image builds without them"
+  fi
+
   docker_build_image \
     --build-arg "BASE_IMAGE=${BASE_REGISTRY_PREFIX}/python:3.12-slim" \
     --build-arg "PIP_INDEX_URL=${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}" \
+    --build-arg "PI_NODE_IMAGE=${BASE_REGISTRY_PREFIX}/node:22-slim" \
+    --build-arg "NPM_REGISTRY=${NPM_REGISTRY:-https://registry.npmmirror.com}" \
+    --build-arg "PI_VERSION=${PI_VERSION:-1.1.0}" \
     -f server/Dockerfile \
     -t "${STORAGE_IMAGE}:${TAG}" \
     ./server

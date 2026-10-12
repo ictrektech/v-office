@@ -1,103 +1,40 @@
 "use client";
 
 /**
- * 公文写作子页面客户端：鉴权、材料上传、WebSocket 会话。
+ * 公文写作客户端（已从 agentic-search 迁到本应用自己的 AI 服务）。
  *
- * 鉴权链路对齐 AI 助手插件（public/ai-assistant/index.js）：
- * 1. VOS 模式下用 fastpath 拿 VOS access token
- * 2. POST {API_BASE}/auth/vos-oidc 兑换本应用 JWT（内存缓存）
- * 3. WS {API_BASE}/chat?token=<JWT>，create_session → writing_request
+ * 原实现：WebSocket + 后端五/三阶段编排（`services/writing.ts` 978 行），
+ * 由 agentic-search 应用承载。现在改成**最轻形态**：
  *
- * 本地开发（非 VOS）：不带 token，直连同源（Next rewrite）/ 回退 5004、5273。
+ * - 三段提示词（写手起草 / 审改团队 / 定稿签发人）从原后端 TS 里搬到这里，
+ *   一次回合内由模型连续完成，产出仍用 `<final-doc>` 包裹定稿全文
+ *   （解析失败还有一层兜底：取最后一个代码块/全文）。
+ * - 传输换成 SSE（比 WebSocket 轻，断线即取消），进程隔离、超时、并发、
+ *   重试全在服务端（`server/ai.py`）。
+ * - 相对原来的五阶段，界面上的阶段卡片少了几张——这是刻意的取舍：
+ *   少一层编排，少一处和 agent 行为耦合的地方。
+ *
+ * 保留原有导出名，写作页面不需要改。
  */
 
-import { getVOSAccessToken, isVOSMode } from "@/utils/vos/fastpath";
+import {
+  AI_BASE,
+  authHeaders,
+  aiHealth,
+  chatStream,
+  createAiSession,
+  deleteAiSession,
+  listAiSessions,
+  stopAiSession,
+  uploadAiMaterial,
+  type AiEvent,
+} from "@/utils/ai/client";
 
-export const API_BASE = "/api/com.ictrek.agentic-search";
+/** 兼容旧引用：现在指向本应用 AI 服务，不再是 agentic-search。 */
+export const API_BASE = AI_BASE;
 
-// ── 鉴权 ──────────────────────────────────────────────────────────────────
-
-let jwtCache: string | null = null;
-
-/** 本应用 JWT：VOS 模式兑换并缓存；本地模式返回 null */
-async function getWritingJwt(): Promise<string | null> {
-  try {
-    if (!(await isVOSMode())) return null;
-  } catch {
-    return null;
-  }
-  if (jwtCache) return jwtCache;
-  const vosToken = await getVOSAccessToken();
-  if (!vosToken) return null;
-  try {
-    const resp = await fetch(`${API_BASE}/auth/vos-oidc`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ access_token: vosToken }),
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!resp.ok) return null;
-    const data = (await resp.json()) as { success?: boolean; token?: string };
-    if (data?.success && data.token) {
-      jwtCache = data.token;
-      return jwtCache;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-export async function authHeaders(): Promise<Record<string, string>> {
-  const jwt = await getWritingJwt();
-  return jwt ? { Authorization: `Bearer ${jwt}` } : {};
-}
-
-// ── 服务可用性 ────────────────────────────────────────────────────────────
-
-/** agentic-search 写作服务探测：200 = 可用；失败提示用户安装/启动应用 */
-export async function checkWritingService(): Promise<boolean> {
-  try {
-    const resp = await fetch(`${API_BASE}/writing/health`, {
-      headers: await authHeaders(),
-      cache: "no-store",
-      signal: AbortSignal.timeout(6_000),
-    });
-    return resp.ok;
-  } catch {
-    return false;
-  }
-}
-
-// ── 材料上传 ───────────────────────────────────────────────────────────────
-
-interface UploadedSource {
-  uploadId: string;
-  name: string;
-  size: number;
-  /** 上传时预解析出的字数（0 = 未提取到文本） */
-  chars: number;
-  /** 解析失败原因（扫描件 PDF 等；无则解析成功） */
-  parseError?: string;
-}
-
-export async function uploadSourceFile(file: File): Promise<UploadedSource> {
-  const form = new FormData();
-  form.append("file", file);
-  const resp = await fetch(`${API_BASE}/writing/upload`, {
-    method: "POST",
-    headers: await authHeaders(),
-    body: form,
-    signal: AbortSignal.timeout(60_000),
-  });
-  if (!resp.ok) {
-    const body = (await resp.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error || `上传失败（${resp.status}）`);
-  }
-  return (await resp.json()) as UploadedSource;
-}
-
-// ── WebSocket 会话 ─────────────────────────────────────────────────────────
+/** 旧代码（generate-view 取产物、旧字号接口）仍从这里取鉴权头 */
+export { authHeaders };
 
 export interface WritingConfig {
   docType: string;
@@ -111,34 +48,110 @@ export interface WritingConfig {
   knowledgeBaseNames?: string[];
   /** 发文字号（红头文件版式用，如 "X政发〔2026〕5号"） */
   docNumber?: string;
-  /** 正文字号（pt，可空；微调字号指令由后端改档后回传） */
+  /** 正文字号（pt）；渲染在客户端完成，不再回传后端改档 */
   bodyFontSize?: number;
 }
 
-export type WritingEvent = Record<string, unknown> & { _event?: string };
-
-type EventListener = (data: WritingEvent) => void;
-
-function buildWsCandidates(token: string): string[] {
-  if (typeof window === "undefined") return [];
-  const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-  const suffix = token ? `?token=${encodeURIComponent(token)}` : "";
-  const host = window.location.host;
-  const list = [
-    `${scheme}://${host}${API_BASE}/chat${suffix}`,
-    `ws://${window.location.hostname}:5004${API_BASE}/chat${suffix}`,
-    `ws://${window.location.hostname}:5273${API_BASE}/chat${suffix}`,
-  ];
-  return [...new Set(list)];
+export interface UploadedSource {
+  /** 本应用里就是 AI 会话 id：材料与该文件一一对应 */
+  uploadId: string;
+  name: string;
+  size: number;
+  chars: number;
+  parseError?: string;
 }
 
+export type WritingEvent = Record<string, unknown> & { _event?: string };
+type EventListener = (data: WritingEvent) => void;
+
+/** 写作技能的口径：材料由 agent 自己读，这里只给文字要求 */
+const WRITING_SKILL = "writing";
+
+function configBlock(cfg: WritingConfig): string {
+  const lines = [
+    `文种：${cfg.docType}`,
+    `标题 / 主题：${cfg.title}`,
+    cfg.publisher ? `发布机关：${cfg.publisher}` : "",
+    cfg.docNumber ? `发文字号：${cfg.docNumber}` : "",
+    cfg.audience ? `受文 / 解读对象：${cfg.audience}` : "",
+    cfg.style ? `行文口径 / 解读形式：${cfg.style}` : "",
+    cfg.lengthWords ? `篇幅：约 ${cfg.lengthWords} 字` : "",
+    cfg.requirements ? `其他要求：${cfg.requirements}` : "",
+  ].filter(Boolean);
+  return lines.join("\n");
+}
+
+/** 三段角色，合并成一次回合；原样保留原来的口径，避免行为漂移。 */
+function composePrompt(cfg: WritingConfig, materials: string[]): string {
+  const materialHint = materials.length
+    ? `\n\n# 参考材料\n\n材料已放在当前工作目录的 materials/ 下：${materials
+        .map((m) => `\`${m}\``)
+        .join("、")}。请先用 read / bash 读一遍再动笔，不要凭空编数据。`
+    : "";
+  return [
+    "你要依次以三个身份完成一篇公文：写手（起草）→ 审改团队（审查后改稿）→ 定稿签发人（复核定稿）。",
+    "三步在这一次回答里连续做完，不要中途提问。",
+    "",
+    "# 写作要求",
+    configBlock(cfg),
+    materialHint,
+    "",
+    "# 输出格式（严格遵守）",
+    "1. 先输出「## 审查意见」，分条列你在改稿中处理的问题，最多 6 条，确无问题写「无」；",
+    "2. 然后必须输出定稿全文，用 <final-doc> 与 </final-doc> 两个标记包裹（标记独占一行）；",
+    "3. 标记之外除审查意见外不得有任何其他文字，定稿正文用 Markdown。",
+    "",
+    "示例：",
+    "<final-doc>",
+    "# 标题",
+    "正文内容...",
+    "</final-doc>",
+  ].join("\n");
+}
+
+function extractFinalDoc(text: string): string {
+  const match = text.match(/<final-doc>([\s\S]*?)<\/final-doc>/);
+  if (match?.[1]?.trim()) return match[1].trim();
+  // 兜底（最轻）：模型偶发漏标记时，丢掉审查意见段落，保留其余正文
+  const withoutReview = text.replace(/##\s*审查意见[\s\S]*?(?=\n#|\n##|$)/, "").trim();
+  return withoutReview || text.trim();
+}
+
+// ── 服务可用性 ─────────────────────────────────────────────────────────────
+
+export async function checkWritingService(): Promise<boolean> {
+  try {
+    const health = await aiHealth();
+    return health.ok && health.pi.available;
+  } catch {
+    return false;
+  }
+}
+
+/** 每个写作文件一个独立会话：材料、产物、上下文都隔离 */
+export async function uploadSourceFile(file: File): Promise<UploadedSource> {
+  const meta = await createAiSession(file.name, WRITING_SKILL);
+  // 服务端当场解析成文本（agent 不接触文件），把解析结果带回来给界面提示
+  const parsed = await uploadAiMaterial(meta.id, file);
+  return {
+    uploadId: meta.id,
+    name: parsed.name,
+    size: parsed.size,
+    chars: parsed.chars,
+    ...(parsed.parseError ? { parseError: parsed.parseError } : {}),
+  };
+}
+
+// ── 会话 ───────────────────────────────────────────────────────────────────
+
 export class WritingClient {
-  private ws: WebSocket | null = null;
   private listeners = new Set<EventListener>();
   private closeListener: (() => void) | null = null;
-  private started = false;
-  /** 防止 stop() 后 onClose 触发 UI 错误态 */
-  intentionallyClosed = false;
+  private controller: AbortController | null = null;
+  /** 页面会读它（用于「保存到我的文档」等），所以是公开字段 */
+  sessionId: string | null = null;
+  private streaming = false;
+  private materials: string[] = [];
 
   onEvent(listener: EventListener): () => void {
     this.listeners.add(listener);
@@ -150,282 +163,192 @@ export class WritingClient {
   }
 
   private emit(data: WritingEvent): void {
-    for (const l of this.listeners) l(data);
+    for (const listener of this.listeners) listener(data);
+  }
+
+  isConnected(): boolean {
+    return !!this.sessionId;
+  }
+
+  /** 发一个回合并消费 SSE；abort 由 stop()/disconnect() 触发 */
+  private async runTurn(
+    prompt: string,
+    stage: "draft" | "reviewfix" | "signoff" | "revise",
+    cfg: WritingConfig,
+    resume: boolean,
+    instruction?: string,
+  ): Promise<void> {
+    const sessionId = this.sessionId;
+    if (!sessionId || this.streaming) return;
+    this.streaming = true;
+    const started = Date.now();
+    this.emit({ _event: "writing_stage", stage, status: "start", ...(instruction ? { instruction } : {}) });
+
+    let text = "";
+    let failure: string | null = null;
+    const controller = new AbortController();
+    this.controller = controller;
+
+    try {
+      await chatStream(sessionId, {
+        prompt,
+        resume,
+        autosave: false,  // 写作栏目自己管存稿（见 writing-view 的「保存到我的文档」）
+        signal: controller.signal,
+        onEvent: (event: AiEvent) => {
+          switch (event.type) {
+            case "delta":
+              text += String(event.text ?? "");
+              break;
+            case "message_end":
+              // 完整消息到达时以它为准（流式可能缺尾巴）
+              if (event.text) text = String(event.text);
+              break;
+            case "retry":
+              this.emit({
+                _event: "writing_warning",
+                message: `模型未响应，正在重试（第 ${event.attempt ?? 2} 次）`,
+              });
+              break;
+            case "error":
+              failure = String(event.message ?? "生成失败");
+              if (event.text) text = String(event.text);
+              break;
+            default:
+              break;
+          }
+        },
+      });
+    } catch (err) {
+      failure = `连接中断：${String(err)}`;
+    } finally {
+      this.controller = null;
+      this.streaming = false;
+    }
+
+    if (failure && !text.trim()) {
+      this.emit({ _event: "writing_error", message: failure });
+      this.closeListener?.();
+      return;
+    }
+
+    this.emit({
+      _event: "writing_stage",
+      stage,
+      status: "done",
+      elapsedMs: Date.now() - started,
+    });
+
+    const content = extractFinalDoc(text);
+    this.emit({
+      _event: "writing_done",
+      title: cfg.title || cfg.docType,
+      content,
+      // 文件名交给页面自己的导出链路（x2t / 打印），这里不再回传 docx URL
+      files: [],
+    });
+    if (failure) this.emit({ _event: "writing_warning", message: failure });
   }
 
   /**
-   * 连接并启动写作。依次尝试候选 WS 地址，首个成功升级的连接生效。
+   * 开始写作。`uploadId` 就是会话 id（见 uploadSourceFile），`agent` 参数保留
+   * 仅为兼容旧调用——现在只有一条链路（本应用后端 + Pi）。
    */
-  async start(
-    config: WritingConfig,
-    uploadId?: string,
-    agent: "claude" | "opencode" = "claude",
-  ): Promise<void> {
-    const jwt = await getWritingJwt();
-    const candidates = buildWsCandidates(jwt ?? "");
-    if (candidates.length === 0) throw new Error("无法建立连接");
-
-    for (const url of candidates) {
-      try {
-        await this.connect(url);
-        break;
-      } catch (err) {
-        if (url === candidates[candidates.length - 1]) {
-          throw new Error("无法连接 AI 服务（ agentic-search 未启动？）");
-        }
-        console.warn("[writing] ws candidate failed:", url, err);
-      }
+  async start(config: WritingConfig, uploadId?: string, _agent?: string): Promise<void> {
+    if (!uploadId) {
+      this.emit({ _event: "writing_error", message: "缺少材料会话，请重新上传材料" });
+      return;
     }
-
-    try {
-      await this.createSession(agent);
-    } catch (err) {
-      // 后端热重载 / spawn 瞬时卡顿会导致握手成功但会话无响应：
-      // 断开重连一次再试，仍失败才报错
-      console.warn("[writing] create_session failed, retrying once:", err);
-      this.disconnect();
-      for (const url of candidates) {
-        try {
-          await this.connect(url);
-          break;
-        } catch {
-          if (url === candidates[candidates.length - 1]) {
-            throw err instanceof Error ? err : new Error(String(err));
-          }
-        }
-      }
-      await this.createSession(agent);
-    }
-
-    this.started = true;
-    this.ws!.send(
-      JSON.stringify({
-        type: "writing_request",
-        config,
-        ...(uploadId ? { uploadId } : {}),
-      }),
-    );
+    this.sessionId = uploadId;
+    this.materials = [];
+    await this.runTurn(composePrompt(config, this.materials), "draft", config, false);
   }
 
-  /** 成稿后局部微调：发修订指令，服务端重新导出后经 writing_done 推送新成稿 */
+  /** 局部微调：同一会话里追加一轮，上下文由 agent 自己保留 */
   revise(instruction: string, config: WritingConfig): void {
-    if (!this.ws || !this.started) {
-      throw new Error("连接未就绪，请重新生成后再试");
+    if (!this.sessionId) {
+      this.emit({ _event: "writing_error", message: "会话不存在，请重新开始" });
+      return;
     }
-    this.ws.send(
-      JSON.stringify({
-        type: "writing_revise",
-        instruction,
-        config,
-      }),
-    );
+    const prompt = [
+      "请在上一版定稿的基础上做这一处修改，其余内容保持不动。",
+      `修改要求：${instruction}`,
+      "仍然用 <final-doc> 与 </final-doc> 包裹完整定稿全文。",
+    ].join("\n");
+    void this.runTurn(prompt, "revise", config, true, instruction);
   }
 
-  /** 撤销最近一次修改：服务端回退到上一版成稿并重新导出（无 LLM 调用） */
-  undo(config: WritingConfig): void {
-    if (!this.ws || !this.started) {
-      throw new Error("连接未就绪，请重新生成后再试");
-    }
-    this.ws.send(JSON.stringify({ type: "writing_undo", config }));
-  }
-
-  /** 发送 create_session 并等待 session_created（20s 超时） */
-  private createSession(agent: "claude" | "opencode"): Promise<void> {
-    this.ws!.send(
-      JSON.stringify({
-        type: "create_session",
-        agent: agent === "opencode" ? "opencode" : "claude-code",
-        mode: "all",
-      }),
-    );
-    return this.waitSessionCreated();
-  }
-
-  /** 当前会话 id（create_session / join_session 成功后可用） */
-  sessionId = "";
-
-  /** 连接是否可用（WS OPEN 且已完成会话握手）；断线后微调/撤销需先重连 */
-  isConnected(): boolean {
-    return this.ws?.readyState === WebSocket.OPEN && this.started;
-  }
-
-  /** 重连已有写作会话（join_session）：刷新后恢复微调/撤销能力 */
-  async resume(sessionId: string): Promise<void> {
-    const jwt = await getWritingJwt();
-    const candidates = buildWsCandidates(jwt ?? "");
-    if (candidates.length === 0) throw new Error("无法建立连接");
-    for (const url of candidates) {
-      try {
-        await this.connect(url);
-        break;
-      } catch (err) {
-        if (url === candidates[candidates.length - 1]) {
-          throw new Error("无法连接 AI 服务（ agentic-search 未启动？）");
-        }
-        console.warn("[writing] ws candidate failed:", url, err);
-      }
-    }
-    this.ws!.send(JSON.stringify({ type: "join_session", session_id: sessionId }));
-    await this.waitSessionCreated();
-    this.started = true;
-  }
-
-  private waitSessionCreated(): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("创建会话超时")), 20_000);
-      const off = this.onEvent((data) => {
-        if (data._event === "session_created") {
-          clearTimeout(timer);
-          off();
-          const sid = (data as { session?: { id?: string } }).session?.id;
-          if (sid) this.sessionId = sid;
-          resolve();
-        } else if (data._event === "error") {
-          clearTimeout(timer);
-          off();
-          reject(new Error(String(data.message ?? "创建会话失败")));
-        }
-      });
+  /** 撤销：会话上下文由 agent 持有，本版不提供回滚 */
+  undo(_config?: WritingConfig): void {
+    this.emit({
+      _event: "writing_error",
+      message: "当前版本不支持撤销：会话上下文由 agent 保留，请直接用「局部微调」说明要改回什么",
     });
   }
 
-  private connect(url: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      const ws = new WebSocket(url);
-      const timer = setTimeout(() => {
-        if (!settled) {
-          settled = true;
-          try {
-            ws.close();
-          } catch { /* ignore */ }
-          reject(new Error("连接超时"));
-        }
-      }, 8_000);
-
-      ws.onopen = () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        this.ws = ws;
-        this.attach(ws);
-        resolve();
-      };
-      ws.onerror = () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        reject(new Error("连接失败"));
-      };
-    });
-  }
-
-  private attach(ws: WebSocket): void {
-    ws.onmessage = (evt) => {
-      try {
-        const data = JSON.parse(evt.data as string) as WritingEvent;
-        // 后端消息只带 type 字段：镜像到 _event，统一所有事件分发（createSession / handleEvent）
-        if (!data._event) {
-          const t = (data as Record<string, unknown>).type;
-          if (typeof t === "string") data._event = t;
-        }
-        this.emit(data);
-      } catch {
-        // 非 JSON 消息忽略
-      }
-    };
-    ws.onclose = () => {
-      this.ws = null;
-      if (!this.intentionallyClosed) this.closeListener?.();
-    };
-  }
-
-  /** 停止写作（终止管线与 agent 进程） */
+  /** 停止：断开连接（服务端据此回收进程树），再补一发显式停止兜底 */
   stop(): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      if (this.started) {
-        try {
-          this.ws.send(JSON.stringify({ type: "stop_writing" }));
-        } catch { /* ignore */ }
-      }
-      this.intentionallyClosed = true;
-      try {
-        this.ws.close();
-      } catch { /* ignore */ }
-    }
-    this.ws = null;
+    this.controller?.abort();
+    if (this.sessionId) void stopAiSession(this.sessionId);
+    this.emit({ _event: "writing_stopped" });
   }
 
-  disconnect(): void {
-    this.intentionallyClosed = true;
-    try {
-      this.ws?.close();
-    } catch { /* ignore */ }
-    this.ws = null;
+  /**
+   * 接回一个已存在的会话（页面刷新 / 从「最近使用」打开时调用）。
+   * 这里只记住 id：校验留给下一个回合（服务端 session 不存在会明确报错）。
+   */
+  async resume(sessionId: string): Promise<void> {
+    this.sessionId = sessionId;
   }
+
+  /** 只断连接，保留会话（页面切文件时用） */
+  disconnect(): void {
+    this.controller?.abort();
+    this.controller = null;
+    this.streaming = false;
+    this.sessionId = null;
+    this.closeListener?.();
+  }
+}
+
+// ── 历史 / 恢复（最简实现：会话列表即历史）──────────────────────────────────
+
+export interface MyWritingDoc {
+  /** 会话 id（本应用里就是 AI 会话 id） */
+  sessionId: string;
+  name: string;
+  /** ISO 时间串（页面用 Date.parse 处理） */
+  updatedAt: string;
+  config?: WritingConfig;
 }
 
 export interface RestoredWriting {
   restored: boolean;
   title?: string;
   content?: string;
-  files?: { name: string; url: string }[];
+  files?: { name: string; url: string; kind?: string }[];
+  /** 修订次数（本版没有阶段流水线，恒为 0） */
   revisions?: number;
-  /** 完整现场：五阶段流卡片（draft/review/rewrite/audit/finalize/revise），与前端 StreamItem 对齐 */
-  items?: {
-    key: string;
-    kind: string;
-    title: string;
-    status: "done";
-    round?: number;
-    text: string;
-    thinking: string;
-    tools: string[];
-  }[];
+  items?: unknown[];
 }
 
-/** 刷新后恢复成稿：按会话 id 取最新版本栈成稿并重新导出（无 LLM 调用） */
+/** 恢复现场：本版没有阶段流水线留底，交给上层按「重新开始」处理 */
 export async function restoreWriting(
-  sessionId: string,
-  config: WritingConfig,
-): Promise<RestoredWriting | null> {
-  const headers = await authHeaders();
-  const res = await fetch(`${API_BASE}/writing/restore`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...headers },
-    body: JSON.stringify({ session: sessionId, config }),
-    signal: AbortSignal.timeout(120_000),
-  });
-  if (!res.ok) throw new Error(`恢复失败 (${res.status})`);
-  return (await res.json()) as RestoredWriting;
+  _session?: string,
+  _config?: WritingConfig,
+): Promise<RestoredWriting> {
+  return { restored: false };
 }
 
-export interface MyWritingDoc {
-  sessionId: string;
-  name: string;
-  updatedAt: string;
-  config: WritingConfig | null;
-}
-
-/** 服务端「最近使用」：当前用户有成稿的写作文档（入库存储，跨浏览器一致） */
 export async function listMyWritingSessions(): Promise<MyWritingDoc[]> {
-  const headers = await authHeaders();
-  const res = await fetch(`${API_BASE}/writing/my-sessions`, {
-    headers,
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!res.ok) throw new Error(`获取文档列表失败 (${res.status})`);
-  const body = (await res.json()) as { docs?: MyWritingDoc[] };
-  return body.docs ?? [];
+  const sessions = await listAiSessions();
+  return sessions.map((s) => ({
+    sessionId: s.id,
+    name: s.title || "未命名稿件",
+    updatedAt: new Date((s.updated_at ?? Date.now() / 1000) * 1000).toISOString(),
+  }));
 }
 
-/** 删除服务端写作会话（跨浏览器列表同步移除） */
 export async function deleteMyWritingSession(sessionId: string): Promise<void> {
-  const headers = await authHeaders();
-  const res = await fetch(`${API_BASE}/sessions/${sessionId}`, {
-    method: "DELETE",
-    headers,
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!res.ok && res.status !== 404) throw new Error(`删除失败 (${res.status})`);
+  await deleteAiSession(sessionId);
 }

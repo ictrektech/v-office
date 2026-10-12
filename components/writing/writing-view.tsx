@@ -84,8 +84,6 @@ import {
   WritingClient,
   restoreWriting,
   checkWritingService,
-  API_BASE,
-  authHeaders,
   listMyWritingSessions,
   deleteMyWritingSession,
   type MyWritingDoc,
@@ -205,7 +203,7 @@ export function WritingView() {
   const [serverDocs, setServerDocs] = useState<MyWritingDoc[]>([]);
   /** 服务端列表加载中：加载期间空列表显示加载态而非"无最近文件" */
   const [serverDocsLoading, setServerDocsLoading] = useState(true);
-  /** agentic-search 写作服务可用性：null 检测中 / false 不可用（提示安装） */
+  /** 本应用 AI 服务可用性（设置里配好网关/密钥后可用）：null 检测中 / false 不可用 */
   const [serviceOk, setServiceOk] = useState<boolean | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -256,7 +254,7 @@ export function WritingView() {
     // 服务端「最近使用」：入库存储，换浏览器登录也能看到自己的文档。
     // 挂载瞬间 JWT 兑换可能未完成 → 首次请求会失败，自动重试直到成功
     loadServerDocsRef.current();
-    // 服务可用性探测：agentic-search 不在则提示用户安装/启动（200 = 可用）
+    // 服务可用性探测：后端 /api/v1/ai/health（pi 可用 + 已配密钥）
     void checkWritingService().then(setServiceOk);
   }, []);
 
@@ -923,27 +921,20 @@ export function WritingView() {
   const handleSaveToMyDocs = useCallback(
     async (): Promise<{ ok: boolean; message: string }> => {
       const name = activeName;
-      const sessionId = name ? sessionsRef.current[name]?.sessionId : undefined;
+      const content = name ? sessionsRef.current[name]?.result?.content : undefined;
       const config = name ? configsRef.current.get(name) : undefined;
-      if (!sessionId || !config) {
-        return { ok: false, message: "缺少写作会话或配置，请重新生成后再试" };
+      if (!content || !config) {
+        return { ok: false, message: "还没有成稿，先生成后（或微调后）再保存" };
       }
       try {
-        const resp = await fetch(`${API_BASE}/writing/deliver`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...(await authHeaders()) },
-          body: JSON.stringify({ session: sessionId, config }),
-        });
-        const data = (await resp.json().catch(() => null)) as
-          | { error?: string; files?: { name: string; url: string; kind: string }[] }
-          | null;
-        if (!resp.ok) {
-          return { ok: false, message: String(data?.error ?? `保存失败（HTTP ${resp.status}）`) };
-        }
-        const n = data?.files?.length ?? 0;
-        return { ok: true, message: `已保存 ${n} 个文件到我的文档` };
+        // 成稿是 Markdown：直接写进应用私有存储（我的文档），
+        // 需要 Word 版式时用页面上的导出按钮走编辑器链路
+        const safe = (config.title || config.docType || "公文").replace(/[\\/:*?"<>|]/g, "_");
+        const fileName = `${safe}.md`;
+        await saveStoredFile(fileName, new TextEncoder().encode(content));
+        return { ok: true, message: `已保存到我的文档：${fileName}` };
       } catch (err) {
-        return { ok: false, message: err instanceof Error ? err.message : "网络错误" };
+        return { ok: false, message: err instanceof Error ? err.message : "保存失败" };
       }
     },
     [activeName],
@@ -1467,13 +1458,13 @@ export function WritingView() {
               智能 · 高效 · 专业
             </span>
           </div>
-          {/* 服务不可用提示：agentic-search 探测失败（与 HybRAG 未安装同款式） */}
+          {/* 服务不可用提示：本应用 AI 服务探测失败（去设置里配模型网关） */}
           {serviceOk === false && (
             <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-[#F0C6C6] bg-[#FDF3F3] px-4 py-3">
               <div className="flex items-center gap-2.5 min-w-0">
                 <span className="w-2 h-2 shrink-0 rounded-full bg-[#D93025]" />
                 <span className="text-[13px] text-[#8A2A22] truncate">
-                  AI 写作服务不可用——请先安装并启动 agentic-search 应用
+                  AI 写作服务不可用——请在「设置 → AI 模型」里配置网关、模型与密钥
                 </span>
               </div>
               <button

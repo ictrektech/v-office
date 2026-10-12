@@ -1,3 +1,12 @@
 fastapi>=0.115
 uvicorn>=0.30
 httpx>=0.27
+# 材料解析（AI 不接触用户文件，材料由服务端解析成文本注入 prompt）：
+# docx / pdf / pptx / xlsx 各一个轻量库；老格式（.doc/.rtf/.odt）走镜像里的 LibreOffice
+python-docx>=1.1.0
+pypdf>=4.2.0
+python-pptx>=0.6.21
+openpyxl>=3.1.2
+# 技能包的 docx_to_md.py 用它把 docx 转回 Markdown（编辑器改完的稿子回灌草稿）。
+# 纯 Python、无原生依赖；少了它回读接口会退回 502 而不是静默丢内容。
+mammoth>=1.8.0

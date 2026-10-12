@@ -202,6 +202,31 @@ export function hideCollaboraWelcomeScreen(
   };
 }
 
+/**
+ * 本地开发：把编辑器地址的 host 对齐成页面自己的 host。
+ *
+ * coolwsd 是**按请求 Host 推导 CSP 的 `frame-ancestors`** 的（实测：Host 为
+ * `localhost` 时给出 `localhost:*`，为 `127.0.0.1` 时给出 `127.0.0.1:*`）。
+ * 页面在 `localhost:3004`、编辑器却在 `127.0.0.1:9980` 时，浏览器会直接拒绝渲染
+ * 这个 iframe（表现为「文档打不开」「编辑器白屏」）。两边都是回环地址时对齐一下。
+ *
+ * 只在回环地址之间生效：生产是网关同源前缀（`/app/<app-id>/cool/...`），
+ * 域名不是回环，这里原样返回。
+ */
+export function alignCollaboraHost(editorUrl: string): string {
+  const loopback = (h: string) => h === "localhost" || h === "127.0.0.1";
+  try {
+    const url = new URL(editorUrl);
+    const pageHost = window.location.hostname;
+    if (url.hostname !== pageHost && loopback(url.hostname) && loopback(pageHost)) {
+      url.hostname = pageHost;
+    }
+    return url.toString();
+  } catch {
+    return editorUrl;
+  }
+}
+
 export interface CollaboraSession {
   /** 浏览器直接加载的编辑器地址（含 WOPISrc 与 access_token） */
   editorUrl: string;

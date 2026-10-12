@@ -20,14 +20,6 @@ import {
   type SharedTarget,
 } from "@/utils/vos/storage";
 
-// AI 助手插件统一走 VOS 网关形态路径（本地 dev 由 next.config.ts rewrite 映射到
-// public/ai-assistant 镜像副本，VOS 由平台网关路由到 agentic-search 应用）。
-// 注意：不要用 process.env.NEXT_PUBLIC_BASE_PATH 在此分支——worker 编译时该
-// 常量不可靠（会被折叠成本地分支，VOS 分支字符串不进 bundle）。
-// 该路径必须以 config.json 结尾——sdkjs 用「来源目录 + url」拼接插件地址。
-export const AGENTIC_SEARCH_PLUGIN_CONFIG =
-  "/app/com.ictrek.agentic-search/plugins/agentic-search/config.json";
-
 function mergeBuffers(buffers: Uint8Array[]) {
   const totalLength = buffers.reduce((acc, buffer) => acc + buffer.length, 0);
   const mergedBuffer = new Uint8Array(totalLength);
@@ -886,22 +878,11 @@ export class EditorServer {
         ? names
         : names.filter((name) => name !== "ai");
       const configs = localNames.map(getPluginConfigUrl);
-      // AI 助手插件：sdkjs 用「元素字符串截到 config.json」当插件目录，
-      // 再以该目录 + config.url 拼 iframe src。元素若是相对路径，目录也
-      // 是相对的，最终会被编辑器文档的 <base>（指向 ziziyi CDN）解析，
-      // 导致插件白屏——所以这里必须 push 带 origin 的绝对 URL。
-      // config 里的 url 保持相对（见 agentic-search 插件 config.json），
-      // api 网关由插件 index.js 自动嗅探，不在 url 上传参。
-      // 软依赖：VOS 中未安装 agentic-search 时 config.json 会 404，
-      // sdk 加载插件失败会连带把整个编辑器拖垮（「使用文档出错」，
-      // 全部功能瘫痪）。注入前先探测可用性，不可用直接跳过——
-      // 缺的只是 AI 助手插件入口，文档编辑本身不受影响。
-      const agenticUrl = AGENTIC_SEARCH_PLUGIN_CONFIG.startsWith("http")
-        ? AGENTIC_SEARCH_PLUGIN_CONFIG
-        : u.origin + AGENTIC_SEARCH_PLUGIN_CONFIG;
-      if (await probeUrl(agenticUrl)) {
-        configs.push(agenticUrl);
-      }
+      // 说明（2026-10）：编辑器内的「AI 助手」插件原来由 agentic-search 应用托管，
+      // 已随该应用一起下线——本应用现在自带 AI 服务（server/ai.py + Pi），
+      // 入口在「专利工作台 / AI 写作」两个栏目里，编辑器不再注入外部插件。
+      // 好处是少一个跨应用软依赖：以前 agentic-search 没装或 config.json 404，
+      // sdkjs 加载插件失败会把整个编辑器拖垮（「使用文档出错」）。
       return Response.json({ url: "", pluginsData: configs, autostart: [] });
     }
 
@@ -909,15 +890,3 @@ export class EditorServer {
   }
 }
 
-/** 探测 URL 可用性（2s 超时）：不可达时返回 false，让调用方跳过注入 */
-async function probeUrl(url: string): Promise<boolean> {
-  try {
-    const resp = await fetch(url, {
-      cache: "no-store",
-      signal: AbortSignal.timeout(2_000),
-    });
-    return resp.ok;
-  } catch {
-    return false;
-  }
-}

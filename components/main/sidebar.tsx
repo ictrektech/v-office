@@ -8,6 +8,7 @@ import {
   Info,
   Settings,
   Code2,
+  Scale,
 } from "lucide-react";
 import { useExtracted } from "next-intl";
 import { cn } from "@/lib/utils";
@@ -48,6 +49,12 @@ export function Sidebar({ pathname }: SidebarProps) {
   const sidebarItems = [
     { id: "open", label: t("Open"), icon: FolderOpen, href: "/" },
     { id: "template", label: t("Template"), icon: Layout, href: "/template" },
+    {
+      id: "patent",
+      label: t({ id: "Patents", message: "Patents" }),
+      icon: Scale,
+      href: "/patent",
+    },
     {
       id: "api",
       label: isChinese ? "API 接入指南" : "API Guide",
@@ -111,7 +118,10 @@ export function Sidebar({ pathname }: SidebarProps) {
 
       <nav className="flex-1 px-4 py-2 space-y-1">
         {sidebarItems.map((item) => {
-          const isActive = pathname === item.href;
+          // 栏目内还有子页（如 /patent/studio），子页也要保持高亮
+          const isActive =
+            pathname === item.href ||
+            (item.href !== "/" && pathname.startsWith(`${item.href}/`));
           return (
             <Link
               key={item.id}

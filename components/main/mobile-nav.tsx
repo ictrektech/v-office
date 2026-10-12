@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useExtracted } from "next-intl";
-import { FolderOpen, Layout, Settings, Info, Code2 } from "lucide-react";
+import { FolderOpen, Layout, Settings, Info, Code2, Scale } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface MobileNavProps {
@@ -20,6 +20,12 @@ export function MobileNav({ pathname, className }: MobileNavProps) {
       label: t("Template"),
       icon: Layout,
       href: "/template",
+    },
+    {
+      id: "patent",
+      label: t({ id: "Patents", message: "Patents" }),
+      icon: Scale,
+      href: "/patent",
     },
     {
       id: "api",

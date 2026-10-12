@@ -267,6 +267,46 @@ async def current_username(request: Request) -> str:
         return username
 
 
+# ── AI（Pi agent 托管）─────────────────────────────────────────────────────
+# AI 路由直接挂在同一个服务里：复用上面这套 VOS 鉴权、同一份 DATA_ROOT 挂载，
+# 也就不用新增容器/镜像/Traefik 路由（对外仍是 /api/com.ictrek.v-office/api/v1/ai/*）。
+from ai import init_ai, router as ai_router  # noqa: E402  需在 app 与鉴权函数就绪后装配
+
+
+def save_user_document(username: str, name: str, data: bytes) -> str:
+    """把 AI 成稿写进用户「我的文档」。
+
+    AI 侧不碰文件系统：它只把 Markdown 交出来，写哪个用户、叫什么名字、
+    怎么原子落盘都由这里决定——沿用编辑器保存那条同样的私有存储链路
+    （safe_target 校验名字与用户目录，_atomic_write 半途失败不会截断旧文件）。
+    """
+    target = safe_target(username, name)
+    _atomic_write(target, data)
+    return target.name
+
+
+def read_user_document(username: str, name: str) -> bytes:
+    """把用户「我的文档」里的文件读出来交给 AI 侧。
+
+    用途是把用户在编辑器（Collabora）里手改过的 docx 回读成草稿——不读这份，
+    agent 眼里就永远是它自己写的那一版，用户改的内容会被下一轮覆盖。
+    名字同样过 safe_target（拒绝路径穿越，且只在本用户目录内）。
+    """
+    target = safe_target(username, name)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    return target.read_bytes()
+
+
+init_ai(
+    username_resolver=current_username,
+    log=LOG,
+    save_document=save_user_document,
+    read_document=read_user_document,
+)
+app.include_router(ai_router, prefix="/api/v1/ai")
+
+
 def storage_dir(username: str) -> Path:
     root = DATA_ROOT.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -275,6 +315,15 @@ def storage_dir(username: str) -> Path:
     resolved = directory.resolve()
     if resolved.parent != root:
         raise HTTPException(status_code=403, detail="invalid user storage directory")
+    # 用户目录只对自己（root 服务进程）开放：AI agent 是按用户降权跑的，
+    # 一旦这里可读，A 的 agent 就能直接读 B 的文档——隔离靠文件权限兜底，
+    # 不能只靠「AI 那边不给越界路径」。
+    try:
+        os.chmod(resolved, 0o700)
+        if os.geteuid() == 0:
+            os.chmod(root, 0o711)  # 允许穿过，不允许列举有哪些用户
+    except OSError:
+        LOG.warning("chmod failed for %s", resolved)
     return resolved
 
 
@@ -2483,7 +2532,6 @@ async def wopi_session(
     """
     username = await current_username(request)
     want_write = request.query_params.get("edit", "1") not in ("0", "false")
-
     if source:
         if not path:
             raise HTTPException(status_code=400, detail="missing path")

@@ -100,6 +100,15 @@ x-v-office-storage-base: &v-office-storage-base
     # 部署天然互不相同；写死成公共值等于所有服务器共用同一密钥。
     # 生产建议在安装配置里显式填写——固定值可让重启不影响在途编辑会话。
     V_OFFICE_WOPI_SECRET: ${V_OFFICE_WOPI_SECRET:-}
+    # --- AI（Pi agent）：应用自带的 AI 服务，不再依赖 agentic-search 应用 ---
+    # 工作目录落在应用私有存储的隐藏目录（不会出现在「我的文档」里）
+    V_OFFICE_AI_HOME: /data/.ai
+    # 技能随镜像打进 /opt/patent-skills（见 server/skills/README.md）
+    V_OFFICE_AI_SKILLS: /opt/patent-skills
+    V_OFFICE_AI_PI_BIN: /usr/local/bin/pi
+    # 全局并发上限与默认网关；模型/密钥由用户在「设置 → AI 模型」里自己配
+    V_OFFICE_AI_CONCURRENCY: ${V_OFFICE_AI_CONCURRENCY:-3}
+    V_OFFICE_AI_BASE_URL: ${V_OFFICE_AI_BASE_URL:-https://ai.ictrek.com/v1}
   volumes:
     # 应用私有存储：每个用户读写自己名下的 documents/<用户名>/
     - ${VOS_APP_STORAGE_PATH}/documents:/data

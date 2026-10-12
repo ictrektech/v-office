@@ -11,6 +11,7 @@ import {
   ShieldOff,
 } from "lucide-react";
 import * as Illustration from "@/components/svg";
+import { AiSettingsSection } from "@/components/main/ai-settings-section";
 import { useExtracted } from "next-intl";
 import { cn } from "@/lib/utils";
 import { LocaleName, LocaleExtend, Locale, Language } from "@ziziyi/utils";
@@ -274,6 +275,9 @@ export function SettingsView() {
             ))}
           </div>
         </section>
+
+        {/* AI Section：模型网关、密钥与资源护栏（专利撰写室 / AI 写作共用） */}
+        <AiSettingsSection />
       </div>
 
       <div className="p-6 bg-yellow-50/50 dark:bg-yellow-900/10 border border-yellow-100 dark:border-yellow-900/30 rounded-2xl">

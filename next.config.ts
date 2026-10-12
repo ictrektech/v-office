@@ -22,22 +22,11 @@ const nextConfig: NextConfig = {
   // /app/<app-id>/ after stripping that prefix) inject this at build time so
   // /_next/* asset URLs resolve; unset it and behavior stays upstream-default.
   basePath: process.env.NEXT_PUBLIC_BASE_PATH || "",
-  // 本地 dev：AI 助手插件（编辑器内 iframe）与 v-office 同源请求 agentic-search，
-  // 经此转发到本地 agentic-search dev server，避免跨源 CORS。
-  // VOS 部署不走这里（output: export 且由平台网关路由 /api/<app-id>）。
+  // 本地 dev 反向代理：把应用自己的前缀转发到本地服务。
+  // VOS 部署不走这里（output: export 且由平台网关按应用路由）。
   async rewrites() {
     if (process.env.NEXT_PUBLIC_BASE_PATH) return [];
     return [
-      {
-        source: "/api/com.ictrek.agentic-search/:path*",
-        destination: "http://localhost:5273/api/com.ictrek.agentic-search/:path*",
-      },
-      {
-        // AI 助手插件统一走 VOS 形态路径（见 utils/editor/server.ts），
-        // 本地 dev 映射到 public/ai-assistant 镜像副本。
-        source: "/app/com.ictrek.agentic-search/plugins/agentic-search/:path*",
-        destination: "/ai-assistant/:path*",
-      },
       {
         // HybRAG（知识库）本地 dev 转发到本地 VOS 网关，由网关按应用路由；
         // 知识库安装探测（isHybragInstalled）与业务请求共用此路径。
@@ -45,8 +34,9 @@ const nextConfig: NextConfig = {
         destination: "http://localhost:3002/app/com.ictrek.hybrag/:path*",
       },
       {
-        // 本地 dev：文档存储接口转发到本地 storage 服务（server/main.py，
-        // V_OFFICE_AUTH_DISABLED=1 启动）。编辑器 doc↔docx 转换也走这里。
+        // 本地 dev：文档存储 + AI 接口转发到本地 storage 服务（server/main.py，
+        // V_OFFICE_AUTH_DISABLED=1 启动）。AI 走 /api/v1/ai/*（见 server/ai.py），
+        // 与文档存储同一个服务、同一个前缀，编辑器转换也走这里。
         source: "/api/com.ictrek.v-office/:path*",
         destination: `${
           process.env.V_OFFICE_DEV_STORAGE_URL || "http://localhost:5000"
