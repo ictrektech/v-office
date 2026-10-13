@@ -5,7 +5,7 @@ import { useExtracted } from "next-intl";
 import { Check, CornerDownRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ReviewIssue } from "@/utils/patent/types";
-import { vp, VP_SEVERITY } from "./visual-spec";
+import { vp, VP_SEVERITY } from "../studio/visual-spec";
 
 /** 严重度文案（静态分支：next-intl 提取器要求消息可静态分析）。 */
 function SeverityLabel({ severity }: { severity: ReviewIssue["severity"] }) {

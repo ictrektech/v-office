@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useExtracted } from "next-intl";
 import { ArrowLeft, Scale } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { vp } from "./visual-spec";
+import { vp } from "../studio/visual-spec";
 
 export type PatentNavKey = "studio" | "review" | "spec";
 

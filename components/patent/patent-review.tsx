@@ -22,10 +22,10 @@ import type { AiDraft } from "@/utils/ai/client";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { MOCK_DOC_BLOCKS, MOCK_REVIEW_ISSUES } from "@/utils/patent/mock";
 import { getPatentTemplates } from "@/utils/patent/templates";
-import { DocCanvas } from "./doc-canvas";
+import { DocCanvas } from "../studio/doc-canvas";
 import { PatentHeader } from "./patent-header";
 import { ReviewComments } from "./review-comments";
-import { vp } from "./visual-spec";
+import { vp } from "../studio/visual-spec";
 
 type ReviewTab = "document" | "requirements";
 

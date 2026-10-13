@@ -5,7 +5,7 @@ import { ArrowLeft, Scale, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { usePageTitle } from "@/hooks/use-page-title";
-import { vp, VP_SPEC_GROUPS } from "./visual-spec";
+import { vp, VP_SPEC_GROUPS } from "../studio/visual-spec";
 
 /** 视觉规范页：把 `visual-spec.ts` 的令牌渲染成可查看的规范。 */
 export function VisualSpecView() {

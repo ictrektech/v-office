@@ -1,0 +1,889 @@
+[
+ {
+  "id": "redhead-file",
+  "name": "红头文件",
+  "description": "红头文件：红头版式（GB/T 9704-2012），按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "redhead",
+  "redhead": true,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "红头文件.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "发文机关标志",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "发文字号",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "标题",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f4",
+    "label": "主送机关",
+    "hint": "",
+    "required": false
+   },
+   {
+    "key": "f5",
+    "label": "正文（缘由/事项/要求）",
+    "hint": "",
+    "required": false
+   },
+   {
+    "key": "f6",
+    "label": "落款与成文日期",
+    "hint": "",
+    "required": false
+   }
+  ]
+ },
+ {
+  "id": "notice",
+  "name": "通知",
+  "description": "通知：红头版式（GB/T 9704-2012），按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "redhead",
+  "redhead": true,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "通知.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "标题",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "主送机关",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "缘由",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f4",
+    "label": "事项（分条：谁/做什么/时限）",
+    "hint": "",
+    "required": false
+   },
+   {
+    "key": "f5",
+    "label": "执行要求",
+    "hint": "",
+    "required": false
+   },
+   {
+    "key": "f6",
+    "label": "落款",
+    "hint": "",
+    "required": false
+   }
+  ]
+ },
+ {
+  "id": "request",
+  "name": "请示",
+  "description": "请示：红头版式（GB/T 9704-2012），按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "redhead",
+  "redhead": true,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "请示.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "标题",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "主送机关",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "请示缘由",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f4",
+    "label": "请求事项（一文一事）",
+    "hint": "",
+    "required": false
+   },
+   {
+    "key": "f5",
+    "label": "结语（妥否，请批示）",
+    "hint": "",
+    "required": false
+   },
+   {
+    "key": "f6",
+    "label": "落款",
+    "hint": "",
+    "required": false
+   }
+  ]
+ },
+ {
+  "id": "reply",
+  "name": "批复",
+  "description": "批复：红头版式（GB/T 9704-2012），按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "redhead",
+  "redhead": true,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "批复.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "标题",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "主送机关",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "引叙（来文标题+文号）",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f4",
+    "label": "答复意见",
+    "hint": "",
+    "required": false
+   },
+   {
+    "key": "f5",
+    "label": "落款",
+    "hint": "",
+    "required": false
+   }
+  ]
+ },
+ {
+  "id": "work-report",
+  "name": "工作报告",
+  "description": "工作报告：红头版式（GB/T 9704-2012），按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "report",
+  "redhead": true,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "工作报告.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "标题",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "主送机关",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "工作情况",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f4",
+    "label": "成效与数据",
+    "hint": "",
+    "required": false
+   },
+   {
+    "key": "f5",
+    "label": "问题",
+    "hint": "",
+    "required": false
+   },
+   {
+    "key": "f6",
+    "label": "下一步安排",
+    "hint": "",
+    "required": false
+   },
+   {
+    "key": "f7",
+    "label": "落款",
+    "hint": "",
+    "required": false
+   }
+  ]
+ },
+ {
+  "id": "research-report",
+  "name": "调研报告",
+  "description": "调研报告：红头版式（GB/T 9704-2012），按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "report",
+  "redhead": true,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "调研报告.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "标题",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "主送机关",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "基本情况",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f4",
+    "label": "分析（问题+原因）",
+    "hint": "",
+    "required": false
+   },
+   {
+    "key": "f5",
+    "label": "对策建议",
+    "hint": "",
+    "required": false
+   },
+   {
+    "key": "f6",
+    "label": "落款",
+    "hint": "",
+    "required": false
+   }
+  ]
+ },
+ {
+  "id": "speech",
+  "name": "领导讲话稿",
+  "description": "领导讲话稿：按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "misc",
+  "redhead": false,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "讲话稿.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "称谓",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "开场（缘起）",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "主体（一/二/三分点）",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f4",
+    "label": "结尾（号召/要求）",
+    "hint": "",
+    "required": false
+   }
+  ]
+ },
+ {
+  "id": "minutes",
+  "name": "会议纪要",
+  "description": "会议纪要：红头版式（GB/T 9704-2012），按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "redhead",
+  "redhead": true,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "会议纪要.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "概览（时间/地点/主持/出席）",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "议定事项（分条：责任方+时限）",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "其他事项",
+    "hint": "",
+    "required": true
+   }
+  ]
+ },
+ {
+  "id": "feasibility",
+  "name": "可行性研究报告",
+  "description": "可行性研究报告：按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "report",
+  "redhead": false,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "可研报告.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "概述",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "必要性",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "技术方案比选",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f4",
+    "label": "投资与效益",
+    "hint": "",
+    "required": false
+   },
+   {
+    "key": "f5",
+    "label": "风险",
+    "hint": "",
+    "required": false
+   },
+   {
+    "key": "f6",
+    "label": "结论",
+    "hint": "",
+    "required": false
+   }
+  ]
+ },
+ {
+  "id": "project-proposal",
+  "name": "项目立项建议书",
+  "description": "项目立项建议书：按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "report",
+  "redhead": false,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "立项建议书.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "项目概况",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "必要性",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "建设内容",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f4",
+    "label": "投资估算",
+    "hint": "",
+    "required": false
+   },
+   {
+    "key": "f5",
+    "label": "预期效益",
+    "hint": "",
+    "required": false
+   }
+  ]
+ },
+ {
+  "id": "implementation",
+  "name": "工作/实施方案",
+  "description": "工作/实施方案：按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "misc",
+  "redhead": false,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "实施方案.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "总体要求（指导思想+目标）",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "主要任务（分条：责任单位+时限）",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "保障措施",
+    "hint": "",
+    "required": true
+   }
+  ]
+ },
+ {
+  "id": "work-summary",
+  "name": "工作总结",
+  "description": "工作总结：按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "misc",
+  "redhead": false,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "工作总结.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "工作回顾",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "成效数据",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "不足",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f4",
+    "label": "下一步",
+    "hint": "",
+    "required": false
+   }
+  ]
+ },
+ {
+  "id": "debriefing",
+  "name": "述职报告",
+  "description": "述职报告：按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "misc",
+  "redhead": false,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "述职报告.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "履职情况",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "成效",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "问题与原因",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f4",
+    "label": "改进打算",
+    "hint": "",
+    "required": false
+   }
+  ]
+ },
+ {
+  "id": "briefing",
+  "name": "汇报材料",
+  "description": "汇报材料：按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "misc",
+  "redhead": false,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "汇报材料.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "结论先行",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "展开（数据+事例）",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "需决策/支持事项",
+    "hint": "",
+    "required": true
+   }
+  ]
+ },
+ {
+  "id": "rules",
+  "name": "管理制度/办法",
+  "description": "管理制度/办法：按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "misc",
+  "redhead": false,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "管理制度.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "总则（目的/依据/适用范围）",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "分则（第×条管理要求）",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "附则",
+    "hint": "",
+    "required": true
+   }
+  ]
+ },
+ {
+  "id": "bulletin",
+  "name": "工作简报",
+  "description": "工作简报：按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "misc",
+  "redhead": false,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "工作简报.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "标题（概括）",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "正文（何时/何地/何事/结果）",
+    "hint": "",
+    "required": true
+   }
+  ]
+ },
+ {
+  "id": "policy-brief",
+  "name": "政策解读材料",
+  "description": "政策解读材料：按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "misc",
+  "redhead": false,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "政策解读.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "出台背景",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "主要内容（对照原文条款）",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "影响与执行口径",
+    "hint": "",
+    "required": true
+   }
+  ]
+ },
+ {
+  "id": "press",
+  "name": "新闻宣传稿",
+  "description": "新闻宣传稿：按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "misc",
+  "redhead": false,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "新闻稿.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "标题（实题）",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "导语（5W）",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "主体",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f4",
+    "label": "背景",
+    "hint": "",
+    "required": false
+   }
+  ]
+ },
+ {
+  "id": "chronicle",
+  "name": "大事记",
+  "description": "大事记：按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "misc",
+  "redhead": false,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "大事记.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "时间",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "事项（一条一行，正序）",
+    "hint": "",
+    "required": true
+   }
+  ]
+ },
+ {
+  "id": "open-letter",
+  "name": "倡议书/公开信",
+  "description": "倡议书/公开信：按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "misc",
+  "redhead": false,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "倡议书.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "对象称谓",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "倡议事项（分条，号召式）",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "落款",
+    "hint": "",
+    "required": true
+   }
+  ]
+ },
+ {
+  "id": "stats-report",
+  "name": "数据统计报表",
+  "description": "数据统计报表：按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "misc",
+  "redhead": false,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "统计报表.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "表题",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "表头（指标/单位/口径）",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "数据行",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f4",
+    "label": "表注",
+    "hint": "",
+    "required": false
+   }
+  ]
+ },
+ {
+  "id": "meeting-plan",
+  "name": "会议方案",
+  "description": "会议方案：按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "misc",
+  "redhead": false,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "会议方案.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "会议名称",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "时间地点",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "议程",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f4",
+    "label": "参加范围",
+    "hint": "",
+    "required": false
+   },
+   {
+    "key": "f5",
+    "label": "材料保障",
+    "hint": "",
+    "required": false
+   },
+   {
+    "key": "f6",
+    "label": "会务分工",
+    "hint": "",
+    "required": false
+   }
+  ]
+ },
+ {
+  "id": "experience",
+  "name": "经验交流材料",
+  "description": "经验交流材料：按公文规范五阶段协作（起草/审查/推稿/定稿）。",
+  "kind": "misc",
+  "redhead": false,
+  "skillEntry": "skills/writing/prompts/draft",
+  "outputs": [
+   "经验交流.docx"
+  ],
+  "fields": [
+   {
+    "key": "f1",
+    "label": "做法（可复制）",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f2",
+    "label": "成效",
+    "hint": "",
+    "required": true
+   },
+   {
+    "key": "f3",
+    "label": "体会",
+    "hint": "",
+    "required": true
+   }
+  ]
+ }
+]

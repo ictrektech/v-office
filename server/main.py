@@ -2384,7 +2384,29 @@ def parse_wopi_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="invalid WOPI token")
 
 
+_WOPI_VERSION_SEG = re.compile(r"^\.v\d+$")
+
+
+def strip_wopi_version(name: str) -> str:
+    """摘掉 WOPISrc 里的会话版本段（`…/.v3/文件名`）：只为换 docKey 逼 Collabora
+    重新读盘，不是真目录；鉴权与落点解析前先摘掉，盘上路径不变。"""
+    parts = name.split("/")
+    if len(parts) >= 2 and _WOPI_VERSION_SEG.match(parts[-2]):
+        parts.pop(-2)
+    return "/".join(parts)
+
+
+def with_wopi_version(name: str, version: int) -> str:
+    """给文档名插入会话版本段（version <= 0 原样返回）。"""
+    if version <= 0:
+        return name
+    parts = name.split("/")
+    parts.insert(max(0, len(parts) - 1), f".v{version}")
+    return "/".join(parts)
+
+
 def _wopi_identity(request: Request, name: str) -> dict:
+    name = strip_wopi_version(name)
     token = request.query_params.get("access_token") or ""
     if not token:
         auth = request.headers.get("Authorization", "")
@@ -2409,6 +2431,7 @@ def _wopi_target(data: dict, name: str) -> Path:
     私有文档的 name 形如 "<用户>/<文件名>"（见 wopi_session）。前缀必须与令牌里的
     用户一致，否则就成了"拿着 A 的令牌去读写 B 的文件"。
     """
+    name = strip_wopi_version(name)
     source = str(data.get("s") or "")
     if source:
         return source_target(source, name)
@@ -2532,6 +2555,14 @@ async def wopi_session(
     """
     username = await current_username(request)
     want_write = request.query_params.get("edit", "1") not in ("0", "false")
+    # 会话版本：Collabora 用 WOPISrc（docKey）判定「是不是同一份文档」，同一个键会
+    # 复用内存里那份文档——服务端改写完文件，编辑器看到的还是旧内容。带版本号就能
+    # 开出一份重新读盘的会话。版本段放在**路径**里（…/.v3/文件名）：coolwsd 是无脑往
+    # WOPISrc 后拼 ?access_token= 的，WOPISrc 自带查询串会把 token 拼坏（实测 401）。
+    try:
+        version = max(0, int(request.query_params.get("version", "0") or 0))
+    except ValueError:
+        version = 0
     if source:
         if not path:
             raise HTTPException(status_code=400, detail="missing path")
@@ -2540,7 +2571,7 @@ async def wopi_session(
             raise HTTPException(status_code=404, detail="file not found")
         if target.suffix.lower() not in BROWSABLE_SUFFIXES:
             raise HTTPException(status_code=400, detail="unsupported file type")
-        doc_name = path
+        doc_name = with_wopi_version(path, version)
         # 公共盘文档**人人可写**：这里绝不能因为"已经有人在编辑"就把后来者降级成只读。
         #
         # 曾经这么做过（怕"两个会话各持一份内存副本、各整份保存，后保存的抹掉先保存的"），
@@ -2549,7 +2580,7 @@ async def wopi_session(
         # （互见光标、共用一份副本、保存由 coolwsd 串行化）。当时那道降级唯一的效果，就是
         # 把"多人协同"变成"一个人能改、其余人只能看"，把功能直接废掉了。
         can_write = want_write and SHARED_WRITABLE
-        token = issue_wopi_token(username, doc_name, can_write, source)
+        token = issue_wopi_token(username, strip_wopi_version(doc_name), can_write, source)
     else:
         if not name:
             raise HTTPException(status_code=400, detail="missing name")
@@ -2564,9 +2595,11 @@ async def wopi_session(
         # 反过来，**同一个人的两次打开刻意共用同一个标识**：同一账号在两处登录进入同一个
         # 会话、改动互相可见，这是正常且需要的（本来就是他自己的同一份文件）。所以这里
         # 只带用户名，不带"每次打开都不同"的会话标识。
-        doc_name = f"{username}/{name}"
+        # 令牌里存**规范名**（不带版本段）：coolwsd 回调时带的路径带版本段，
+        # _wopi_identity 会先摘掉再与令牌比对；WOPISrc 用版本化名字换 docKey。
+        doc_name = with_wopi_version(f"{username}/{name}", version)
         can_write = want_write
-        token = issue_wopi_token(username, doc_name, can_write)
+        token = issue_wopi_token(username, strip_wopi_version(doc_name), can_write)
         LOG.info("private session user=%s doc=%s", username, doc_name)
 
     # 两类文档的路径都保留正斜杠：{name:path} 路由本来就能接住多级路径，而私有

@@ -95,7 +95,7 @@ export interface AgentChange {
   before?: string;
   after: string;
   reason: string;
-  status: "proposed" | "accepted" | "rejected";
+  status: "proposed" | "applied" | "accepted" | "rejected";
 }
 
 export interface AgentMessage {

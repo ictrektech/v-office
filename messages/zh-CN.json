@@ -257,5 +257,10 @@
   "Use this template": "用此模板起草",
   "Editor view": "编辑器",
   "Draft view": "草稿",
-  "Editor save hint": "在编辑器里按 Ctrl+S 保存，AI 才能读到你的改动；AI 改完稿后编辑器会自动刷新。"
+  "Editor save hint": "AI 改稿会直接写进这个文档（不刷新）；按 Ctrl+S 保存，AI 才能读到你的改动。",
+  "Upload material": "上传材料",
+  "Upload template": "上传模板",
+  "for AI to analyze": "供 AI 分析",
+  "follow its structure": "按它的结构写",
+  "Draft template": "成稿模板"
 }

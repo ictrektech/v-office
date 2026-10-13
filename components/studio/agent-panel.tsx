@@ -7,15 +7,17 @@ import {
   AlertTriangle,
   Check,
   CornerDownLeft,
+  FileText,
   Loader2,
   Paperclip,
+  Plus,
   Sparkles,
   Square,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ChatMessage, ChangeLike } from "@/hooks/use-ai-chat";
-import type { AiMaterial } from "@/utils/ai/client";
+import type { AiMaterial, AiTemplate } from "@/utils/ai/client";
 import { vp } from "./visual-spec";
 
 /** 把 <patch>/<final-doc> 等契约标记从展示文本里去掉（改动会以变更卡呈现） */
@@ -54,6 +56,7 @@ function OperationLabel({ operation }: { operation: ChangeLike["operation"] }) {
 export function AgentPanel({
   messages,
   materials,
+  template,
   streaming,
   blocked,
   sessionReady,
@@ -62,16 +65,21 @@ export function AgentPanel({
   onSend,
   onStop,
   onUpload,
+  onUploadTemplate,
+  onRemoveTemplate,
   onAcceptChange,
   onRejectChange,
   onAcceptAll,
   onSave,
   onRemoveMaterial,
   initialPrompt,
+  panelWidth,
   className,
 }: {
   messages: ChatMessage[];
   materials: AiMaterial[];
+  /** 当前会话的成稿模板（null = 未上传，按技能包默认结构写） */
+  template?: AiTemplate | null;
   streaming: boolean;
   blocked: string | null;
   sessionReady: boolean;
@@ -80,6 +88,8 @@ export function AgentPanel({
   onSend: (text: string, options?: { anchor?: string; selection?: string; save?: boolean }) => void;
   onStop: () => void;
   onUpload?: (file: File) => Promise<AiMaterial>;
+  onUploadTemplate?: (file: File) => Promise<AiTemplate>;
+  onRemoveTemplate?: () => void;
   onAcceptChange: (key: string) => void;
   onRejectChange: (key: string) => void;
   onAcceptAll: () => void;
@@ -87,6 +97,8 @@ export function AgentPanel({
   onRemoveMaterial?: (name: string) => void;
   /** 起手话术（模板带进来的），只在输入框还空着时填入 */
   initialPrompt?: string;
+  /** 面板宽度（Tailwind 宽度类，如 `w-[32rem]`）；不传用默认 23rem */
+  panelWidth?: string;
   className?: string;
 }) {
   const t = useExtracted();
@@ -94,7 +106,9 @@ export function AgentPanel({
   const [draft, setDraft] = useState("");
   const [uploading, setUploading] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const templateRef = useRef<HTMLInputElement>(null);
 
   // 起手话术只在输入框还空着时填入，绝不覆盖用户已经打的字
   useEffect(() => {
@@ -109,29 +123,47 @@ export function AgentPanel({
     onSend(text);
   };
 
-  const pickFile = async (file: File | undefined) => {
-    if (!file || !onUpload) return;
+  /** 选完文件先收起菜单；材料与模板走同一套「上传中」提示 */
+  const resetInput = (input: HTMLInputElement | null) => {
+    if (input) input.value = "";
+  };
+
+  const pickFile = async (file: File | undefined, kind: "material" | "template") => {
+    setAddOpen(false);
+    if (!file) return;
     setUploading(file.name);
     setNotice(null);
     try {
-      const parsed = await onUpload(file);
-      setNotice(
-        parsed.parseError
-          ? `${parsed.name}：${parsed.parseError}`
-          : `${t({ id: "Material parsed", message: "Material parsed" })}：${parsed.name} · ${parsed.chars} ${t({ id: "chars", message: "chars" })}`,
-      );
+      if (kind === "template") {
+        if (!onUploadTemplate) return;
+        const uploaded = await onUploadTemplate(file);
+        setNotice(
+          uploaded.parseError
+            ? uploaded.parseError
+            : `模板已生效：之后每轮都按《${uploaded.name}》的栏目成文`,
+        );
+      } else {
+        if (!onUpload) return;
+        const parsed = await onUpload(file);
+        setNotice(
+          parsed.parseError
+            ? `${parsed.name}：${parsed.parseError}`
+            : `${t({ id: "Material parsed", message: "Material parsed" })}：${parsed.name} · ${parsed.chars} ${t({ id: "chars", message: "chars" })}`,
+        );
+      }
     } catch (err) {
-      setNotice(`${t({ id: "Upload failed", message: "Upload failed" })}：${String(err)}`);
+      setNotice(`上传失败：${String(err)}`);
     } finally {
       setUploading(null);
-      if (fileRef.current) fileRef.current.value = "";
+      resetInput(kind === "template" ? templateRef.current : fileRef.current);
     }
   };
 
   return (
     <aside
       className={cn(
-        "flex w-[23rem] shrink-0 flex-col border-l border-[#E7EAF0] bg-white dark:border-white/10 dark:bg-[#101010]",
+        "flex shrink-0 flex-col border-l border-[#E7EAF0] bg-white dark:border-white/10 dark:bg-[#101010]",
+        panelWidth ?? "w-[23rem]",
         className,
       )}
     >
@@ -369,30 +401,75 @@ export function AgentPanel({
                   className={cn(vp.input, "resize-none")}
                 />
                 <div className="mt-1.5 flex items-center gap-2">
-                  {onUpload ? (
-                    <>
+                  {/* 添加材料：一个按钮两项——「上传材料」是给 AI 分析的内容来源，
+                      「上传模板」是 AI 成文时遵循的结构蓝图 */}
+                  {onUpload || onUploadTemplate ? (
+                    <div className="relative">
                       <input
                         ref={fileRef}
                         type="file"
                         className="hidden"
-                        onChange={(e) => void pickFile(e.target.files?.[0])}
+                        onChange={(e) => void pickFile(e.target.files?.[0], "material")}
+                      />
+                      <input
+                        ref={templateRef}
+                        type="file"
+                        className="hidden"
+                        accept=".docx,.doc,.md,.markdown,.txt"
+                        onChange={(e) => void pickFile(e.target.files?.[0], "template")}
                       />
                       <button
                         type="button"
-                        onClick={() => fileRef.current?.click()}
+                        onClick={() => setAddOpen((v) => !v)}
                         disabled={!!uploading}
                         className={cn(vp.btnText, "gap-1")}
                       >
                         {uploading ? (
                           <Loader2 className="h-3 w-3 animate-spin" />
                         ) : (
-                          <Paperclip className="h-3 w-3" />
+                          <Plus className="h-3 w-3" />
                         )}
                         {uploading
                           ? t({ id: "Uploading…", message: "Uploading…" })
                           : t({ id: "Attach material", message: "Attach material" })}
                       </button>
-                    </>
+                      {addOpen ? (
+                        <>
+                          {/* 透明底：点菜单外面就收起 */}
+                          <button
+                            type="button"
+                            aria-hidden="true"
+                            tabIndex={-1}
+                            className="fixed inset-0 z-10 cursor-default"
+                            onClick={() => setAddOpen(false)}
+                          />
+                          <div className="absolute bottom-8 left-0 z-20 w-52 rounded-xl border border-[#E7EAF0] bg-white py-1 shadow-lg dark:border-white/10 dark:bg-[#181818]">
+                            <button
+                              type="button"
+                              onClick={() => fileRef.current?.click()}
+                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12.5px] text-[#334155] transition hover:bg-[#F5F7FB] dark:text-slate-300 dark:hover:bg-white/5"
+                            >
+                              <Paperclip className="h-3.5 w-3.5" />
+                              {t({ id: "Upload material", message: "Upload material" })}
+                              <span className="ml-auto text-[10.5px] text-[#94A3B8]">
+                                {t({ id: "for AI to analyze", message: "for AI to analyze" })}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => templateRef.current?.click()}
+                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12.5px] text-[#334155] transition hover:bg-[#F5F7FB] dark:text-slate-300 dark:hover:bg-white/5"
+                            >
+                              <FileText className="h-3.5 w-3.5" />
+                              {t({ id: "Upload template", message: "Upload template" })}
+                              <span className="ml-auto text-[10.5px] text-[#94A3B8]">
+                                {t({ id: "follow its structure", message: "follow its structure" })}
+                              </span>
+                            </button>
+                          </div>
+                        </>
+                      ) : null}
+                    </div>
                   ) : null}
                   <button type="button" onClick={onSave} className={cn(vp.btnText, "gap-1")}>
                     {t({ id: "Save to my documents", message: "Save to My Documents" })}
@@ -432,7 +509,13 @@ export function AgentPanel({
           </div>
         </>
       ) : (
-        <AnalysisTab messages={messages} materials={materials} onRemoveMaterial={onRemoveMaterial} />
+        <AnalysisTab
+          messages={messages}
+          materials={materials}
+          template={template}
+          onRemoveMaterial={onRemoveMaterial}
+          onRemoveTemplate={onRemoveTemplate}
+        />
       )}
     </aside>
   );
@@ -442,11 +525,16 @@ export function AgentPanel({
 function AnalysisTab({
   messages,
   materials,
+  template,
   onRemoveMaterial,
+  onRemoveTemplate,
 }: {
   messages: ChatMessage[];
   materials: AiMaterial[];
+  /** 当前会话的成稿模板（null = 未上传） */
+  template?: AiTemplate | null;
   onRemoveMaterial?: (name: string) => void;
+  onRemoveTemplate?: () => void;
 }) {
   const t = useExtracted();
   const notes = messages.flatMap((m) => m.notes ?? []);
@@ -463,6 +551,28 @@ function AnalysisTab({
 
       <div className={cn(vp.subCard, "p-3")}>
         <span className={vp.label}>{t({ id: "Materials", message: "Materials" })}</span>
+        {template ? (
+          <div className="mt-1.5 flex items-start gap-2 rounded-lg border border-[#BBF7D0] bg-[#F6FEF9] px-2.5 py-2">
+            <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#16A34A]" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[12px] font-medium text-[#15803D]">{template.name}</p>
+              <p className="text-[11px] text-[#94A3B8]">
+                {template.parseError
+                  ? template.parseError
+                  : `${t({ id: "Draft template", message: "Draft template" })} · ${template.chars} ${t({ id: "chars", message: "chars" })}${template.truncated ? " · 已截断" : ""}`}
+              </p>
+            </div>
+            {onRemoveTemplate ? (
+              <button
+                type="button"
+                onClick={() => onRemoveTemplate()}
+                className={vp.btnText}
+              >
+                {t({ id: "Remove", message: "Remove" })}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {materials.length ? (
           <ul className="mt-1.5 space-y-1.5">
             {materials.map((m) => (

@@ -30,6 +30,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import os
 import re
@@ -47,6 +48,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from extract_text import extract_text
+from docx_revise import apply_revisions as revise_docx
 
 # ── 装配点（由 main.py 注入）───────────────────────────────────────────────
 
@@ -450,6 +452,72 @@ def materials_context(username: str, sid: str) -> str:
     return body
 
 
+# ── 模板：用户上传的成稿模板（结构蓝图，不是材料）────────────────────────────
+#
+# 和材料同款思路：服务端当场解析成文本，原文件不落进 agent 够得到的地方，agent
+# 每轮只在 prompt 里收到一段「按这个结构成文」。区别在语义——材料是「写什么」，
+# 模板是「按什么结构写」：公司交底书模板、四件套模板，传上来就照着出稿。
+
+def _templates_dir(username: str) -> Path:
+    d = AI_HOME / "templates" / username
+    d.mkdir(parents=True, exist_ok=True)
+    if os.geteuid() == 0:
+        try:
+            os.chmod(d, 0o700)
+        except OSError:
+            pass
+    return d
+
+
+def _template_path(username: str, sid: str) -> Path:
+    return _templates_dir(username) / f"{_safe_sid(sid)}.json"
+
+
+def load_template(username: str, sid: str) -> dict:
+    try:
+        data = json.loads(_template_path(username, sid).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_template(username: str, sid: str, info: dict) -> None:
+    path = _template_path(username, sid)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    tmp.replace(path)
+
+
+def public_template(info: dict) -> Optional[dict]:
+    """模板的对外视图：全文不回给前端（可能很长），摘要就够画界面。"""
+    if not info:
+        return None
+    return {
+        "name": info.get("name"),
+        "chars": info.get("chars") or 0,
+        "truncated": bool(info.get("truncated")),
+        "parse_error": info.get("parse_error"),
+        "uploaded_at": info.get("uploaded_at"),
+    }
+
+
+def template_context(username: str, sid: str) -> str:
+    """模板文本 → prompt 里的「成文结构」提示段。"""
+    info = load_template(username, sid)
+    text = (info.get("text") or "").strip()
+    if not text:
+        return ""
+    return (
+        f"# 成稿模板（用户上传：{info.get('name') or '模板'}）\n\n"
+        "严格按下面这个模板的结构与栏目成文：栏目一个不缺、顺序一致、"
+        "标题措辞沿用模板；模板里没有的内容不要自己加栏目。\n\n" + text
+    )
+
+
 # ── 草稿：服务端持有的当前稿（patch 的作用对象）────────────────────────────
 #
 # 稿子不放在 agent 的工作目录里：agent 只“看”到带编号的文本、只“说”改成什么，
@@ -510,6 +578,25 @@ def draft_to_prompt(draft: dict) -> str:
     return body
 
 
+def _strip_leading_duplicate_heading(text: str, heading: str) -> str:
+    """抹掉块文本开头重复写了一遍的本块标题。
+
+    AI 的 patch 常把整段 markdown**连标题一起**交回来（anchor 指向某块、text 以
+    `## 该块标题` 开头），apply 之后块里就存着「标题 + 又一遍标题」，渲染时
+    docx 和编辑器里都会把标题出两遍（实测过：一个标题出现三次）。渲染前抹掉，
+    存的是什么不管——docx、编辑器 HTML、喂给模型的上下文全都因此干净。
+    """
+    if not heading:
+        return text
+    lines = text.lstrip().splitlines()
+    if not lines:
+        return text
+    m = re.match(r"^#{1,6}\s+(.*)$", lines[0].strip())
+    if m and m.group(1).strip() == heading.strip():
+        return "\n".join(lines[1:]).lstrip()
+    return text
+
+
 def draft_to_markdown(draft: dict) -> str:
     blocks = draft.get("blocks") or []
     title = (draft.get("title") or "").strip()
@@ -518,8 +605,9 @@ def draft_to_markdown(draft: dict) -> str:
         heading = (block.get("heading") or "").strip()
         if heading:
             parts.append(f"## {heading}")
-        if (block.get("text") or "").strip():
-            parts.append(block["text"].strip())
+        text = _strip_leading_duplicate_heading((block.get("text") or "").strip(), heading)
+        if text:
+            parts.append(text)
     return "\n\n".join(parts).strip()
 
 
@@ -681,6 +769,10 @@ def _build_turn_prompt(
         if materials:
             parts.append("# 参考材料（服务端已解析为文本，你无需读取任何文件）\n\n" + materials)
 
+    template = template_context(username, sid)
+    if template:
+        parts.append(template)
+
     parts.append(OUTPUT_CONTRACT)
     return "\n\n".join(p for p in parts if p)
 
@@ -697,25 +789,89 @@ def public_draft(draft: dict) -> dict:
     }
 
 
-def _save_draft_to_docs(username: str, sid: str, draft: dict) -> Optional[str]:
-    """成稿写进用户「我的文档」——由服务端做主，agent 碰不到文件系统。"""
+async def _save_draft_docx(username: str, sid: str, draft: dict) -> Optional[str]:
+    """成稿写进用户「我的文档」——**产出 Word**，Markdown 只留在会话目录当工作稿。
+
+    交付物必须是 docx（用技能包里确定的 md_to_docx.py 转换，不经过模型）；转换
+    失败时退回 md，宁可给个能用的文件也别静默丢稿。
+    """
     if _save_document is None:
         return None
     markdown = draft_to_markdown(draft)
     if not markdown:
         return None
     title = (draft.get("title") or "未命名稿件").strip() or "未命名稿件"
+    data: Optional[bytes] = None
+    try:
+        data = await _convert_docx(
+            tool="md_to_docx.py", src=markdown.encode("utf-8"),
+            src_suffix=".md", out_suffix=".docx", root=session_dir(username, sid),
+        )
+    except Exception as exc:  # noqa: BLE001 转换挂了不该吞掉这一轮结果
+        LOG.warning("ai: docx convert crashed user=%s sid=%s: %s", username, sid, exc)
+    if data:
+        try:
+            name = _safe_name(f"{title}.docx")
+        except HTTPException:
+            name = "未命名稿件.docx"
+        try:
+            saved = _save_document(username, name, data)
+            LOG.info("ai: saved docx to my-docs user=%s sid=%s name=%s bytes=%d",
+                     username, sid, saved, len(data))
+            return saved
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("ai: save docx failed user=%s sid=%s: %s", username, sid, exc)
     try:
         name = _safe_name(f"{title}.md")
     except HTTPException:
         name = "未命名稿件.md"
     try:
         saved = _save_document(username, name, markdown.encode("utf-8"))
-        LOG.info("ai: saved to my-docs user=%s sid=%s name=%s", username, sid, saved)
+        LOG.warning("ai: docx unavailable, saved md instead user=%s sid=%s name=%s",
+                    username, sid, saved)
         return saved
     except Exception as exc:  # noqa: BLE001 落盘失败不该吞掉这一轮结果
         LOG.warning("ai: save to my-docs failed user=%s sid=%s: %s", username, sid, exc)
         return None
+
+
+async def _save_draft_docx_revised(
+    username: str, sid: str, old_draft: dict, new_draft: dict, resolved: list[dict]
+) -> Optional[str]:
+    """把 AI 的改动以 **Word 修订（track changes）** 打进「我的文档」里那份 docx。
+
+    base 就是当前交付物（标题.docx）：在它上面打 w:ins/w:del，Collabora 重载后
+    用户用 Word 原生审阅接受/拒绝——不再需要「点接受 → 重写文件 → 刷新编辑器」。
+    base 不存在或一条修订都没打上时，退回整篇重出（无修订标记）。
+    """
+    if _save_document is None:
+        return None
+    title = (new_draft.get("title") or old_draft.get("title") or "未命名稿件").strip() or "未命名稿件"
+    try:
+        base_name = _safe_name(f"{title}.docx")
+    except HTTPException:
+        base_name = "未命名稿件.docx"
+    base: Optional[bytes] = None
+    if _read_document is not None:
+        try:
+            base = _read_document(username, base_name)
+        except Exception:  # noqa: BLE001 还没导出过就当没有
+            base = None
+    if base:
+        try:
+            data, applied = revise_docx(base, resolved)
+        except Exception as exc:  # noqa: BLE001 修订失败不影响出稿
+            LOG.warning("ai: revise docx crashed user=%s sid=%s: %s", username, sid, exc)
+            data, applied = None, 0
+        if data and applied > 0:
+            try:
+                saved = _save_document(username, base_name, data)
+                LOG.info("ai: saved tracked docx user=%s sid=%s name=%s revisions=%d",
+                         username, sid, saved, applied)
+                return saved
+            except Exception as exc:  # noqa: BLE001
+                LOG.warning("ai: save tracked docx failed user=%s sid=%s: %s", username, sid, exc)
+    return await _save_draft_docx(username, sid, new_draft)
 
 
 # ── 工具：进程树终止 ────────────────────────────────────────────────────────
@@ -1168,7 +1324,7 @@ async def _run_turn(
            "parsed": parse_model_output(text)}
 
 
-def _land_turn(
+async def _land_turn(
     username: str, sid: str, parsed: dict, *, save: bool, autosave: bool = True,
     anchor: str = "",
 ) -> list[dict]:
@@ -1207,7 +1363,7 @@ def _land_turn(
             save_draft(username, sid, draft)
             events.append({"type": "draft", "draft": public_draft(draft)})
             if autosave:
-                saved = _save_draft_to_docs(username, sid, draft)
+                saved = await _save_draft_docx(username, sid, draft)
                 if saved:
                     events.append({"type": "saved", "name": saved})
             return events
@@ -1233,7 +1389,7 @@ def _land_turn(
             save_draft(username, sid, new_draft)
             events.append({"type": "draft", "draft": public_draft(new_draft)})
             if autosave:
-                saved = _save_draft_to_docs(username, sid, new_draft)
+                saved = await _save_draft_docx(username, sid, new_draft)
                 if saved:
                     events.append({"type": "saved", "name": saved})
         if skipped:
@@ -1244,6 +1400,9 @@ def _land_turn(
         return events
 
     blocks = draft.get("blocks") or []
+    # 给前端看的变更摘要（旧值供展示/定位）；改动**立即生效**到草稿——
+    # 审阅发生在编辑器的 Word 修订里，不再需要「点接受」这一步。
+    resolved: list[dict] = []
     for patch in patches:
         anchor = str(patch.get("anchor") or "")
         before = ""
@@ -1251,7 +1410,27 @@ def _land_turn(
             before = blocks[int(anchor) - 1].get("text") or ""
         events.append({
             "type": "patch",
-            "patch": {**patch, "before": before, "status": "proposed"},
+            "patch": {**patch, "before": before, "status": "applied"},
+        })
+        resolved.append({
+            "op": (patch.get("op") or "replace").lower(),
+            "before": before,
+            "after": before,
+            "text": str(patch.get("text") or ""),
+        })
+
+    new_draft, applied, skipped = apply_patches(draft, patches)
+    if applied:
+        save_draft(username, sid, new_draft)
+        events.append({"type": "draft", "draft": public_draft(new_draft)})
+        if autosave:
+            saved = await _save_draft_docx_revised(username, sid, draft, new_draft, resolved)
+            if saved:
+                events.append({"type": "saved", "name": saved})
+    if skipped:
+        events.append({
+            "type": "warn",
+            "message": "；".join(f"第 {s.get('anchor')} 段未改：{s.get('reason')}" for s in skipped),
         })
     return events
 
@@ -1313,7 +1492,7 @@ async def stream_turn(
                 if final is not None:
                     parsed = final.pop("parsed", None) or {}
                     try:
-                        for event in _land_turn(
+                        for event in await _land_turn(
                             username, sid, parsed, save=save, autosave=autosave, anchor=anchor
                         ):
                             yield event
@@ -1550,7 +1729,7 @@ async def apply_many(request: Request, sid: str, body: ApplyRequest) -> JSONResp
     else:
         draft, applied, skipped = apply_patches(draft, body.patches)
     save_draft(username, sid, draft)
-    saved = _save_draft_to_docs(username, sid, draft) if body.save else None
+    saved = await _save_draft_docx(username, sid, draft) if body.save else None
     LOG.info(
         "ai: applied user=%s sid=%s applied=%d skipped=%d saved=%s",
         username, sid, len(applied), len(skipped), saved or "-",
@@ -1570,7 +1749,7 @@ async def save_to_docs(request: Request, sid: str) -> JSONResponse:
     draft = load_draft(username, sid)
     if not draft.get("blocks"):
         raise HTTPException(status_code=400, detail="草稿还是空的，先生成内容")
-    saved = _save_draft_to_docs(username, sid, draft)
+    saved = await _save_draft_docx(username, sid, draft)
     if not saved:
         raise HTTPException(status_code=502, detail="保存到「我的文档」失败")
     return JSONResponse({"saved": saved, "draft": public_draft(draft)})
@@ -1622,10 +1801,14 @@ async def _convert_docx(
     if script is None:
         LOG.warning("ai: skill tool missing name=%s skills=%s", tool, SKILLS_DIR)
         return None
-    # 工作目录放在会话目录下：技能脚本会随手写临时文件，别落到系统 /tmp 之外的地方
-    with tempfile.TemporaryDirectory(dir=str(root)) as tmp:
-        src_path = Path(tmp) / f"in{src_suffix}"
-        out_path = Path(tmp) / f"out{out_suffix}"
+    # 工作目录放在会话目录下（每用户可见、也方便排查）。刻意不用
+    # TemporaryDirectory：它的清理是整棵树 rmtree，会撞上宿主环境的删除护栏；
+    # 这里只删单个文件 + 移除空目录，稳。
+    tmp = root / f".conv-{uuid.uuid4().hex}"
+    tmp.mkdir(parents=True, exist_ok=True)
+    src_path = tmp / f"in{src_suffix}"
+    out_path = tmp / f"out{out_suffix}"
+    try:
         src_path.write_bytes(src)
         code, tail = await _run_tool(
             [sys.executable, str(script), "-i", str(src_path), "-o", str(out_path)],
@@ -1635,6 +1818,16 @@ async def _convert_docx(
             LOG.warning("ai: %s failed code=%s tail=%s", tool, code, tail)
             return None
         return out_path.read_bytes()
+    finally:
+        for f in (src_path, out_path):
+            try:
+                f.unlink()
+            except OSError:
+                pass
+        try:
+            tmp.rmdir()
+        except OSError:
+            pass  # 里面还有技能脚本留下的东西就留着，下次同名目录直接复用
 
 
 @router.post("/sessions/{sid}/docx")
@@ -1671,6 +1864,46 @@ async def export_docx(request: Request, sid: str) -> JSONResponse:
     saved = _save_document(username, name, data)
     LOG.info("ai: exported docx user=%s sid=%s name=%s bytes=%d", username, sid, saved, len(data))
     return JSONResponse({"saved": saved, "draft": public_draft(draft)})
+
+
+@router.get("/sessions/{sid}/draft-html")
+async def draft_html(request: Request, sid: str) -> JSONResponse:
+    """草稿 → HTML，供编辑器内嵌注入用（前端只粘贴，不自己渲染 Markdown）。
+
+    为什么绕「md→docx→mammoth」这一圈：md→docx 由技能脚本做，而它就是用户
+    最终拿到的那份 docx 的渲染器；mammoth 再把这份 docx 转成 HTML。前端早先
+    自己写过一个 markdown→HTML，结果两套渲染器各画各的——`**加粗**` 原样粘进
+    了文档、标题还重复。长相只以 docx 为准：这里给的就是「那份 docx 的 HTML 版」，
+    粘进编辑器后与 apply 写盘的内容完全一致。
+    """
+    username = await _user(request)
+    root = session_dir(username, sid)
+    draft = load_draft(username, sid)
+    markdown = draft_to_markdown(draft)
+    if not markdown:
+        # 与 /docx 同口径：空稿给一份只有标题的文档
+        title_only = (draft.get("title") or "").strip() or "未命名稿件"
+        markdown = f"# {title_only}\n"
+
+    data = await _convert_docx(
+        tool="md_to_docx.py", src=markdown.encode("utf-8"),
+        src_suffix=".md", out_suffix=".docx", root=root,
+    )
+    if not data:
+        raise HTTPException(status_code=502, detail="生成 docx 失败（技能脚本未就绪或超时）")
+
+    # mammoth 是同步 CPU 活（专利稿毫秒级），扔线程里别堵事件循环
+    try:
+        import mammoth
+
+        html = await asyncio.to_thread(
+            lambda: mammoth.convert_to_html(io.BytesIO(data)).value
+        )
+    except Exception as exc:  # noqa: BLE001 缺库/坏档都按「渲染不可用」报
+        LOG.warning("ai: mammoth failed user=%s sid=%s err=%s", username, sid, exc)
+        raise HTTPException(status_code=502, detail="docx 转 HTML 失败") from exc
+
+    return JSONResponse({"html": html, "draft": public_draft(draft)})
 
 
 def _clean_converted_markdown(text: str) -> str:
@@ -1837,6 +2070,63 @@ async def delete_material(request: Request, sid: str, name: str) -> JSONResponse
     return JSONResponse({"removed": name})
 
 
+@router.post("/sessions/{sid}/template")
+async def upload_template(
+    request: Request, sid: str, name: str = Query(default=""),
+) -> JSONResponse:
+    """上传成稿模板（docx/md/txt 均可）：服务端当场解析成文本，按会话保存。
+
+    与材料的区别：材料是「写什么」，模板是「按什么结构写」——每轮 prompt 都会
+    带上「严格按这个模板的栏目成文」。原文件同样不落进 agent 够得到的地方。
+    """
+    username = await _user(request)
+    session_dir(username, sid)
+    filename = _safe_name(name or "template.docx")
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="empty body")
+    if len(body) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="file too large")
+
+    with tempfile.TemporaryDirectory(prefix="voffice-ai-") as tmpdir:
+        staged = Path(tmpdir) / filename
+        staged.write_bytes(body)
+        parsed = await asyncio.to_thread(extract_text, staged, max_chars=MATERIAL_MAX_CHARS)
+
+    info = {
+        "name": parsed.get("name") or filename,
+        "chars": parsed.get("chars") or 0,
+        "truncated": bool(parsed.get("truncated")),
+        "parse_error": parsed.get("parse_error"),
+        "text": parsed.get("text") or "",
+        "uploaded_at": time.time(),
+    }
+    save_template(username, sid, info)
+    LOG.info(
+        "ai: template uploaded user=%s sid=%s name=%s chars=%d err=%s",
+        username, sid, info["name"], info["chars"], info["parse_error"] or "-",
+    )
+    return JSONResponse({"template": public_template(info)})
+
+
+@router.get("/sessions/{sid}/template")
+async def get_template(request: Request, sid: str) -> JSONResponse:
+    """当前会话的模板摘要（没有就是 null）。"""
+    username = await _user(request)
+    return JSONResponse({"template": public_template(load_template(username, sid))})
+
+
+@router.delete("/sessions/{sid}/template")
+async def delete_template(request: Request, sid: str) -> JSONResponse:
+    """撤掉模板：下一轮 prompt 就不再带结构约束。"""
+    username = await _user(request)
+    try:
+        _template_path(username, sid).unlink()
+    except OSError:
+        pass
+    return JSONResponse({"template": None})
+
+
 @router.get("/sessions/{sid}/state")
 async def session_state(request: Request, sid: str) -> JSONResponse:
     """一个会话的全部可见状态：材料（已解析）、草稿、进行中的回合。
@@ -1858,6 +2148,7 @@ async def session_state(request: Request, sid: str) -> JSONResponse:
             }
             for i in items
         ],
+        "template": public_template(load_template(username, sid)),
         "draft": public_draft(draft),
         "running": sid in _running,
     })

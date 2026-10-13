@@ -250,9 +250,12 @@ export async function fetchCollaboraSession(
   sharedTarget?: SharedTarget | null,
   lang?: string,
   retry = true,
+  /** 会话版本：>0 时服务端给 WOPISrc 换一个 docKey，Collabora 重新读盘（AI 改完刷新用） */
+  version = 0,
 ): Promise<CollaboraSession | null> {
   const token = await getVOSAccessToken();
   const params = [`name=${encodeURIComponent(name)}`, `edit=${edit ? 1 : 0}`];
+  if (version > 0) params.push(`version=${version}`);
   if (sharedTarget) {
     // 共享源文档：storage 按 source+path 解析原文件并签发对应 WOPI 令牌
     params.push(`source=${encodeURIComponent(sharedTarget.source)}`);
@@ -276,7 +279,7 @@ export async function fetchCollaboraSession(
 
   if (resp.status === 401 && retry) {
     clearVOSAuthCache();
-    return fetchCollaboraSession(name, edit, sharedTarget, lang, false);
+    return fetchCollaboraSession(name, edit, sharedTarget, lang, false, version);
   }
   if (!resp.ok) return null;
 
@@ -359,4 +362,167 @@ export async function fetchCollaboraStatus(): Promise<CollaboraState> {
   } catch {
     return "unknown";
   }
+}
+
+/**
+ * 往**活着的** Collabora 会话里发指令（postMessage 桥）。
+ *
+ * 这条桥让「AI 改稿直接出现在用户已打开的文档里」成为可能：不需要重载
+ * iframe——AI 的稿子以 HTML 粘进活文档（全选后粘 = 整篇替换），保存走
+ * WOPI 写回存储，用户眼看着文档变成新版。agent 因此就是个「坐在同一份
+ * 文档里的协作者」：它写完落盘，你刷新看到；你 Ctrl+S 落盘，它下轮读盘。
+ *
+ * 协议细节全部对照运行中 coolwsd 的前端源码核过（bundle.js 的
+ * PostMessageManager + global.js 的握手处理器）。四个坑都踩过，改之前先读：
+ * 1. **消息必须是 JSON 字符串**：global.js 的握手处理器是 `JSON.parse(s.data)`，
+ *    发对象会进 catch 被静默丢掉——现象是「消息发了，COOL 毫无反应」
+ * 2. **必须先握手**：不发 `Host_PostmessageReady`，COOL 一条回调都不回，
+ *    后续指令全被 `PostMessage ignored: not ready` 挡掉
+ * 3. **必须等 Document_Loaded**：`App_LoadingStatus` 的 Status 变为
+ *    `Document_Loaded` 之前发指令，会被 `not loaded yet` 挡掉
+ * 4. **Values 是对象**（如 `{Mimetype, Data}`），不是 Name/Value 数组
+ */
+
+/** 发一条指令给 COOL（内部统一转 JSON 字符串，见上方注释第 1 条）。 */
+function postToCollabora(iframe: HTMLIFrameElement, message: Record<string, unknown>): void {
+  try {
+    iframe.contentWindow?.postMessage(JSON.stringify(message), "*");
+  } catch {
+    /* iframe 已卸载（切页面/关标签）：忽略 */
+  }
+}
+
+/**
+ * 握手：告诉 COOL「宿主支持 postMessage」。
+ *
+ * iframe 一挂上就要发、只发一次；不发的话 COOL 既不会回消息、也不接受任何
+ * 指令（它的门卫会回 `PostMessage ignored: not ready`）。
+ */
+export function announceHostReady(iframe: HTMLIFrameElement): void {
+  postToCollabora(iframe, { MessageId: "Host_PostmessageReady", SendTime: Date.now() });
+}
+
+/**
+ * 等文档加载完成（`App_LoadingStatus` → `Document_Loaded`）。
+ *
+ * 没就绪就发注入指令会被 COOL 丢弃；超时返回 false，调用方应停在
+ * 「打开时加载的内容」上（那份内容本来就是最新导出的稿子，不会错）。
+ */
+export function waitForCollaboraDocumentLoaded(timeoutMs = 30_000): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      window.removeEventListener("message", onMessage);
+      resolve(ok);
+    };
+    const onMessage = (ev: MessageEvent) => {
+      let data: { MessageId?: string; Values?: { Status?: string } } | null = null;
+      try {
+        data =
+          typeof ev.data === "string"
+            ? JSON.parse(ev.data)
+            : (ev.data as { MessageId?: string; Values?: { Status?: string } });
+      } catch {
+        return;
+      }
+      if (data?.MessageId === "App_LoadingStatus" && data.Values?.Status === "Document_Loaded") {
+        finish(true);
+      }
+    };
+    const timer = window.setTimeout(() => finish(false), timeoutMs);
+    window.addEventListener("message", onMessage);
+  });
+}
+
+/** 发一条 UNO 命令（命令名带 `.uno:` 前缀，如 `.uno:SelectAll`）。 */
+export function sendUnoCommand(iframe: HTMLIFrameElement, command: string): void {
+  postToCollabora(iframe, {
+    MessageId: "Send_UNO_Command",
+    SendTime: Date.now(),
+    Values: { Command: command },
+  });
+}
+
+/**
+ * 把 HTML 粘进活文档：替换当前选区，无选区则插在光标处。
+ *
+ * Mimetype 用 text/html：标题/加粗/列表等格式都能带上（纯文本会丢格式）。
+ * 配合 `sendUnoCommand(iframe, ".uno:SelectAll")` 就是「整篇替换」——
+ * AI 重写稿子时走这条，用户眼看着文档整体变成新版（实测可用）。
+ */
+export function pasteIntoCollabora(iframe: HTMLIFrameElement, html: string): void {
+  postToCollabora(iframe, {
+    MessageId: "Action_Paste",
+    SendTime: Date.now(),
+    Values: { Mimetype: "text/html", Data: html },
+  });
+}
+
+/**
+ * 嵌入瘦身：藏掉菜单栏、标尺、状态栏、右侧样式面板。
+ *
+ * 这几个都是**无参数**消息（对照 bundle.js：`Hide_Menubar` → `uiManager.hideMenubar()`）。
+ * 三栏布局里中栏只有 ~800px 宽，菜单栏+标尺+样式面板白白吃掉三四十像素，藏掉后
+ * 正文宽度几乎翻倍，看起来也更像「你们的编辑器」而不是套了个网页壳。
+ *
+ * **必须早发**（实测踩过）：`hideMenubar()` 的实现是
+ * `if (_menubarShouldBeHidden = true, isMenubarHidden() || shouldUseNotebookbarMode()) return;`
+ * —— 它只设置标志位，真正隐藏发生在这之后 UI 重建时。文档就绪后再发，标志位
+ * 置上了但菜单栏已经建好，不会再隐藏。所以调用方要在 iframe 挂上时立刻发（可重复
+ * 几次，幂等）。侧边栏是就绪后才建的，反而适合就绪后再发。
+ *
+ * 要恢复就发对应的 `Show_*`（桥没暴露，需要时再加）。
+ */
+export function hideCollaboraChrome(iframe: HTMLIFrameElement): void {
+  for (const id of ["Hide_Menubar", "Hide_Ruler", "Hide_StatusBar"]) {
+    postToCollabora(iframe, { MessageId: id, SendTime: Date.now() });
+  }
+}
+
+/** 藏掉右侧样式/图库面板（它在文档就绪之后才建，得等就绪再发）。 */
+export function hideCollaboraSidebar(iframe: HTMLIFrameElement): void {
+  postToCollabora(iframe, { MessageId: "Hide_Sidebar", SendTime: Date.now() });
+}
+
+/** 让 Collabora 走一次保存（WOPI PutFile 写回存储）。 */
+export function saveCollabora(iframe: HTMLIFrameElement): void {
+  postToCollabora(iframe, { MessageId: "Action_Save", SendTime: Date.now() });
+}
+
+/**
+ * 保存并等待落盘（COOL 存完会把 `Doc_ModifiedStatus` 翻回 `{Modified:false}`）。
+ *
+ * 用途：AI 动手前先把用户没保存的改动冲进存储——不回读这些改动，下一轮
+ * AI 拿旧稿改，用户刚敲的内容就被覆盖了（协作者的基本规矩）。等不到信号
+ * 也按时返回，不把对话卡死。
+ */
+export function flushCollabora(iframe: HTMLIFrameElement, timeoutMs = 2500): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      window.removeEventListener("message", onMessage);
+      resolve();
+    };
+    const onMessage = (ev: MessageEvent) => {
+      let data: { MessageId?: string; Values?: { Modified?: boolean } } | null = null;
+      try {
+        data =
+          typeof ev.data === "string"
+            ? JSON.parse(ev.data)
+            : (ev.data as { MessageId?: string; Values?: { Modified?: boolean } });
+      } catch {
+        return;
+      }
+      if (data?.MessageId === "Doc_ModifiedStatus" && data.Values?.Modified === false) finish();
+    };
+    const timer = window.setTimeout(finish, timeoutMs);
+    window.addEventListener("message", onMessage);
+    saveCollabora(iframe);
+  });
 }

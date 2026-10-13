@@ -171,6 +171,8 @@ export interface AiDraft {
 
 export interface AiSessionState {
   materials: AiMaterial[];
+  /** 当前会话的成稿模板（用户上传；没有就是 null） */
+  template?: AiTemplate | null;
   draft: AiDraft;
   running: boolean;
 }
@@ -196,6 +198,36 @@ export async function uploadAiMaterial(
     { method: "POST", body: await file.arrayBuffer() },
   );
   return jsonOrThrow<AiMaterial>(resp);
+}
+
+/** 成稿模板的摘要（全文在服务端，这里只够画界面）。 */
+export interface AiTemplate {
+  name: string;
+  chars: number;
+  truncated?: boolean;
+  parseError?: string | null;
+  uploaded_at?: number;
+}
+
+/**
+ * 上传成稿模板（docx/md/txt）：服务端解析成文本，之后每轮 prompt 都带
+ * 「严格按这个模板的栏目成文」。材料是「写什么」，模板是「按什么结构写」。
+ */
+export async function uploadAiTemplate(
+  sid: string,
+  file: File,
+): Promise<AiTemplate> {
+  const resp = await aiFetch(
+    `/sessions/${encodeURIComponent(sid)}/template?name=${encodeURIComponent(file.name)}`,
+    { method: "POST", body: await file.arrayBuffer() },
+  );
+  const data = await jsonOrThrow<{ template: AiTemplate }>(resp);
+  return data.template;
+}
+
+/** 撤掉模板：下一轮起不再按它的结构成文。 */
+export async function deleteAiTemplate(sid: string): Promise<void> {
+  await aiFetch(`/sessions/${encodeURIComponent(sid)}/template`, { method: "DELETE" });
 }
 
 export interface AiPatch {
@@ -252,6 +284,20 @@ export async function exportAiDocx(
     method: "POST",
   });
   return jsonOrThrow<{ saved: string; draft: AiDraft }>(resp);
+}
+
+/**
+ * 取草稿的 HTML（服务端走「md→docx→mammoth」同一条管线渲染）。
+ *
+ * 前端**不自己渲染 Markdown**：早先前端那套把 `**加粗**` 原样粘进了文档、
+ * 标题还重复——两套渲染器必然各画各的。docx 是用户最终要的东西，长相以它
+ * 为准：这里返回的就是「那份 docx 的 HTML 版」，粘贴进编辑器后与 apply 写盘
+ * 的内容完全一致。
+ */
+export async function fetchAiDraftHtml(sid: string): Promise<string> {
+  const resp = await aiFetch(`/sessions/${encodeURIComponent(sid)}/draft-html`);
+  const data = await jsonOrThrow<{ html: string }>(resp);
+  return data.html || "";
 }
 
 /**

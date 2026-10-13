@@ -8,15 +8,16 @@
  * 单色线性图标、细边框轻阴影，克制的 Apple Pro 质感。
  */
 
+import { getWritingTemplateByName } from "@/utils/writing/templates";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   Award,
   BarChart3,
   Bell,
   BookOpen,
-  Bot,
   Calendar,
   CalendarDays,
   Check,
@@ -205,12 +206,12 @@ export function WritingView() {
   const [serverDocsLoading, setServerDocsLoading] = useState(true);
   /** 本应用 AI 服务可用性（设置里配好网关/密钥后可用）：null 检测中 / false 不可用 */
   const [serviceOk, setServiceOk] = useState<boolean | null>(null);
+  const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ── 按文件隔离的「材料会话」：每个文件独立保留解析态 / 生成流 / 成稿，点击左栏即切换 ──
   const [sessions, setSessions] = useState<Record<string, FileSession>>({});
   const [activeName, setActiveName] = useState<string | null>(null);
-  const [agent, setAgent] = useState<"claude" | "opencode">("claude");
   const clientsRef = useRef<Map<string, WritingClient>>(new Map());
   const loadersRef = useRef<Map<string, () => Promise<File>>>(new Map()); // 重试用
   /** 按文件隔离的写作配置（多文件切换不串位；微调/撤销/导出用当前文件的配置） */
@@ -803,7 +804,7 @@ export function WritingView() {
         }
       });
       client.onEvent((d) => handleEvent(d, name));
-      await client.start(config, uploadId, agent);
+      await client.start(config, uploadId);
       if (client.sessionId) patchSession(name, { sessionId: client.sessionId });
       // 同页向下进行：滚动到生成流区
       requestAnimationFrame(() =>
@@ -814,7 +815,7 @@ export function WritingView() {
     } finally {
       patchSession(name, { starting: false });
     }
-  }, [activeName, docType, title, publisher, docNumber, audience, style, requirements, lengthWords, agent, handleEvent, patchSession]);
+  }, [activeName, docType, title, publisher, docNumber, audience, style, requirements, lengthWords, handleEvent, patchSession]);
 
   // 确保该文件的写作客户端可用：没有则用记录的 sessionId 自动重连。
   // 已有 client 但 WS 已断（服务重启/网络闪断）时必须丢弃重连，
@@ -850,7 +851,31 @@ export function WritingView() {
   );
 
   // 成稿后局部微调（写入当前查看文件的会话；连接断了自动重连）
-  const handleRevise = useCallback(
+    /**
+   * 在 Word 里微调：把当前成稿交接给 Collabora 工作台。
+   *
+   * 交接走 sessionStorage（带 markdown + 标题），工作台启动时灌进自己的会话
+   * ——这样「栏内五阶段产出的稿子」和「工作台里的 AI 对话」就是同一份文档，
+   * 不是两份各自为政的稿子。
+   */
+  const handleOpenStudio = useCallback(() => {
+    const name = activeName;
+    const content = name ? sessionsRef.current[name]?.result?.content : undefined;
+    const config = name ? configsRef.current.get(name) : undefined;
+    const docType = config?.docType || "";
+    const tpl = docType ? getWritingTemplateByName(docType) : undefined;
+    const title = (config?.title || docType || "公文").trim();
+    if (content?.trim()) {
+      try {
+        sessionStorage.setItem("ai-studio:handoff", JSON.stringify({ markdown: content, title }));
+      } catch {
+        /* 隐私模式下存不下：工作台按空稿起步，用户手动贴内容即可 */
+      }
+    }
+    router.push(tpl ? `/writing/studio?template=${tpl.id}` : "/writing/studio");
+  }, [activeName, router]);
+
+const handleRevise = useCallback(
     async (instruction: string) => {
       const name = activeName;
       if (!name) return;
@@ -1479,8 +1504,6 @@ export function WritingView() {
             </div>
           )}
           <ConfigStep
-            agent={agent}
-            onAgent={setAgent}
             docType={docType}
             onDocType={setDocType}
             title={title}
@@ -1500,6 +1523,10 @@ export function WritingView() {
             canStart={canStart}
             starting={active?.starting ?? false}
             onStart={startWriting}
+            onOpenStudio={(dt) => {
+              const tpl2 = getWritingTemplateByName(dt);
+              router.push(tpl2 ? `/writing/studio?template=${tpl2.id}` : "/writing/studio");
+            }}
             material={material}
             onRemoveMaterial={backToConfig}
             onRetryMaterial={retryMaterial}
@@ -1523,6 +1550,7 @@ export function WritingView() {
                 onStop={stopWriting}
                 onBackToConfig={backToConfig}
                 onRevise={handleRevise}
+                onOpenStudio={handleOpenStudio}
                 onUndo={handleUndo}
                 onSaveToMyDocs={handleSaveToMyDocs}
                 onReset={() => handleReset(activeName)}
@@ -1859,8 +1887,6 @@ function MaterialCard({
 // ── 配置步（文种 + 写作设置 + 开始）────────────────────────────────────────
 
 interface ConfigStepProps {
-  agent: "claude" | "opencode";
-  onAgent: (a: "claude" | "opencode") => void;
   docType: string;
   onDocType: (v: string) => void;
   title: string;
@@ -1880,6 +1906,8 @@ interface ConfigStepProps {
   canStart: boolean;
   starting: boolean;
   onStart: () => void;
+  /** 直接进 Word 工作台起草（跳过流式生成，AI 在编辑器里边写边改） */
+  onOpenStudio: (docType: string) => void;
   material: Material | null;
   onRemoveMaterial: () => void;
   onRetryMaterial: (name: string) => void;
@@ -1946,53 +1974,14 @@ function ConfigStep(p: ConfigStepProps) {
             );
           })}
         </div>
-      </section>
-
-      {/* 选择模型 */}
-      <section className="bg-white rounded-2xl border border-black/6 shadow-sm p-6">
-        <SectionHeader
-          icon={Bot}
-          title="选择模型"
-          subtitle="不同模型在能力和效果上有所差异，请根据需求选择合适的模型"
-        />
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-xl">
-          {([
-            { id: "claude", label: "Claude Code", desc: "擅长长文本与公文格式控制" },
-            { id: "opencode", label: "OpenCode", desc: "国产模型替代方案" },
-          ] as const).map((opt) => {
-            const active = p.agent === opt.id;
-            return (
-              <button
-                key={opt.id}
-                onClick={() => p.onAgent(opt.id)}
-                className={
-                  "relative flex items-center justify-between rounded-xl border px-4 py-3.5 transition-all active:scale-[0.98] " +
-                  (active
-                    ? "border-[#FF7A45] bg-orange-50/40 text-[#1D1D1F] shadow-[0_1px_6px_rgba(255,122,69,0.12)]"
-                    : "border-gray-200 bg-white text-gray-500 hover:border-gray-300 hover:text-gray-700")
-                }
-              >
-                <span className="flex items-center gap-3">
-                  <span
-                    className={
-                      "flex w-9 h-9 rounded-lg items-center justify-center " +
-                      (active ? "bg-[#FF7A45] text-white" : "bg-orange-100 text-orange-500")
-                    }
-                  >
-                    <Bot className="w-[18px] h-[18px]" strokeWidth={1.75} />
-                  </span>
-                  <span className="text-left">
-                    <span className="block text-[14px] font-medium text-[#1D1D1F]">
-                      {opt.label}
-                    </span>
-                    <span className="block text-[11px] text-gray-400 mt-0.5">{opt.desc}</span>
-                  </span>
-                </span>
-                {active && <Check className="w-5 h-5 text-[#FF7A45]" strokeWidth={2.5} />}
-              </button>
-            );
-          })}
-        </div>
+        {/* 选完文种直接进工作台：编辑器里边写边改，不用等流式生成 */}
+        <button
+          onClick={() => p.onOpenStudio(p.docType)}
+          className="mt-3 inline-flex items-center gap-1.5 text-[13px] font-medium text-[#FF5722] hover:underline"
+        >
+          <FileText className="w-4 h-4" strokeWidth={1.75} />
+          用「{p.docType}」在 Word 里起草
+        </button>
       </section>
 
       {/* 写作要求 */}
@@ -2089,8 +2078,18 @@ function ConfigStep(p: ConfigStepProps) {
         </div>
       </section>
 
-      {/* 开始生成 */}
-      <div className="flex justify-center pt-2">
+      {/* 开始生成 / 直接进工作台 */}
+      <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+        <button
+          onClick={() => p.onOpenStudio(p.docType)}
+          className={
+            "inline-flex items-center gap-2 rounded-full border border-[#FF7A45] px-7 py-3.5 text-[15px] font-semibold text-[#FF5722] transition-all active:scale-[0.98] " +
+            "hover:bg-[#FFF4EE]"
+          }
+        >
+          <FileText className="w-5 h-5" strokeWidth={1.75} />
+          在 Word 里起草
+        </button>
         <button
           onClick={p.onStart}
           disabled={!p.canStart}

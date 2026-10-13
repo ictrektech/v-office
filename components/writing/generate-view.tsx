@@ -95,6 +95,8 @@ interface GenerateViewProps {
   onStop: () => void;
   onBackToConfig: () => void;
   onRevise: (instruction: string) => void;
+  /** 在 Word 里微调：打开 Collabora 工作台（当前成稿带过去，右边就是对话框） */
+  onOpenStudio?: () => void;
   onUndo: () => void;
   /** 重置：从 0 开始（清空生成流与成稿，保留材料与配置） */
   onReset: () => void;
@@ -116,6 +118,7 @@ export function GenerateView({
   onStop,
   onBackToConfig,
   onRevise,
+  onOpenStudio,
   onUndo,
   onSaveToMyDocs,
   onReset,
@@ -304,6 +307,18 @@ export function GenerateView({
                   {revising ? "修订中…" : "发送"}
                 </button>
               </div>
+              {onOpenStudio ? (
+                <button
+                  onClick={onOpenStudio}
+                  className="mt-2.5 inline-flex items-center gap-1.5 rounded-xl border border-gray-200 px-3.5 py-2 text-[13px] font-medium text-[#1D1D1F] transition hover:border-primary hover:text-primary"
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  在 Word 里微调
+                  <span className="text-[11.5px] text-gray-400">
+                    当前成稿带进 Collabora，右边直接和 AI 对话
+                  </span>
+                </button>
+              ) : null}
               <div className="mt-2.5 flex items-center gap-3">
                 {reviseError && !revising && !exporting && (
                   <span className="text-[12.5px] text-[#D93025] break-all">

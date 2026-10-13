@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { getPatentTemplates } from "@/utils/patent/templates";
 import type { WorkKind } from "@/utils/patent/types";
-import { vp } from "./visual-spec";
+import { vp } from "../studio/visual-spec";
 
 const KIND_META: Record<WorkKind, { icon: typeof FileText; cls: string }> = {
   disclosure: { icon: FlaskConical, cls: "bg-[#EFF4FF] text-[#2563EB]" },

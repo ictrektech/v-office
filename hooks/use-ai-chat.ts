@@ -17,18 +17,22 @@ import {
   applyAiPatches,
   chatStream,
   createAiSession,
+  deleteAiTemplate,
   exportAiDocx,
+  fetchAiDraftHtml,
   getAiState,
   importAiDocx,
   importAiDraft,
   saveAiDraft,
   stopAiSession,
   uploadAiMaterial,
+  uploadAiTemplate,
   type AiDraft,
   type AiEvent,
   type AiHealth,
   type AiMaterial,
   type AiPatch,
+  type AiTemplate,
 } from "@/utils/ai/client";
 import type { AgentChange } from "@/utils/patent/types";
 
@@ -61,6 +65,8 @@ export interface UseAiChat {
   messages: ChatMessage[];
   draft: AiDraft | null;
   materials: AiMaterial[];
+  /** 当前会话的成稿模板（用户上传；null = 没传，按技能包默认结构写） */
+  template: AiTemplate | null;
   sessionId: string | null;
   streaming: boolean;
   health: AiHealth | null;
@@ -73,10 +79,21 @@ export interface UseAiChat {
   stop: () => void;
   reset: () => void;
   upload: (file: File) => Promise<AiMaterial>;
+  /** 上传成稿模板：之后每轮都按它的结构成文 */
+  uploadTemplate: (file: File) => Promise<AiTemplate>;
+  /** 撤掉模板 */
+  removeTemplate: () => Promise<void>;
   saveNow: () => Promise<void>;
   importDraft: (markdown: string, title?: string) => Promise<void>;
   /** 草稿 → docx 落「我的文档」，返回文件名（打开编辑器内核用） */
   exportDocx: () => Promise<string>;
+  /**
+   * 取草稿的 HTML（服务端「md→docx→mammoth」单一管线渲染）。
+   *
+   * 编辑器注入专用：前端不自己渲染 Markdown，粘进去的内容与 apply 写盘的
+   * docx 长得完全一致。
+   */
+  fetchDraftHtml: () => Promise<string>;
   /** 把「我的文档」里的 docx 回读成草稿（编辑器里改过的内容回灌） */
   importDocx: (name: string) => Promise<void>;
   acceptChange: (changeKey: string) => Promise<void>;
@@ -106,7 +123,9 @@ function toChange(patch: AiPatch, messageId: string): ChangeLike {
     after: full && text.length > 400 ? `${text.slice(0, 400)}…` : text,
     fullText: text,
     reason: full ? "整篇重写" : "按你的要求修改",
-    status: "proposed",
+    // 服务端已把改动落到草稿与 docx（以 Word 修订呈现），卡片只是摘要，
+    // 不再有「点接受」这一步——审阅在编辑器里用 Word 原生修订完成。
+    status: (patch as { status?: ChangeLike["status"] }).status === "applied" ? "applied" : "proposed",
     full,
   };
 }
@@ -120,6 +139,7 @@ export function useAiChat(options: {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState<AiDraft | null>(null);
   const [materials, setMaterials] = useState<AiMaterial[]>([]);
+  const [template, setTemplate] = useState<AiTemplate | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [health, setHealth] = useState<AiHealth | null>(null);
@@ -151,6 +171,7 @@ export function useAiChat(options: {
       const state = await getAiState(sid);
       setDraft(state.draft);
       setMaterials(state.materials);
+      setTemplate(state.template ?? null);
       if (state.draft?.title) setDraftTitle(state.draft.title);
     } catch {
       // 状态拉取失败不影响对话
@@ -347,6 +368,24 @@ export function useAiChat(options: {
     [ensureSession, refresh],
   );
 
+  /** 上传模板：解析失败也把结果回给界面（parseError），别静默 */
+  const uploadTemplate = useCallback(
+    async (file: File): Promise<AiTemplate> => {
+      const sid = await ensureSession();
+      const uploaded = await uploadAiTemplate(sid, file);
+      await refresh();
+      return uploaded;
+    },
+    [ensureSession, refresh],
+  );
+
+  const removeTemplate = useCallback(async () => {
+    const sid = sessionRef.current;
+    if (!sid) return;
+    await deleteAiTemplate(sid);
+    await refresh();
+  }, [refresh]);
+
   const saveNow = useCallback(async () => {
     const sid = sessionRef.current;
     if (!sid) return;
@@ -377,6 +416,12 @@ export function useAiChat(options: {
     if (res.draft?.title) setDraftTitle(res.draft.title);
     setLastSaved(res.saved);
     return res.saved;
+  }, [ensureSession]);
+
+  /** 草稿 → HTML（服务端单一渲染管线）：编辑器注入用，前端不渲染 Markdown */
+  const fetchDraftHtml = useCallback(async (): Promise<string> => {
+    const sid = await ensureSession();
+    return fetchAiDraftHtml(sid);
   }, [ensureSession]);
 
   /** 回读：编辑器里改过的 docx → 草稿。失败也往上抛（回读失败不该静默） */
@@ -469,6 +514,7 @@ export function useAiChat(options: {
     messages,
     draft,
     materials,
+    template,
     sessionId,
     streaming,
     health,
@@ -479,9 +525,12 @@ export function useAiChat(options: {
     stop,
     reset,
     upload,
+    uploadTemplate,
+    removeTemplate,
     saveNow,
     importDraft,
     exportDocx,
+    fetchDraftHtml,
     importDocx,
     acceptChange,
     rejectChange,
