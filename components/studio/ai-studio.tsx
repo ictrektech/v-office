@@ -31,15 +31,16 @@ import { useResolvedLanguage } from "@/store";
 import {
   alignCollaboraHost,
   announceHostReady,
+  followCollaboraEnd,
+  pasteIntoCollabora,
+  saveCollabora,
+  sendUnoCommand,
   fetchCollaboraSession,
   fetchCollaboraStatus,
   flushCollabora,
   hideCollaboraChrome,
   hideCollaboraSidebar,
   hideCollaboraWelcomeScreen,
-  pasteIntoCollabora,
-  saveCollabora,
-  sendUnoCommand,
   waitForCollaboraDocumentLoaded,
 } from "@/utils/editor/collabora";
 import { toCollaboraLang } from "@/utils/editor/locale";
@@ -164,7 +165,13 @@ export function AiStudio({
   panelWidth,
 }: AiStudioProps) {
   const t = useExtracted();
-  usePageTitle(pageTitle);
+  // 标签标题带上构建标记（runtime-config.js 由容器启动时注入）：
+  // 浏览器标签页一眼就能看出当前跑的是哪次构建，省得每次都怀疑缓存
+  const buildTag =
+    typeof window !== "undefined"
+      ? ((window as unknown as { __VOS_APP_VERSION__?: string }).__VOS_APP_VERSION__ || "").trim()
+      : "";
+  usePageTitle(buildTag ? `${pageTitle} · ${buildTag}` : pageTitle);
   const language = useResolvedLanguage();
   /** 宽屏常驻右栏 / 窄屏浮层抽屉，两者互斥，避免同时占屏 */
   const isWide = useIsWide();
@@ -384,13 +391,29 @@ export function AiStudio({
    * 就绪前不注入（会被丢弃）；等 docReady 翻真再补注入——打开时加载的内容
    * 本来就是最新导出的稿子，所以慢一步也不会看到旧内容。
    *
-   * 并发口径用**序号**而不是 effect 的清理标志：草稿可能连着变两次（导入 + 刷新），
-   * 后一次 effect 重跑会让前一次的清理标志置假——曾经就是这样把到站的注入白白
-   * 丢弃的（日志显示「HTML 取到了，粘贴没发」）。序号只保证「最新一次意图获胜」，
-   * 卸载与否看 iframe 是否还挂在文档上。
+   * 两个必须记住的坑：
+   * 1) 草稿连着变时去抖 600ms，一轮只注入一次（每个 patch 一次更新，全注一遍会打架）
+   * 2) **版本标记要先置后干活，忙的时候必须回滚**——否则这一版被标记成
+   *    「已注入」却没真注入，AI 这轮改动就永远丢了（症状：正文停在上一版的一半）
+   */
+  /**
+   * AI 落文 → 写进**已经打开着的** Collabora 文档（整篇替换，零刷新）。
+   *
+   * 粘贴协议（**已真机验证**，playwright + 本地 Collabora 26.04 实测）：
+   *   `.uno:SelectAll` → 等 700ms → `Action_Paste(text/html)` → `Action_Save`
+   *   7.4KB / 6,229 字符的 HTML 整篇进去，一字不少、编号层级与样式全保留；
+   *   去掉 SelectAll 就会变成"追加"（实测多出上一次的残留字符）。
+   *   视口跟随只在 AI 出字阶段做——那一刻没有粘贴，不会互相打断。
+   * 2. 注入期间禁用发送：否则发指令前的 docx 回读会读到半截文档，草稿被残缺
+   *    内容覆盖，断点会越滚越靠前。
+   * 3. 草稿连着更新时去抖 600ms，一轮只注入一次。
    */
   const injectedDraftAtRef = useRef<number | null>(null);
   const injectSeqRef = useRef(0);
+  /** 注入进行中：SelectAll→粘贴→保存这段窗口里不接受新的注入 */
+  const injectBusyRef = useRef(false);
+  /** 注入中禁用发送（理由见上） */
+  const [injecting, setInjecting] = useState(false);
   useEffect(() => {
     // 切到草稿视图再切回来：清掉标记，让编辑器重新同步成最新稿
     if (view !== "editor") {
@@ -399,29 +422,50 @@ export function AiStudio({
     }
     if (!docReady || chat.streaming || !chat.draft || !frameRef.current) return;
     const at = chat.draft.updated_at ?? 0;
-    if (injectedDraftAtRef.current === at) return;
+    if (!at || injectedDraftAtRef.current === at) return;
     injectedDraftAtRef.current = at;
     const seq = ++injectSeqRef.current;
-    void (async () => {
-      try {
-        const html = await chat.fetchDraftHtml();
-        // 取 HTML 期间可能又有了更新的注入意图：只认最新那次，旧的到站就丢
-        if (!html || injectSeqRef.current !== seq) return;
-        // 全选与粘贴之间留一点间隔：SelectAll 是 UNO 往返，不等它就粘会变成
-        // 「插在光标处」而不是「替换全文」（实测 450ms 稳妥）。
-        sendUnoCommand(frameRef.current!, ".uno:SelectAll");
-        window.setTimeout(() => {
+
+    const timer = window.setTimeout(() => {
+      const start = async () => {
+        if (injectBusyRef.current) {
+          // 关键：标记是「先置后干活」的，忙着的时候必须**回滚标记**，
+          // 否则这一版被标记成已处理却没注入，AI 的这轮改动就永远丢了
+          // （实测症状：正文停在上一版的一半）。
+          injectedDraftAtRef.current = null;
+          return;
+        }
+        injectBusyRef.current = true;
+        setInjecting(true);
+        try {
+          const html = await chat.fetchDraftHtml();
+          if (!html || injectSeqRef.current !== seq) return;
           const frame = frameRef.current;
-          if (!frame?.isConnected || injectSeqRef.current !== seq) {
-            return;
-          }
+          if (!frame?.isConnected) return;
+          // ① 选全文
+          sendUnoCommand(frame, ".uno:SelectAll");
+          // ② 等 UNO 往返落地
+          await sleep(700);
+          if (!frame.isConnected || injectSeqRef.current !== seq) return;
+          // ③ 整篇替换（text/html 带上标题层级与列表格式）
+          // ④ 粘贴。真机（playwright + 本地 Collabora）实测：这一步是**同步完成**的，
+          //    7.4KB 的 HTML 整篇进去、6,229 字符一字不少、编号层级与样式全保留，
+          //    所以不需要再空等——早先那 2.5s 是我臆想的保险，反而把注入窗口
+          //    拉长到 3.2s，期间发送被禁用，看起来就像"卡住了"。
           pasteIntoCollabora(frame, html);
+          // ⑤ 紧接着保存（存的是完整文档）
           saveCollabora(frame);
-        }, 450);
-      } catch {
-        /* 取 HTML 失败：编辑器里仍是打开时的内容，不会白屏；下一轮草稿变化会重试 */
-      }
-    })();
+        } catch {
+          // 同样回滚标记：失败不能被当成「已注入」
+          injectedDraftAtRef.current = null;
+        } finally {
+          injectBusyRef.current = false;
+          setInjecting(false);
+        }
+      };
+      void start();
+    }, 600);
+    return () => window.clearTimeout(timer);
   }, [chat, docReady, view]);
 
   /**
@@ -452,6 +496,23 @@ export function AiStudio({
     [chat, docReady, editorDoc, selectedAnchor],
   );
 
+
+  /**
+   * 视口跟随 AI：出字时编辑器跟着往下走。
+   *
+   * `.uno:GoToEndOfDoc` 会移动光标，所以只在**AI 正在生成**时做（用户此时在读）；
+   * 用户手改阶段不抢光标。一次回合能触发几十次 delta，因此节流到 ~0.9s 一次。
+   */
+  useEffect(() => {
+    if (view !== "editor" || !docReady || !chat.streaming) return;
+    const last = chat.messages[chat.messages.length - 1];
+    if (!last?.text) return;
+    const timer = window.setTimeout(() => {
+      const frame = frameRef.current;
+      if (frame?.isConnected) followCollaboraEnd(frame);
+    }, 900);
+    return () => window.clearTimeout(timer);
+  }, [chat.messages, chat.streaming, docReady, view]);
 
   const editing = view === "editor";
 
@@ -723,7 +784,7 @@ export function AiStudio({
           template={chat.template}
           streaming={chat.streaming}
           blocked={chat.blocked}
-          sessionReady={!!chat.sessionId}
+          sessionReady={!!chat.sessionId && !injecting}
           modelLabel={modelLabel}
           lastSaved={chat.lastSaved}
           initialPrompt={seedPromptFor(template)}
@@ -759,7 +820,7 @@ export function AiStudio({
             template={chat.template}
             streaming={chat.streaming}
             blocked={chat.blocked}
-            sessionReady={!!chat.sessionId}
+            sessionReady={!!chat.sessionId && !injecting}
             modelLabel={modelLabel}
             lastSaved={chat.lastSaved}
             initialPrompt={seedPromptFor(template)}

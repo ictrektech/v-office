@@ -1,0 +1,107 @@
+[00:00:01.140] Server  LOG     
+[00:00:01.140] Server  LOG       We detected TypeScript in your project and reconfigured your tsconfig.json file for you.
+[00:00:01.140] Server  LOG       The following suggested values were added to your tsconfig.json. These values can be changed to fit your project's needs:
+
+[00:00:01.140] Server  LOG       	- include was updated to add '.next-dev/types/**/*.ts'
+[00:00:01.140] Server  LOG       	- include was updated to add '.next-dev/dev/types/**/*.ts'
+[00:00:01.140] Server  LOG     
+[00:00:01.336] Server  LOG     ✓ Ready in 1008ms
+[00:00:16.066] Server  LOG     ○ Compiling /patent ...
+[00:00:20.552] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:00:20.553] Browser ERROR   uncaughtError: Error: Module [project]/node_modules/.pnpm/lucide-react@0.562.0_react@19.2.3/node_modules/lucide-react/dist/esm/icons/blocks.js [app-client] (ecmascript) <export default as Blocks> was instantiated because it was required from module [project]/components/patent/patent-home.tsx [app-client] (ecmascript), but the module factory is not available. It might have been deleted in an HMR update.
+[00:00:49.880] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:00:54.218] Server  ERROR   (node:1840453) [DEP0060] DeprecationWarning: The `util._extend` API is deprecated. Please use Object.assign() instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+[00:03:09.179] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:03:12.827] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:03:15.310] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:03:19.800] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:05:08.225] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:05:08.225] Browser ERROR   uncaughtError: Error: Hydration failed because the server rendered text didn't match the client. As a result this tree will be regenerated on the client. This can happen if a SSR-ed Client Component used:
+
+- A server/client branch `if (typeof window !== 'undefined')`.
+- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.
+- Date formatting in a user's locale which doesn't match the server.
+- External changing data without sending a snapshot of it along with the HTML.
+- Invalid HTML tag nesting.
+
+It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.
+
+https://react.dev/link/hydration-mismatch
+
+  ...
+    <SegmentViewNode type="layout" pagePath="(main)/lay...">
+      <SegmentTrieNode>
+      <script>
+      <script>
+      <script>
+      <ClientSegmentRoot Component={function MainLayout} slots={{...}} serverProvidedParams={{params:{}, ...}}>
+        <MainLayout params={Promise}>
+          <div className="jsx-85b394...">
+            <div>
+            <Header>
+            <div className="jsx-85b394...">
+              <div className="jsx-85b394...">
+                <Sidebar pathname="/settings">
+                  <aside className="w-56 flex ...">
+                    <div>
+                    <div>
+                    <nav className="flex-1 px-...">
+                      <LinkComponent>
+                      <LinkComponent>
+                      <LinkComponent>
+                      <LinkComponent href="/api-guide" className="w-full fle...">
+                        <a className="w-full fle..." ref={function} onClick={function onClick} ...>
+                          <CodeXml>
++                         API 接入指南
+-                         API Guide
+                    ...
+              ...
+            ...
+
+[00:06:35.768] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+[00:06:35.768] Browser ERROR   uncaughtError: Error: Hydration failed because the server rendered text didn't match the client. As a result this tree will be regenerated on the client. This can happen if a SSR-ed Client Component used:
+
+- A server/client branch `if (typeof window !== 'undefined')`.
+- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.
+- Date formatting in a user's locale which doesn't match the server.
+- External changing data without sending a snapshot of it along with the HTML.
+- Invalid HTML tag nesting.
+
+It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.
+
+https://react.dev/link/hydration-mismatch
+
+  ...
+    <SegmentViewNode type="layout" pagePath="(main)/lay...">
+      <SegmentTrieNode>
+      <script>
+      <script>
+      <script>
+      <ClientSegmentRoot Component={function MainLayout} slots={{...}} serverProvidedParams={{params:{}, ...}}>
+        <MainLayout params={Promise}>
+          <div className="jsx-85b394...">
+            <div>
+            <Header>
+            <div className="jsx-85b394...">
+              <div className="jsx-85b394...">
+                <Sidebar pathname="/settings">
+                  <aside className="w-56 flex ...">
+                    <div>
+                    <div>
+                    <nav className="flex-1 px-...">
+                      <LinkComponent>
+                      <LinkComponent>
+                      <LinkComponent>
+                      <LinkComponent href="/api-guide" className="w-full fle...">
+                        <a className="w-full fle..." ref={function} onClick={function onClick} ...>
+                          <CodeXml>
++                         API 接入指南
+-                         API Guide
+                    ...
+              ...
+            ...
+
+[00:07:14.776] Browser ERROR   NAS documents unavailable: {"name":"StorageUnavailableError"}
+[00:07:14.776] Browser ERROR   NAS documents unavailable: {"name":"StorageUnavailableError"}
+[00:09:11.108] Browser INFO    %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold

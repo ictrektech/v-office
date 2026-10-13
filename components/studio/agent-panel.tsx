@@ -6,6 +6,7 @@ import { useExtracted } from "next-intl";
 import {
   AlertTriangle,
   Check,
+  ChevronDown,
   CornerDownLeft,
   FileText,
   Loader2,
@@ -110,6 +111,51 @@ export function AgentPanel({
   const fileRef = useRef<HTMLInputElement>(null);
   const templateRef = useRef<HTMLInputElement>(null);
 
+  // ── 消息流跟随（DeepSeek 那种）────────────────────────────────────────
+  // 默认贴着底部：模型吐字就往下走。用户一旦手动上滑就"接管"，不再拉回；
+  // 滑回底部（或点回到底部）恢复跟随。少了这个，视线会卡在中间跟不上输出。
+  const listRef = useRef<HTMLDivElement>(null);
+  /** 是否处于跟随态（用户没接管） */
+  const stickRef = useRef(true);
+  /** 程序滚动中：别把自己的滚动当成用户上滑 */
+  const autoScrollRef = useRef(false);
+  const [stuck, setStuck] = useState(true);
+
+  const lastText = messages[messages.length - 1]?.text ?? "";
+
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || !stickRef.current) return;
+    autoScrollRef.current = true;
+    const raf = requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+      autoScrollRef.current = false;
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [messages.length, lastText, tab]);
+
+  /** 用户滚一下：距底 80px 内算"仍在跟随"，否则判定为接管 */
+  const onListScroll = () => {
+    const el = listRef.current;
+    if (!el || autoScrollRef.current) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    stickRef.current = atBottom;
+    setStuck(atBottom);
+  };
+
+  /** 点"回到底部"：交还控制权给自动跟随 */
+  const jumpToBottom = () => {
+    const el = listRef.current;
+    if (!el) return;
+    stickRef.current = true;
+    setStuck(true);
+    autoScrollRef.current = true;
+    requestAnimationFrame(() => {
+      el.scrollTop = el.scrollHeight;
+      autoScrollRef.current = false;
+    });
+  };
+
   // 起手话术只在输入框还空着时填入，绝不覆盖用户已经打的字
   useEffect(() => {
     if (!initialPrompt) return;
@@ -203,7 +249,11 @@ export function AgentPanel({
 
       {tab === "agent" ? (
         <>
-          <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 custom-scrollbar">
+          <div
+              ref={listRef}
+              onScroll={onListScroll}
+              className="relative flex-1 space-y-4 overflow-y-auto px-4 py-4 custom-scrollbar"
+            >
             {messages.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-[#E7EAF0] p-4 text-[14px] leading-relaxed text-[#94A3B8] dark:border-white/10">
                 {t({
@@ -362,6 +412,19 @@ export function AgentPanel({
                 </div>
               ),
             )}
+
+            {/* 用户接管后（手动上滑）给一个回来的入口；跟随中不打扰 */}
+            {!stuck ? (
+              <button
+                type="button"
+                onClick={jumpToBottom}
+                className="sticky bottom-2 ml-auto flex w-8 items-center justify-end gap-1 rounded-full bg-white/95 px-2.5 py-1.5 text-[12px] font-medium text-[#475569] shadow-[0_2px_8px_rgba(0,0,0,0.14)] ring-1 ring-black/[0.06] backdrop-blur transition hover:bg-white dark:bg-[#2C2C2E]/95 dark:text-slate-200"
+                title={t({ id: "Jump to latest", message: "Jump to latest" })}
+              >
+                {t({ id: "Latest", message: "Latest" })}
+                <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
           </div>
 
           {/* 输入区 */}

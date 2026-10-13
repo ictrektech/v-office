@@ -99,6 +99,8 @@ AI_HOME = Path(os.environ.get("V_OFFICE_AI_HOME", "/data/.ai"))
 PI_BIN = os.environ.get("V_OFFICE_AI_PI_BIN", "pi")
 SKILLS_DIR = os.environ.get("V_OFFICE_AI_SKILLS", "/opt/patent-skills")
 DEFAULT_BASE_URL = os.environ.get("V_OFFICE_AI_BASE_URL", "https://ai.ictrek.com/v1")
+# 读 pi 输出用的行缓冲上限（asyncio 默认 64KiB，长文必爆）
+STDOUT_LIMIT_BYTES = int(os.environ.get("V_OFFICE_AI_STDOUT_LIMIT", 8 * 1024 * 1024))
 
 GLOBAL_CONCURRENCY = max(1, int(os.environ.get("V_OFFICE_AI_CONCURRENCY", "3")))
 QUEUE_WAIT_S = float(os.environ.get("V_OFFICE_AI_QUEUE_WAIT", "30"))
@@ -560,6 +562,30 @@ def save_draft(username: str, sid: str, draft: dict) -> None:
     tmp.replace(path)
 
 
+
+# ── 契约标签剥离 ────────────────────────────────────────────────────────
+# <final-doc>…</final-doc> / <patch …>…</patch> 是模型与我们之间的**协议标记**，
+# 不是正文。前端展示层有 visibleText() 剥它，但落文这条链路（parse → apply →
+# markdown_to_blocks）原来没有，导致标签被当正文写进草稿、粘进 Word
+# （实测出现过 block[0] 末尾挂着 "<final-doc>"）。
+# 这里做一份服务端等价实现，所有落文入口统一走它。
+
+_TAG_RE = re.compile(r"</?(?:final-doc|patch)(?:\s[^>]*)?>", re.IGNORECASE)
+_PATCH_BLOCK_RE = re.compile(r"<patch\b[^>]*>[\s\S]*?</patch>", re.IGNORECASE)
+_FENCE_RE = re.compile(r"^\s*```[a-zA-Z0-9_-]*\s*$", re.MULTILINE)
+
+
+def strip_contract_tags(text: str) -> str:
+    """去掉协议标记与随之产生的裸代码围栏，返回干净的正文。"""
+    if not text:
+        return ""
+    out = _PATCH_BLOCK_RE.sub("", text)
+    out = _TAG_RE.sub("", out)
+    out = _FENCE_RE.sub("", out)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out.strip()
+
+
 def draft_to_prompt(draft: dict) -> str:
     """草稿的「带编号」文本形式：编号就是 patch 里的 anchor。"""
     blocks = draft.get("blocks") or []
@@ -598,6 +624,7 @@ def _strip_leading_duplicate_heading(text: str, heading: str) -> str:
 
 
 def draft_to_markdown(draft: dict) -> str:
+    _ = draft  # 下面照旧拼装；剥离在 markdown_to_blocks 与本函数出口各做一次
     blocks = draft.get("blocks") or []
     title = (draft.get("title") or "").strip()
     parts = [f"# {title}"] if title else []
@@ -612,6 +639,7 @@ def draft_to_markdown(draft: dict) -> str:
 
 
 def markdown_to_blocks(text: str, title: str = "") -> list[dict]:
+    text = strip_contract_tags(text)
     """把 Markdown 拆成「段落块」。用于两种场景：整篇重出、从编辑器导入当前稿。"""
     blocks: list[dict] = []
     heading: str | None = None
@@ -705,15 +733,15 @@ def parse_model_output(text: str) -> dict:
             "anchor": (meta.get("anchor") or meta.get("id") or "").strip(),
             "op": (meta.get("op") or "replace").strip(),
             "heading": (meta.get("heading") or "").strip(),
-            "text": (body or "").strip(),
+            "text": strip_contract_tags(body or ""),
         })
     final = FINAL_RE.search(text or "")
     prose = PATCH_RE.sub("", (text or ""))
     prose = FINAL_RE.sub("", prose).strip()
     return {
         "patches": patches,
-        "final_doc": final.group(1).strip() if final else None,
-        "prose": prose,
+        "final_doc": strip_contract_tags(final.group(1)) if final else None,
+        "prose": strip_contract_tags(prose),
     }
 
 
@@ -1167,6 +1195,10 @@ async def _run_turn(
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            # pi 是 --mode json：一整轮输出可能是一行巨大的 JSON（交底书这类长文
+            # 单行能到几百 KB～几 MB）。asyncio 默认行缓冲只有 64KiB，一超就抛
+            # LimitOverrunError: "Separator is not found"，整轮 500 —— 给足缓冲。
+            limit=STDOUT_LIMIT_BYTES,
             start_new_session=True,  # 自成进程组 → 可整组 kill
             **priv,
         )
@@ -1237,6 +1269,16 @@ async def _run_turn(
                     "idle_s": int(idle),
                 }
                 continue
+            except (asyncio.LimitOverrunError, ValueError):
+                # 行缓冲仍不够（异常内容单行超过 limit）：中止并说人话，
+                # 别把 python 的 LimitOverrunError 原文糊到界面上
+                killed = True
+                stop_kind = "error"
+                stop_message = (
+                    f"模型单行输出超过 {STDOUT_LIMIT_BYTES // 1024 // 1024}MB 上限，已中止。"
+                    "可把材料拆小后重试，或换上下文更短的模型。"
+                )
+                break
             if not line:
                 break  # stdout 结束，进程收尾
             raw = line.decode("utf-8", "replace").strip()

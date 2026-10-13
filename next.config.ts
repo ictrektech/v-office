@@ -16,6 +16,16 @@ const withNextIntl = createNextIntlPlugin({
 });
 
 const nextConfig: NextConfig = {
+  /**
+   * 构建目录可切（`NEXT_DIST_DIR`）。
+   *
+   * 为什么需要：`next dev` 和 `next build` 默认**共用 `.next`**。跑一次 build
+   * 就会把 dev 的产物覆盖成不兼容的结构，dev 随后读 `.next` 会把目录当文件读，
+   * 直接 EISDIR 崩掉（本地 dev 昨天就是这么挂的）。
+   * 所以：dev 用 `.next-dev`（`NEXT_DIST_DIR=.next-dev next dev`），
+   * build 仍用 `.next`（静态导出到 out/），两者互不干扰。
+   */
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   /* config options here */
   output: "export",
   // Sub-path deployments (e.g. the VOS gateway serving the site under

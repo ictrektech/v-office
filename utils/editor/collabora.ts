@@ -447,6 +447,17 @@ export function sendUnoCommand(iframe: HTMLIFrameElement, command: string): void
 }
 
 /**
+ * 把视口带到文档末尾——「AI 正在写的地方」。
+ *
+ * 用的 `.uno:GoToEndOfDoc` 会把光标一起移到文末，所以**只在 AI 出字时调用**
+ * （那时用户在看）；用户自己手改时不要抢他的光标。AI 一轮能触发几十次，
+ * 调用方必须节流。
+ */
+export function followCollaboraEnd(iframe: HTMLIFrameElement): void {
+  sendUnoCommand(iframe, ".uno:GoToEndOfDoc");
+}
+
+/**
  * 把 HTML 粘进活文档：替换当前选区，无选区则插在光标处。
  *
  * Mimetype 用 text/html：标题/加粗/列表等格式都能带上（纯文本会丢格式）。

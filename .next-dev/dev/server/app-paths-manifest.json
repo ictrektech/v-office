@@ -1,0 +1,6 @@
+{
+  "/(main)/page": "app/(main)/page.js",
+  "/(main)/settings/page": "app/(main)/settings/page.js",
+  "/patent/page": "app/patent/page.js",
+  "/patent/studio/page": "app/patent/studio/page.js"
+}
