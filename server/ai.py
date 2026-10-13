@@ -2150,5 +2150,173 @@ async def session_state(request: Request, sid: str) -> JSONResponse:
         ],
         "template": public_template(load_template(username, sid)),
         "draft": public_draft(draft),
+        "artifacts": list_artifacts(username, sid),
+        "activeArtifact": active_artifact(username, sid),
         "running": sid in _running,
     })
+
+
+# ══════════════════════════════════════════════════════════════════
+# 产物（artifacts）——一会话多份成文
+#
+# 为什么需要它：草稿只有一份，但「申请文件四件套」这类任务天生是多份产物
+# （权利要求书 / 说明书 / 摘要 / 附图）。把每份产物单独存一份 markdown，
+# 界面才能摆出「四张卡、各自状态」——而不是一份稿子反复被覆盖。
+#
+# 活动产物（active）就是当前在编辑器里改的那份：切换产物 = 把该产物灌进
+# 会话草稿，走既有的 Collabora 注入链路（零刷新），不新增另一套文档通道。
+# ══════════════════════════════════════════════════════════════════
+
+
+def _artifacts_dir(username: str, sid: str) -> Path:
+    d = AI_HOME / "artifacts" / username / _safe_sid(sid)
+    d.mkdir(parents=True, exist_ok=True)
+    if os.geteuid() == 0:
+        try:
+            os.chmod(d, 0o700)
+        except OSError:
+            pass
+    return d
+
+
+def _artifacts_index(username: str, sid: str) -> Path:
+    return _artifacts_dir(username, sid) / "index.json"
+
+
+def _load_artifacts(username: str, sid: str) -> dict:
+    """索引结构：{"active": "claims", "items": {"claims": {...}, ...}}"""
+    try:
+        data = json.loads(_artifacts_index(username, sid).read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("items"), dict):
+            data.setdefault("active", "")
+            return data
+    except (OSError, ValueError):
+        pass
+    return {"active": "", "items": {}}
+
+
+def _save_artifacts(username: str, sid: str, data: dict) -> None:
+    path = _artifacts_index(username, sid)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    tmp.replace(path)
+
+
+def _artifact_body(username: str, sid: str, key: str) -> str:
+    try:
+        return (_artifacts_dir(username, sid) / f"{key}.md").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def list_artifacts(username: str, sid: str) -> list[dict]:
+    """产物清单（不含正文——正文要按需单取，别把四份全文塞进每次 state 响应）。"""
+    data = _load_artifacts(username, sid)
+    out: list[dict] = []
+    for key, item in (data.get("items") or {}).items():
+        if not isinstance(item, dict):
+            continue
+        out.append(
+            {
+                "key": key,
+                "title": item.get("title") or key,
+                "chars": int(item.get("chars") or 0),
+                "updated_at": float(item.get("updated_at") or 0),
+            }
+        )
+    out.sort(key=lambda a: float(a.get("updated_at") or 0))
+    return out
+
+
+def active_artifact(username: str, sid: str) -> str:
+    return str(_load_artifacts(username, sid).get("active") or "")
+
+
+def save_artifact(username: str, sid: str, key: str, title: str, markdown: str) -> dict:
+    """写入（或覆盖）一份产物，并把它设为活动产物。"""
+    key = _safe_name(key) or "artifact"
+    body = markdown or ""
+    path = _artifacts_dir(username, sid) / f"{key}.md"
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(body, encoding="utf-8")
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
+    tmp.replace(path)
+
+    data = _load_artifacts(username, sid)
+    items = data.setdefault("items", {})
+    items[key] = {
+        "title": title or key,
+        "chars": len(body),
+        "updated_at": time.time(),
+    }
+    data["active"] = key
+    _save_artifacts(username, sid, data)
+    return {"key": key, "title": items[key]["title"], "chars": items[key]["chars"]}
+
+
+def delete_artifact(username: str, sid: str, key: str) -> None:
+    data = _load_artifacts(username, sid)
+    items = data.get("items") or {}
+    items.pop(key, None)
+    if data.get("active") == key:
+        data["active"] = ""
+    _save_artifacts(username, sid, data)
+    try:
+        (_artifacts_dir(username, sid) / f"{key}.md").unlink()
+    except OSError:
+        pass
+
+
+@router.get("/sessions/{sid}/artifacts")
+async def get_artifacts(request: Request, sid: str) -> JSONResponse:
+    username = await _user(request)
+    session_dir(username, sid)
+    return JSONResponse(
+        {
+            "artifacts": list_artifacts(username, sid),
+            "active": active_artifact(username, sid),
+        }
+    )
+
+
+class ArtifactSave(BaseModel):
+    key: str
+    title: str = ""
+    markdown: str = ""
+
+
+@router.post("/sessions/{sid}/artifacts")
+async def post_artifact(request: Request, sid: str, body: ArtifactSave) -> JSONResponse:
+    username = await _user(request)
+    session_dir(username, sid)
+    saved = save_artifact(username, sid, body.key, body.title, body.markdown)
+    LOG.info("ai: artifact saved user=%s sid=%s key=%s chars=%d", username, sid, saved["key"], saved["chars"])
+    return JSONResponse(saved)
+
+
+@router.get("/sessions/{sid}/artifacts/{key}")
+async def get_artifact(request: Request, sid: str, key: str) -> JSONResponse:
+    """取一份产物的正文（打开它时用）。"""
+    username = await _user(request)
+    session_dir(username, sid)
+    body = _artifact_body(username, sid, key)
+    if not body:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    data = _load_artifacts(username, sid)
+    item = (data.get("items") or {}).get(key) or {}
+    return JSONResponse({"key": key, "title": item.get("title") or key, "markdown": body})
+
+
+@router.delete("/sessions/{sid}/artifacts/{key}")
+async def del_artifact(request: Request, sid: str, key: str) -> JSONResponse:
+    username = await _user(request)
+    session_dir(username, sid)
+    delete_artifact(username, sid, key)
+    return JSONResponse({"removed": key})

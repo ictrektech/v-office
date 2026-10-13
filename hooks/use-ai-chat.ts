@@ -17,16 +17,21 @@ import {
   applyAiPatches,
   chatStream,
   createAiSession,
+  deleteAiArtifact,
+  deleteAiMaterial,
   deleteAiTemplate,
   exportAiDocx,
+  fetchAiArtifact,
   fetchAiDraftHtml,
   getAiState,
   importAiDocx,
   importAiDraft,
+  saveAiArtifact,
   saveAiDraft,
   stopAiSession,
   uploadAiMaterial,
   uploadAiTemplate,
+  type AiArtifact,
   type AiDraft,
   type AiEvent,
   type AiHealth,
@@ -83,6 +88,20 @@ export interface UseAiChat {
   uploadTemplate: (file: File) => Promise<AiTemplate>;
   /** 撤掉模板 */
   removeTemplate: () => Promise<void>;
+  /** 撤掉一份材料 */
+  removeMaterial: (name: string) => Promise<void>;
+  /** 产物清单（多文件任务用；没有就是空数组） */
+  artifacts: AiArtifact[];
+  /** 当前在编辑器里改的是哪份产物 */
+  activeArtifact: string;
+  /** 把当前稿子存成某份产物（并设为活动产物） */
+  saveArtifactFromDraft: (key: string, title: string) => Promise<void>;
+  /** 在编辑器里打开某份产物 */
+  openArtifact: (key: string) => Promise<void>;
+  /** 只取产物正文（预览用） */
+  loadArtifact: (key: string) => Promise<string>;
+  /** 删掉一份产物 */
+  removeArtifact: (key: string) => Promise<void>;
   saveNow: () => Promise<void>;
   importDraft: (markdown: string, title?: string) => Promise<void>;
   /** 草稿 → docx 落「我的文档」，返回文件名（打开编辑器内核用） */
@@ -130,6 +149,19 @@ function toChange(patch: AiPatch, messageId: string): ChangeLike {
   };
 }
 
+/** 会话草稿的 blocks → Markdown（存产物时用；服务端存的是 markdown，这里只是回写） */
+function blocksToMarkdown(blocks: { heading?: string; text?: string }[]): string {
+  return blocks
+    .map((b) => {
+      const body = (b.text || "").trim();
+      const heading = (b.heading || "").trim();
+      if (heading && body.startsWith(heading)) return body;
+      return heading ? `## ${heading}\n\n${body}` : body;
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 export function useAiChat(options: {
   skill: string;
   title?: string;
@@ -140,6 +172,9 @@ export function useAiChat(options: {
   const [draft, setDraft] = useState<AiDraft | null>(null);
   const [materials, setMaterials] = useState<AiMaterial[]>([]);
   const [template, setTemplate] = useState<AiTemplate | null>(null);
+  /** 产物（四件套这类多文件任务）：清单 + 当前在编辑器里改的那份 */
+  const [artifacts, setArtifacts] = useState<AiArtifact[]>([]);
+  const [activeArtifact, setActiveArtifact] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [health, setHealth] = useState<AiHealth | null>(null);
@@ -172,6 +207,8 @@ export function useAiChat(options: {
       setDraft(state.draft);
       setMaterials(state.materials);
       setTemplate(state.template ?? null);
+      setArtifacts(state.artifacts ?? []);
+      setActiveArtifact(state.activeArtifact ?? "");
       if (state.draft?.title) setDraftTitle(state.draft.title);
     } catch {
       // 状态拉取失败不影响对话
@@ -347,6 +384,8 @@ export function useAiChat(options: {
     setMessages([]);
     setDraft(null);
     setMaterials([]);
+    setArtifacts([]);
+    setActiveArtifact("");
     setLastSaved(null);
     if (persistKey) {
       try {
@@ -385,6 +424,68 @@ export function useAiChat(options: {
     await deleteAiTemplate(sid);
     await refresh();
   }, [refresh]);
+
+  /** 撤掉一份材料：下一轮 prompt 里就不带它了（材料传上去要能收回，所以接了它） */
+  const removeMaterial = useCallback(
+    async (name: string) => {
+      const sid = sessionRef.current;
+      if (!sid) return;
+      await deleteAiMaterial(sid, name);
+      await refresh();
+    },
+    [refresh],
+  );
+
+  /**
+   * 把当前这份稿子存成产物。
+   *
+   * 取的是**服务端刚落盘的那份**（重新拉 state），不是本地 state：AI 回合的
+   * 落文与状态推送有先后，直接读本地 state 可能拿到上一轮的稿子。
+   */
+  const saveArtifactFromDraft = useCallback(
+    async (key: string, title: string) => {
+      const sid = sessionRef.current ?? (await ensureSession());
+      const state = await getAiState(sid);
+      const markdown = blocksToMarkdown(state.draft?.blocks ?? []);
+      await saveAiArtifact(sid, key, title, markdown);
+      await refresh();
+    },
+    [ensureSession, refresh],
+  );
+
+  /**
+   * 在编辑器里打开某份产物：正文灌进会话草稿 → 现有注入机制把它粘进
+   * Collabora（零刷新）。同时把 active 切到这份。
+   */
+  const openArtifact = useCallback(
+    async (key: string) => {
+      const sid = sessionRef.current ?? (await ensureSession());
+      const item = await fetchAiArtifact(sid, key);
+      await importAiDraft(sid, item.markdown, item.title);
+      // 灌草稿不改 active，这里再存一次（内容相同）只为把 active 切过去
+      await saveAiArtifact(sid, item.key, item.title, item.markdown);
+      await refresh();
+    },
+    [ensureSession, refresh],
+  );
+
+  /** 只取某份产物的正文（预览用：不动草稿、不切 active） */
+  const loadArtifact = useCallback(async (key: string): Promise<string> => {
+    const sid = sessionRef.current;
+    if (!sid) return "";
+    const item = await fetchAiArtifact(sid, key);
+    return item.markdown || "";
+  }, []);
+
+  const removeArtifact = useCallback(
+    async (key: string) => {
+      const sid = sessionRef.current;
+      if (!sid) return;
+      await deleteAiArtifact(sid, key);
+      await refresh();
+    },
+    [refresh],
+  );
 
   const saveNow = useCallback(async () => {
     const sid = sessionRef.current;
@@ -527,6 +628,13 @@ export function useAiChat(options: {
     upload,
     uploadTemplate,
     removeTemplate,
+    removeMaterial,
+    artifacts,
+    activeArtifact,
+    saveArtifactFromDraft,
+    openArtifact,
+    loadArtifact,
+    removeArtifact,
     saveNow,
     importDraft,
     exportDocx,

@@ -1,58 +1,262 @@
 [
   {
-    "id": "disclosure-invention",
-    "name": "发明交底书",
-    "description": "默认主路径。挖专利点、轻量查新、按国知局口径成文，产出 Markdown + Word。",
+    "id": "disclosure",
+    "name": "专利交底书",
+    "description": "从材料挖专利点 → 轻量查新 → 按国知局口径成文，产出 Markdown + Word。",
     "kind": "disclosure",
-    "patentType": "invention",
-    "skillEntry": "skills/patent-disclosure/prompts/invention",
-    "outputs": ["交底书.md", "交底书.docx", "查新与区别定位.md"],
+    "skillEntry": "skills/patent-disclosure",
+    "outputs": [
+      "交底书.md",
+      "交底书.docx",
+      "查新与区别定位.md"
+    ],
     "fields": [
-      { "key": "title", "label": "发明名称", "hint": "主题 + 类型，避免商标与夸大用词", "required": true },
-      { "key": "field", "label": "技术领域", "hint": "本发明所属的技术领域", "required": true },
-      { "key": "background", "label": "背景技术", "hint": "现有技术方案及其出处", "required": true },
-      { "key": "defect", "label": "现有技术缺陷", "hint": "逐条列问题，不要空喊创新性强", "required": true },
-      { "key": "purpose", "label": "发明目的", "hint": "要解决的技术问题", "required": true },
-      { "key": "solution", "label": "技术方案", "hint": "必要技术特征 + 从属特征", "required": true, "inferred": true },
-      { "key": "effects", "label": "有益效果", "hint": "与缺陷一一对应", "required": true },
-      { "key": "embodiments", "label": "实施例", "hint": "至少一个可实施的具体方案", "required": true },
-      { "key": "figures", "label": "附图说明", "hint": "框图 / 结构图 / 流程图编号与说明", "inferred": true },
-      { "key": "alternatives", "label": "替代方案", "hint": "扩展保护范围用", "inferred": true },
-      { "key": "uncertain", "label": "待确认清单", "hint": "未披露部件只写这里，不进权要", "inferred": true }
-    ]
-  },
-  {
-    "id": "disclosure-utility",
-    "name": "实用新型交底书",
-    "description": "结构类方案。产出 structure_schema + figure_plan，成文嵌结构图与件号。",
-    "kind": "disclosure",
-    "patentType": "utility",
-    "skillEntry": "skills/patent-disclosure/prompts/utility_model",
-    "outputs": ["交底书.md", "交底书.docx", "structure_schema.json", "figure_plan.yaml"],
-    "fields": [
-      { "key": "title", "label": "实用新型名称", "required": true },
-      { "key": "field", "label": "技术领域", "required": true },
-      { "key": "parts", "label": "部件清单", "hint": "件号由脚本统一分配，禁止自创", "required": true },
-      { "key": "structure", "label": "连接关系", "hint": "部件之间的位置与连接", "required": true },
-      { "key": "effect", "label": "有益效果", "required": true },
-      { "key": "figures", "label": "结构图清单", "hint": "每个部件至少出现在一张图中", "required": true }
-    ]
-  },
-  {
-    "id": "disclosure-design",
-    "name": "外观设计交底书",
-    "description": "视觉类方案。产出 appearance_schema + 线稿视图，成文嵌视图清单。",
-    "kind": "disclosure",
-    "patentType": "design",
-    "skillEntry": "skills/patent-disclosure/prompts/design",
-    "outputs": ["交底书.md", "交底书.docx", "appearance_schema.json", "视图线稿"],
-    "fields": [
-      { "key": "title", "label": "外观设计名称", "required": true },
-      { "key": "product", "label": "产品用途", "required": true },
-      { "key": "designPoints", "label": "设计要点", "hint": "形状 / 图案 / 色彩及其结合", "required": true },
-      { "key": "views", "label": "视图清单", "hint": "主视图 / 后视图 / 立体图等", "required": true },
-      { "key": "omitted", "label": "省略视图说明", "inferred": true }
-    ]
+      {
+        "key": "title",
+        "label": "发明名称",
+        "hint": "主题 + 类型，避免商标与夸大用词",
+        "required": true
+      },
+      {
+        "key": "field",
+        "label": "技术领域",
+        "hint": "本发明所属的技术领域",
+        "required": true
+      },
+      {
+        "key": "background",
+        "label": "背景技术",
+        "hint": "现有技术方案及其出处",
+        "required": true
+      },
+      {
+        "key": "defect",
+        "label": "现有技术缺陷",
+        "hint": "逐条列问题，不要空喊创新性强",
+        "required": true
+      },
+      {
+        "key": "purpose",
+        "label": "发明目的",
+        "hint": "要解决的技术问题",
+        "required": true
+      },
+      {
+        "key": "solution",
+        "label": "技术方案",
+        "hint": "必要技术特征 + 从属特征",
+        "required": true,
+        "inferred": true
+      },
+      {
+        "key": "effects",
+        "label": "有益效果",
+        "hint": "与缺陷一一对应",
+        "required": true
+      },
+      {
+        "key": "embodiments",
+        "label": "实施例",
+        "hint": "至少一个可实施的具体方案",
+        "required": true
+      },
+      {
+        "key": "figures",
+        "label": "附图说明",
+        "hint": "框图 / 结构图 / 流程图编号与说明",
+        "inferred": true
+      },
+      {
+        "key": "alternatives",
+        "label": "替代方案",
+        "hint": "扩展保护范围用",
+        "inferred": true
+      },
+      {
+        "key": "uncertain",
+        "label": "待确认清单",
+        "hint": "未披露部件只写这里，不进权要",
+        "inferred": true
+      }
+    ],
+    "variants": [
+      {
+        "id": "invention",
+        "name": "发明",
+        "note": "方法 / 系统 / 工艺类方案，默认主路径",
+        "skillEntry": "skills/patent-disclosure/prompts/invention",
+        "outputs": [
+          "交底书.md",
+          "交底书.docx",
+          "查新与区别定位.md"
+        ],
+        "fields": [
+          {
+            "key": "title",
+            "label": "发明名称",
+            "hint": "主题 + 类型，避免商标与夸大用词",
+            "required": true
+          },
+          {
+            "key": "field",
+            "label": "技术领域",
+            "hint": "本发明所属的技术领域",
+            "required": true
+          },
+          {
+            "key": "background",
+            "label": "背景技术",
+            "hint": "现有技术方案及其出处",
+            "required": true
+          },
+          {
+            "key": "defect",
+            "label": "现有技术缺陷",
+            "hint": "逐条列问题，不要空喊创新性强",
+            "required": true
+          },
+          {
+            "key": "purpose",
+            "label": "发明目的",
+            "hint": "要解决的技术问题",
+            "required": true
+          },
+          {
+            "key": "solution",
+            "label": "技术方案",
+            "hint": "必要技术特征 + 从属特征",
+            "required": true,
+            "inferred": true
+          },
+          {
+            "key": "effects",
+            "label": "有益效果",
+            "hint": "与缺陷一一对应",
+            "required": true
+          },
+          {
+            "key": "embodiments",
+            "label": "实施例",
+            "hint": "至少一个可实施的具体方案",
+            "required": true
+          },
+          {
+            "key": "figures",
+            "label": "附图说明",
+            "hint": "框图 / 结构图 / 流程图编号与说明",
+            "inferred": true
+          },
+          {
+            "key": "alternatives",
+            "label": "替代方案",
+            "hint": "扩展保护范围用",
+            "inferred": true
+          },
+          {
+            "key": "uncertain",
+            "label": "待确认清单",
+            "hint": "未披露部件只写这里，不进权要",
+            "inferred": true
+          }
+        ],
+        "nameEn": "Invention",
+        "noteEn": "Method / system / process — the default path."
+      },
+      {
+        "id": "utility",
+        "name": "实用新型",
+        "note": "结构类方案，产出件号表与结构图",
+        "skillEntry": "skills/patent-disclosure/prompts/utility_model",
+        "outputs": [
+          "交底书.md",
+          "交底书.docx",
+          "structure_schema.json",
+          "figure_plan.yaml"
+        ],
+        "fields": [
+          {
+            "key": "title",
+            "label": "实用新型名称",
+            "required": true
+          },
+          {
+            "key": "field",
+            "label": "技术领域",
+            "required": true
+          },
+          {
+            "key": "parts",
+            "label": "部件清单",
+            "hint": "件号由脚本统一分配，禁止自创",
+            "required": true
+          },
+          {
+            "key": "structure",
+            "label": "连接关系",
+            "hint": "部件之间的位置与连接",
+            "required": true
+          },
+          {
+            "key": "effect",
+            "label": "有益效果",
+            "required": true
+          },
+          {
+            "key": "figures",
+            "label": "结构图清单",
+            "hint": "每个部件至少出现在一张图中",
+            "required": true
+          }
+        ],
+        "nameEn": "Utility Model",
+        "noteEn": "Structural solution: parts list and structure figures."
+      },
+      {
+        "id": "design",
+        "name": "外观设计",
+        "note": "视觉类方案，产出视图清单与线稿",
+        "skillEntry": "skills/patent-disclosure/prompts/design",
+        "outputs": [
+          "交底书.md",
+          "交底书.docx",
+          "appearance_schema.json",
+          "视图线稿"
+        ],
+        "fields": [
+          {
+            "key": "title",
+            "label": "外观设计名称",
+            "required": true
+          },
+          {
+            "key": "product",
+            "label": "产品用途",
+            "required": true
+          },
+          {
+            "key": "designPoints",
+            "label": "设计要点",
+            "hint": "形状 / 图案 / 色彩及其结合",
+            "required": true
+          },
+          {
+            "key": "views",
+            "label": "视图清单",
+            "hint": "主视图 / 后视图 / 立体图等",
+            "required": true
+          },
+          {
+            "key": "omitted",
+            "label": "省略视图说明",
+            "inferred": true
+          }
+        ],
+        "nameEn": "Design",
+        "noteEn": "Visual solution: view list and line drawings."
+      }
+    ],
+    "nameEn": "Patent Disclosure",
+    "descriptionEn": "Mine the invention from your materials, run a light prior-art check, and draft to CNIPA practice — Markdown + Word."
   },
   {
     "id": "application-four",
@@ -60,12 +264,33 @@
     "description": "已有交底 → 权利要求书 / 说明书 / 摘要 / 附图。须指定交底目录。",
     "kind": "application",
     "skillEntry": "skills/patent-application",
-    "outputs": ["权利要求书.md", "说明书.md", "摘要.md", "附图.docx"],
+    "outputs": [
+      "权利要求书.md",
+      "说明书.md",
+      "摘要.md",
+      "附图.docx"
+    ],
     "fields": [
-      { "key": "disclosureDir", "label": "交底目录", "hint": "须为已定稿交底（含 schema）", "required": true },
-      { "key": "claimStrategy", "label": "权要布局", "hint": "独权必要特征 + 从属阶梯", "required": true },
-      { "key": "supportCheck", "label": "支持性自查", "hint": "权要特征需在说明书有支撑" }
-    ]
+      {
+        "key": "disclosureDir",
+        "label": "交底目录",
+        "hint": "须为已定稿交底（含 schema）",
+        "required": true
+      },
+      {
+        "key": "claimStrategy",
+        "label": "权要布局",
+        "hint": "独权必要特征 + 从属阶梯",
+        "required": true
+      },
+      {
+        "key": "supportCheck",
+        "label": "支持性自查",
+        "hint": "权要特征需在说明书有支撑"
+      }
+    ],
+    "nameEn": "Application Four-Piece Set",
+    "descriptionEn": "From a settled disclosure: description, claims, abstract and figures."
   },
   {
     "id": "office-action",
@@ -73,27 +298,34 @@
     "description": "对照审查意见逐条答复，草稿确认后出陈述正文 Word。",
     "kind": "office-action",
     "skillEntry": "skills/patent-oa",
-    "outputs": ["答复草稿.md", "意见陈述.docx"],
+    "outputs": [
+      "答复草稿.md",
+      "意见陈述.docx"
+    ],
     "fields": [
-      { "key": "notice", "label": "审查意见通知", "required": true },
-      { "key": "claims", "label": "当前权要", "required": true },
-      { "key": "amendments", "label": "修改方案", "hint": "修改后的权要与修改依据", "required": true },
-      { "key": "arguments", "label": "创造性说理", "hint": "区别特征 + 技术效果" }
-    ]
-  },
-  {
-    "id": "search",
-    "name": "专利检索 / 查新",
-    "description": "按著录字段或关键词生成检索式，结果落 SEARCH-*.md。",
-    "kind": "published",
-    "skillEntry": "skills/patent-search",
-    "outputs": ["SEARCH-* .md", "检索式.json"],
-    "fields": [
-      { "key": "keywords", "label": "关键词 / 手段短语", "hint": "3~4 个短语足够", "required": true },
-      { "key": "inventor", "label": "发明人" },
-      { "key": "applicant", "label": "申请人" },
-      { "key": "ipc", "label": "分类号" },
-      { "key": "maxPages", "label": "翻页上限", "hint": "默认按 config.yaml", "required": true }
-    ]
+      {
+        "key": "notice",
+        "label": "审查意见通知",
+        "required": true
+      },
+      {
+        "key": "claims",
+        "label": "当前权要",
+        "required": true
+      },
+      {
+        "key": "amendments",
+        "label": "修改方案",
+        "hint": "修改后的权要与修改依据",
+        "required": true
+      },
+      {
+        "key": "arguments",
+        "label": "创造性说理",
+        "hint": "区别特征 + 技术效果"
+      }
+    ],
+    "nameEn": "Office Action Reply",
+    "descriptionEn": "Reply to each examiner objection, then export the statement as a Word file."
   }
 ]

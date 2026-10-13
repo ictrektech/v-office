@@ -65,3 +65,9 @@ __pycache__/
 # 本地 OnlyOffice 内核（从平台镜像拷的，仅本地 dev 用；生产由应用镜像自带，永不入库）
 /public/v9.3.1-1/
 /public/runtime-config.js
+
+# 本地测试素材（不入 git）
+/samples/
+
+# 热修复备份（本地回滚用，不入 git）
+/.hotfix-backup/

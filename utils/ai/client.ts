@@ -174,6 +174,10 @@ export interface AiSessionState {
   /** 当前会话的成稿模板（用户上传；没有就是 null） */
   template?: AiTemplate | null;
   draft: AiDraft;
+  /** 产物清单（四件套这类多文件任务用；没有就是空数组） */
+  artifacts?: AiArtifact[];
+  /** 当前在编辑器里改的是哪一份产物 */
+  activeArtifact?: string;
   running: boolean;
 }
 
@@ -198,6 +202,14 @@ export async function uploadAiMaterial(
     { method: "POST", body: await file.arrayBuffer() },
   );
   return jsonOrThrow<AiMaterial>(resp);
+}
+
+/** 撤掉一份材料：下一轮起 agent 的参考里不再有它（原件由会话删除时一并清）。 */
+export async function deleteAiMaterial(sid: string, name: string): Promise<void> {
+  await aiFetch(
+    `/sessions/${encodeURIComponent(sid)}/materials/${encodeURIComponent(name)}`,
+    { method: "DELETE" },
+  );
 }
 
 /** 成稿模板的摘要（全文在服务端，这里只够画界面）。 */
@@ -228,6 +240,60 @@ export async function uploadAiTemplate(
 /** 撤掉模板：下一轮起不再按它的结构成文。 */
 export async function deleteAiTemplate(sid: string): Promise<void> {
   await aiFetch(`/sessions/${encodeURIComponent(sid)}/template`, { method: "DELETE" });
+}
+
+/**
+ * 产物（artifacts）——一会话多份成文。
+ *
+ * 草稿只有一份，但申请文件四件套这种任务天生要交四份文件；把每份单独存，
+ * 界面才能摆出「四张卡、各自状态」。正文按需单取，列表响应里不带全文。
+ */
+export interface AiArtifact {
+  key: string;
+  title: string;
+  chars: number;
+  updated_at: number;
+}
+
+export async function listAiArtifacts(
+  sid: string,
+): Promise<{ artifacts: AiArtifact[]; active: string }> {
+  const resp = await aiFetch(`/sessions/${encodeURIComponent(sid)}/artifacts`, {
+    cache: "no-store",
+  });
+  const data = await jsonOrThrow<{ artifacts?: AiArtifact[]; active?: string }>(resp);
+  return { artifacts: data.artifacts ?? [], active: data.active ?? "" };
+}
+
+export async function saveAiArtifact(
+  sid: string,
+  key: string,
+  title: string,
+  markdown: string,
+): Promise<AiArtifact> {
+  const resp = await aiFetch(`/sessions/${encodeURIComponent(sid)}/artifacts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, title, markdown }),
+  });
+  return jsonOrThrow<AiArtifact>(resp);
+}
+
+export async function fetchAiArtifact(
+  sid: string,
+  key: string,
+): Promise<{ key: string; title: string; markdown: string }> {
+  const resp = await aiFetch(
+    `/sessions/${encodeURIComponent(sid)}/artifacts/${encodeURIComponent(key)}`,
+    { cache: "no-store" },
+  );
+  return jsonOrThrow<{ key: string; title: string; markdown: string }>(resp);
+}
+
+export async function deleteAiArtifact(sid: string, key: string): Promise<void> {
+  await aiFetch(`/sessions/${encodeURIComponent(sid)}/artifacts/${encodeURIComponent(key)}`, {
+    method: "DELETE",
+  });
 }
 
 export interface AiPatch {

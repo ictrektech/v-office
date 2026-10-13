@@ -13,7 +13,8 @@
   --card-hover: #faf9f8;
   --border: oklch(0.922 0 0);
   --text-secondary: #605e5c;
-  --radius: 0.625rem;
+  /* iOS 的大圆角基准：卡片 ~20px、控件 ~14px（原来 10px 偏方正） */
+  --radius: 1rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -45,6 +46,11 @@
 }
 
 @theme inline {
+  /* Tailwind 的 font-sans 跟 body 走同一套 iOS 字体栈 */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-primary: var(--primary);
@@ -86,12 +92,29 @@
   --radius-4xl: calc(var(--radius) + 16px);
 }
 
+/*
+ * 字体：iOS 优先（SF Pro → 苹方 → 雅黑），比 Segoe UI 圆润、字面更大。
+ * 关键是把 -apple-system 放第一位：Mac/iOS 上直接命中 SF Pro，
+ * 其余平台按后面的顺序退到苹方/雅黑/Roboto，都是同一套「圆体」骨架。
+ */
 body {
   font-family:
-    "Segoe UI",
-    system-ui,
     -apple-system,
+    BlinkMacSystemFont,
+    "SF Pro Text",
+    "SF Pro Display",
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei UI",
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
     sans-serif;
+  /* 关掉 Chrome 在 Linux 上的字体合成与次像素抗锯齿：字面更清晰、笔画更实 */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 .dark {

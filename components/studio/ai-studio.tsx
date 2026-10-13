@@ -23,7 +23,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
 import { useExtracted } from "next-intl";
-import { ArrowLeft, Check, Loader2, RotateCcw, Save, Upload } from "lucide-react";
+import { ArrowLeft, Check, Loader2, MessageSquare, RotateCcw, Save } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { useAiChat } from "@/hooks/use-ai-chat";
@@ -53,6 +53,28 @@ const ENGINE_POLL_MS = 3_000;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** 宽屏阈值：≥1280px 时 AI 面板常驻右栏，之下改用浮层抽屉 */
+const WIDE_QUERY = "(min-width: 1280px)";
+
+/**
+ * 是否宽屏。
+ *
+ * 初始按 true 渲染（与服务端一致，避免 hydration 不匹配），挂载后再按实际宽度纠正。
+ * 监听断点变化：从宽拖到窄时自动切到抽屉形态，反之亦然。
+ */
+function useIsWide(): boolean {
+  const [isWide, setIsWide] = useState(true);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia(WIDE_QUERY);
+    const sync = () => setIsWide(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+  return isWide;
+}
+
 /**
  * 栏目页交接文稿用的 sessionStorage key（如写作栏「在 Word 里微调」）。
  *
@@ -68,6 +90,22 @@ export interface AiStudioTemplate {
   skill: string;
   /** 成文结构（模板字段清单），用于给 agent 一句起手话术 */
   outline: string;
+  /** 产出契约（agent 最后要落哪几个文件） */
+  outputs?: string[];
+  /**
+   * 会话标题（英文）——它是落盘 docx 的文件名来源。界面上显示的是 `name`，
+   * 两者分开：中文界面里显示中文，切英文时 Collabora 里也不该开中文名文档。
+   */
+  sessionTitle?: string;
+  /** 类型备注：这一类方案长什么样 */
+  note?: string;
+}
+
+/** 同一入口下的类型变体（交底书的发明 / 实用新型 / 外观设计） */
+export interface AiStudioVariant {
+  id: string;
+  label: string;
+  note?: string;
 }
 
 export interface AiStudioNavItem {
@@ -85,6 +123,14 @@ export interface AiStudioProps {
   persistKey: string;
   /** 从栏目页点进来的模板（决定技能包与会话线） */
   template?: AiStudioTemplate | null;
+  /**
+   * 入口下的类型变体（交底书：发明 / 实用新型 / 外观设计）。
+   * 有值时在顶栏下显示一行分段控件；切换由栏目侧改 URL（连带换会话线）。
+   */
+  variants?: AiStudioVariant[];
+  /** 当前变体的 id（与 variants 里某项一致） */
+  activeVariant?: string;
+  onVariantChange?: (id: string) => void;
   /** 浏览器标签标题 */
   pageTitle: string;
   /** 顶栏标题（模板没匹配上时的兜底） */
@@ -106,6 +152,9 @@ export function AiStudio({
   title,
   persistKey,
   template,
+  variants,
+  activeVariant,
+  onVariantChange,
   pageTitle,
   defaultTitle,
   subtitle,
@@ -117,6 +166,10 @@ export function AiStudio({
   const t = useExtracted();
   usePageTitle(pageTitle);
   const language = useResolvedLanguage();
+  /** 宽屏常驻右栏 / 窄屏浮层抽屉，两者互斥，避免同时占屏 */
+  const isWide = useIsWide();
+  const [dockOpen, setDockOpen] = useState(true);
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   const [selectedAnchor, setSelectedAnchor] = useState<string | undefined>(undefined);
   /** 中栏显示哪个：默认就是编辑器；草稿只是「看变更卡/点段落定位」的辅助视图 */
@@ -136,12 +189,12 @@ export function AiStudio({
   /** 会话版本：每次重载 +1，逼 Collabora 丢开内存里的旧文档、重新读盘 */
   const versionRef = useRef(0);
   const openingRef = useRef(false);
-  const importRef = useRef<HTMLInputElement>(null);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
 
   const chat = useAiChat({
     skill,
-    title,
+    // 会话标题取英文（文件名），中文只用于界面显示
+    title: template?.sessionTitle ?? title,
     // 每个模板一条独立会话线，别让不同文种/类型的稿子互相串
     persistKey,
   });
@@ -399,15 +452,6 @@ export function AiStudio({
     [chat, docReady, editorDoc, selectedAnchor],
   );
 
-  const importDraftFile = async (file: File | undefined) => {
-    if (!file) return;
-    try {
-      const text = await file.text();
-      await chat.importDraft(text, file.name.replace(/\.[^.]+$/, ""));
-    } finally {
-      if (importRef.current) importRef.current.value = "";
-    }
-  };
 
   const editing = view === "editor";
 
@@ -416,11 +460,11 @@ export function AiStudio({
       <header className="flex h-16 shrink-0 items-center gap-3 border-b border-[#E7EAF0] bg-white/80 px-4 backdrop-blur-xl dark:border-white/10 dark:bg-[#0b0b0b]/70">
         <Link href={backHref} className={cn(vp.btnGhost, "shrink-0 gap-1.5 px-2.5")}>
           <ArrowLeft className="h-3.5 w-3.5" />
-          <span className="text-[12.5px]">{t({ id: "Back", message: "Back" })}</span>
+          <span className="text-[14px]">{t({ id: "Back", message: "Back" })}</span>
         </Link>
 
         <div className="flex min-w-0 items-center gap-3">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#2563EB] shadow-[0_1px_2px_rgba(16,24,40,0.08),0_8px_20px_-10px_rgba(37,99,235,0.9)]">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#007AFF] shadow-[0_1px_2px_rgba(16,24,40,0.08),0_8px_20px_-10px_rgba(37,99,235,0.9)]">
             <Icon className="h-4.5 w-4.5 text-white" strokeWidth={1.8} />
           </span>
           <div className="min-w-0">
@@ -463,44 +507,25 @@ export function AiStudio({
             </span>
           ) : null}
 
-          <input
-            ref={importRef}
-            type="file"
-            accept=".md,.markdown,.txt"
-            className="hidden"
-            onChange={(e) => void importDraftFile(e.target.files?.[0])}
-          />
-
-          {/* 中栏视图：默认编辑器，草稿是辅助（看变更卡与段落定位） */}
+          {/* 中栏视图：默认编辑器，草稿是辅助（看变更卡与段落定位），
+              多文件任务（四件套）额外有「产物」视图 */}
           <div className={vp.segGroup}>
             <button
               type="button"
               onClick={() => setView("editor")}
-              className={cn(vp.segOff, editing && vp.segOn)}
+              className={cn(vp.segOff, view === "editor" && vp.segOn)}
             >
               {t({ id: "Editor view", message: "Editor" })}
             </button>
             <button
               type="button"
               onClick={() => setView("draft")}
-              className={cn(vp.segOff, !editing && vp.segOn)}
+              className={cn(vp.segOff, view === "draft" && vp.segOn)}
             >
               {t({ id: "Draft view", message: "Draft" })}
             </button>
           </div>
 
-          <button
-            type="button"
-            onClick={() => importRef.current?.click()}
-            className={cn(vp.btnGhost, "hidden lg:inline-flex")}
-            title={t({
-              id: "Import draft hint",
-              message: "Import the current draft (e.g. after editing it in the editor)",
-            })}
-          >
-            <Upload className="h-3.5 w-3.5" />
-            {t({ id: "Import draft", message: "Import draft" })}
-          </button>
           <button
             type="button"
             onClick={chat.reset}
@@ -519,9 +544,26 @@ export function AiStudio({
             <Save className="h-3.5 w-3.5" />
             {t({ id: "Save", message: "Save" })}
           </button>
+          {/* AI 对话面板的开关：宽屏是常驻右栏（可收起），窄屏是浮层抽屉。
+              之前整栏挂在 xl 断点上，窗口一窄就什么都不剩——材料、模板、对话全找不到了。 */}
+          <button
+            type="button"
+            onClick={() => (isWide ? setDockOpen((v) => !v) : setSheetOpen((v) => !v))}
+            className={cn(
+              vp.btnGhost,
+              "px-2.5",
+              (isWide ? dockOpen : sheetOpen) && "border-[#CFE3FF] bg-[#007AFF]/8 text-[#007AFF]",
+            )}
+            title={t({ id: "Toggle AI panel", message: "Toggle the AI panel" })}
+          >
+            <MessageSquare className="h-4 w-4" />
+            <span className="hidden md:inline">
+              {t({ id: "AI panel", message: "AI panel" })}
+            </span>
+          </button>
 
           {chat.streaming ? (
-            <span className={cn(vp.chip, "border-[#EFF4FF] bg-[#EFF4FF] text-[#2563EB]")}>
+            <span className={cn(vp.chip, "border-[#EAF4FF] bg-[#EAF4FF] text-[#007AFF]")}>
               <Loader2 className="h-3 w-3 animate-spin" />
               {t({ id: "Generating", message: "Generating" })}
             </span>
@@ -536,6 +578,42 @@ export function AiStudio({
           ) : null}
         </div>
       </header>
+
+      {/* 类型变体：交底书把「发明 / 实用新型 / 外观设计」合成一个入口后，
+          选类型落到这里——换类型等于换一条会话线（成文结构不同，别串稿）。 */}
+      {variants?.length && onVariantChange ? (
+        <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-black/[0.06] bg-white/80 px-4 py-2.5 backdrop-blur-xl dark:border-white/10 dark:bg-[#0b0b0b]/70">
+          <span className="text-[13.5px] font-medium text-[#6E6E73] dark:text-slate-400">
+            {t({ id: "Patent type", message: "Patent type" })}
+          </span>
+          <div className={cn(vp.segGroup, "flex-wrap")}>
+            {variants.map((v) => {
+              const on = v.id === activeVariant;
+              return (
+                <button
+                  key={v.id}
+                  type="button"
+                  onClick={() => onVariantChange(v.id)}
+                  className={cn(on ? vp.segOn : vp.segOff, "px-4 py-1.5 text-[14px]")}
+                  title={v.note}
+                >
+                  <span className={on ? "text-[#007AFF]" : undefined}>{v.label}</span>
+                </button>
+              );
+            })}
+          </div>
+          {variants.find((v) => v.id === activeVariant)?.note ? (
+            <p className="text-[13.5px] text-[#94A3B8]">
+              {variants.find((v) => v.id === activeVariant)?.note}
+            </p>
+          ) : null}
+          {template?.outputs?.length ? (
+            <p className="ml-auto truncate font-mono text-[12.5px] text-[#94A3B8]">
+              {template.outputs.join(" · ")}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="flex min-h-0 flex-1">
         <main className="relative flex min-w-0 flex-1 bg-white dark:bg-[#0e0e0e]">
@@ -579,7 +657,7 @@ export function AiStudio({
           {/* 打开/重载编辑器期间盖一层：说明进度，绝不出现「点了没反应」 */}
           {(opening || waitSeconds !== null) && editing ? (
             <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-background/90 backdrop-blur-sm">
-              <Loader2 className="h-7 w-7 animate-spin text-[#2563EB]" />
+              <Loader2 className="h-7 w-7 animate-spin text-[#007AFF]" />
               <p className="text-sm font-medium">
                 {waitSeconds === null
                   ? t({ id: "Preparing editor", message: "Preparing the editor…" })
@@ -627,7 +705,7 @@ export function AiStudio({
           ) : null}
 
           {editing && editorUrl && !opening ? (
-            <p className="pointer-events-none absolute bottom-2 left-1/2 z-10 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-[11px] text-white/90">
+            <p className="pointer-events-none absolute bottom-2 left-1/2 z-10 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-[12.5px] text-white/90">
               {t({
                 id: "Editor save hint",
                 message:
@@ -637,6 +715,8 @@ export function AiStudio({
           ) : null}
         </main>
 
+      {/* AI 面板：宽屏常驻右栏，窄屏浮层抽屉。两者互斥渲染，不会同时占屏 */}
+      {isWide ? (
         <AgentPanel
           messages={chat.messages}
           materials={chat.materials}
@@ -652,20 +732,64 @@ export function AiStudio({
           onUpload={chat.upload}
           onUploadTemplate={(file) => chat.uploadTemplate(file)}
           onRemoveTemplate={() => void chat.removeTemplate()}
+          onRemoveMaterial={(name) => void chat.removeMaterial(name)}
           onAcceptChange={(key) => void chat.acceptChange(key)}
           onRejectChange={chat.rejectChange}
           onAcceptAll={() => void chat.acceptAll()}
           onSave={() => void chat.saveNow()}
           panelWidth={panelWidth}
-          className="hidden xl:flex"
+          className={dockOpen ? "flex" : "hidden"}
         />
+      ) : null}
       </div>
+
+      {/* 窄屏抽屉：浮在编辑器之上，点遮罩关闭。之前这个形态压根不存在。 */}
+      {!isWide && sheetOpen ? (
+        <div className="fixed inset-0 z-40 flex justify-end">
+          <button
+            type="button"
+            aria-hidden="true"
+            tabIndex={-1}
+            className="absolute inset-0 cursor-default bg-black/25 backdrop-blur-[2px]"
+            onClick={() => setSheetOpen(false)}
+          />
+          <AgentPanel
+            messages={chat.messages}
+            materials={chat.materials}
+            template={chat.template}
+            streaming={chat.streaming}
+            blocked={chat.blocked}
+            sessionReady={!!chat.sessionId}
+            modelLabel={modelLabel}
+            lastSaved={chat.lastSaved}
+            initialPrompt={seedPromptFor(template)}
+            onSend={(text, options) => void sendInstruction(text, options)}
+            onStop={chat.stop}
+            onUpload={chat.upload}
+            onUploadTemplate={(file) => chat.uploadTemplate(file)}
+            onRemoveTemplate={() => void chat.removeTemplate()}
+            onRemoveMaterial={(name) => void chat.removeMaterial(name)}
+            onAcceptChange={(key) => void chat.acceptChange(key)}
+            onRejectChange={chat.rejectChange}
+            onAcceptAll={() => void chat.acceptAll()}
+            onSave={() => void chat.saveNow()}
+            className="relative z-10 flex h-full w-[min(26rem,88vw)] shadow-[-24px_0_60px_-24px_rgba(0,0,0,0.35)]"
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
 
-/** 模板的起手话术：把「写什么、按什么结构」先说清楚，省一轮来回 */
+/**
+ * 模板的起手话术：把「写什么、按什么结构、最后交哪几个文件」先说清楚，省一轮来回。
+ * 交底书三种类型的字段清单不同，这句话跟着变体走（切换类型即换会话线）。
+ */
 function seedPromptFor(template?: AiStudioTemplate | null): string {
   if (!template) return "";
-  return `按「${template.name}」起草。成文结构：${template.outline}。先告诉我需要哪些材料。`;
+  const parts = [`按「${template.name}」起草。成文结构：${template.outline}。`];
+  if (template.outputs?.length) parts.push(`最终产出：${template.outputs.join("、")}。`);
+  if (template.note) parts.push(`${template.note}。`);
+  parts.push("先告诉我需要哪些材料。");
+  return parts.join("");
 }

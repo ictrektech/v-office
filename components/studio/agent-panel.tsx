@@ -10,7 +10,6 @@ import {
   FileText,
   Loader2,
   Paperclip,
-  Plus,
   Sparkles,
   Square,
   X,
@@ -31,7 +30,7 @@ export function visibleText(raw: string): string {
 
 const OP_CLS: Record<string, string> = {
   insert: "bg-[#ECFDF3] text-[#16A34A]",
-  replace: "bg-[#EFF4FF] text-[#2563EB]",
+  replace: "bg-[#EAF4FF] text-[#007AFF]",
   delete: "bg-[#FEF2F2] text-[#DC2626]",
 };
 
@@ -106,7 +105,8 @@ export function AgentPanel({
   const [draft, setDraft] = useState("");
   const [uploading, setUploading] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [addOpen, setAddOpen] = useState(false);
+  /** 「参考资料」弹层开关：左模板 / 右材料，两块都不是必须的 */
+  const [refsOpen, setRefsOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const templateRef = useRef<HTMLInputElement>(null);
 
@@ -123,13 +123,12 @@ export function AgentPanel({
     onSend(text);
   };
 
-  /** 选完文件先收起菜单；材料与模板走同一套「上传中」提示 */
+  /** 选完文件先收起弹层；材料与模板走同一套「上传中」提示 */
   const resetInput = (input: HTMLInputElement | null) => {
     if (input) input.value = "";
   };
 
   const pickFile = async (file: File | undefined, kind: "material" | "template") => {
-    setAddOpen(false);
     if (!file) return;
     setUploading(file.name);
     setNotice(null);
@@ -174,7 +173,7 @@ export function AgentPanel({
             onClick={() => setTab("agent")}
             className={cn("flex-1 text-center", tab === "agent" ? vp.segOn : vp.segOff)}
           >
-            <span className={tab === "agent" ? "text-[#2563EB]" : undefined}>
+            <span className={tab === "agent" ? "text-[#007AFF]" : undefined}>
               {t({ id: "Agent", message: "Agent" })}
             </span>
           </button>
@@ -183,7 +182,7 @@ export function AgentPanel({
             onClick={() => setTab("analysis")}
             className={cn("flex-1 text-center", tab === "analysis" ? vp.segOn : vp.segOff)}
           >
-            <span className={tab === "analysis" ? "text-[#2563EB]" : undefined}>
+            <span className={tab === "analysis" ? "text-[#007AFF]" : undefined}>
               {t({ id: "Analysis", message: "Analysis" })}
             </span>
           </button>
@@ -194,7 +193,7 @@ export function AgentPanel({
         <div className="m-3 flex items-start gap-2 rounded-xl border border-[#FBE3C0] bg-[#FFF9F0] p-3">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#D97706]" />
           <div className="min-w-0 flex-1">
-            <p className="text-[12.5px] leading-relaxed text-[#8A5A12]">{blocked}</p>
+            <p className="text-[14px] leading-relaxed text-[#8A5A12]">{blocked}</p>
             <Link href="/settings" className={cn(vp.btnText, "mt-1.5 text-[#8A5A12] underline")}>
               {t({ id: "Go to settings", message: "Go to settings" })}
             </Link>
@@ -206,7 +205,7 @@ export function AgentPanel({
         <>
           <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 custom-scrollbar">
             {messages.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-[#E7EAF0] p-4 text-[12.5px] leading-relaxed text-[#94A3B8] dark:border-white/10">
+              <div className="rounded-2xl border border-dashed border-[#E7EAF0] p-4 text-[14px] leading-relaxed text-[#94A3B8] dark:border-white/10">
                 {t({
                   id: "Studio empty hint",
                   message:
@@ -219,29 +218,29 @@ export function AgentPanel({
               m.role === "user" ? (
                 <div key={m.id} className="flex flex-col items-end gap-1">
                   {m.anchor ? (
-                    <span className={cn(vp.chip, "text-[11px]")}>
+                    <span className={cn(vp.chip, "text-[12.5px]")}>
                       {t({ id: "Clause", message: "Clause" })} {m.anchor}
                     </span>
                   ) : null}
-                  <div className="max-w-[85%] rounded-2xl rounded-br-md bg-[#2563EB] px-3.5 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap text-white">
+                  <div className="max-w-[85%] rounded-2xl rounded-br-md bg-[#007AFF] px-3.5 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap text-white">
                     {m.text}
-                    <span className="mt-1 block text-right text-[10.5px] text-white/70">{m.at}</span>
+                    <span className="mt-1 block text-right text-[12px] text-white/70">{m.at}</span>
                   </div>
                 </div>
               ) : (
                 <div key={m.id} className="space-y-2.5">
                   <div className="flex items-center gap-2">
-                    <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-[#EFF4FF]">
-                      <Sparkles className="h-3.5 w-3.5 text-[#2563EB]" />
+                    <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-[#EAF4FF]">
+                      <Sparkles className="h-3.5 w-3.5 text-[#007AFF]" />
                     </span>
-                    <span className="text-[12.5px] font-medium text-[#0F172A] dark:text-white">
+                    <span className="text-[14px] font-medium text-[#0F172A] dark:text-white">
                       {t({ id: "Patent Agent", message: "Patent Agent" })}
                     </span>
                     {m.streaming ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-[#2563EB]" />
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-[#007AFF]" />
                     ) : null}
                     {m.error ? (
-                      <span className="rounded-full bg-[#FEF2F2] px-1.5 py-0.5 text-[10.5px] font-medium text-[#DC2626]">
+                      <span className="rounded-full bg-[#FEF2F2] px-1.5 py-0.5 text-[12px] font-medium text-[#DC2626]">
                         {t({ id: "Error", message: "Error" })}
                       </span>
                     ) : null}
@@ -250,7 +249,7 @@ export function AgentPanel({
                   {visibleText(m.text) ? (
                     <div
                       className={cn(
-                        "rounded-2xl rounded-tl-md border px-3.5 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap",
+                        "rounded-2xl rounded-tl-md border px-3.5 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap",
                         m.error
                           ? "border-[#F6D5D5] bg-[#FEF6F6] text-[#8A2A22]"
                           : "border-[#E7EAF0] bg-[#F9FAFC] text-[#334155] dark:border-white/10 dark:bg-white/5 dark:text-slate-300",
@@ -259,7 +258,7 @@ export function AgentPanel({
                       {visibleText(m.text)}
                     </div>
                   ) : m.streaming ? (
-                    <div className="rounded-2xl rounded-tl-md border border-[#E7EAF0] bg-[#F9FAFC] px-3.5 py-2.5 text-[13px] text-[#94A3B8]">
+                    <div className="rounded-2xl rounded-tl-md border border-[#E7EAF0] bg-[#F9FAFC] px-3.5 py-2.5 text-[15px] text-[#94A3B8]">
                       {t({ id: "Thinking…", message: "Thinking…" })}
                     </div>
                   ) : null}
@@ -267,7 +266,7 @@ export function AgentPanel({
                   {m.notes?.length ? (
                     <ul className="space-y-1 pl-1">
                       {m.notes.map((note, i) => (
-                        <li key={i} className="text-[11.5px] text-[#94A3B8]">
+                        <li key={i} className="text-[13px] text-[#94A3B8]">
                           · {note}
                         </li>
                       ))}
@@ -277,7 +276,7 @@ export function AgentPanel({
                   {m.changes?.length ? (
                     <div className="space-y-2 rounded-2xl border border-[#E7EAF0] bg-white p-3 dark:border-white/10 dark:bg-white/[0.03]">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-[12.5px] font-medium text-[#0F172A] dark:text-white">
+                        <span className="text-[14px] font-medium text-[#0F172A] dark:text-white">
                           {t({
                             id: "N Proposed Changes",
                             message: "{count} Proposed Changes",
@@ -288,7 +287,7 @@ export function AgentPanel({
                           <button
                             type="button"
                             onClick={onAcceptAll}
-                            className="rounded-lg bg-[#16A34A] px-2.5 py-1.5 text-[12px] font-medium text-white transition hover:bg-[#15803D] active:scale-[0.98]"
+                            className="rounded-lg bg-[#16A34A] px-2.5 py-1.5 text-[13.5px] font-medium text-white transition hover:bg-[#15803D] active:scale-[0.98]"
                           >
                             {t({ id: "Accept All", message: "Accept All" })}
                           </button>
@@ -312,13 +311,13 @@ export function AgentPanel({
                             <div className="mb-2 flex items-center gap-2">
                               <span
                                 className={cn(
-                                  "rounded-full px-1.5 py-0.5 text-[10.5px] font-medium",
+                                  "rounded-full px-1.5 py-0.5 text-[12px] font-medium",
                                   OP_CLS[c.operation] ?? OP_CLS.replace,
                                 )}
                               >
                                 <OperationLabel operation={c.operation} />
                               </span>
-                              <span className="text-[11.5px] text-[#94A3B8]">
+                              <span className="text-[13px] text-[#94A3B8]">
                                 {t({ id: "Clause", message: "Clause" })} {c.anchor}
                               </span>
                               {c.status === "accepted" ? (
@@ -327,11 +326,11 @@ export function AgentPanel({
                             </div>
 
                             {c.before ? (
-                              <p className="mb-1.5 max-h-24 overflow-hidden text-[12.5px] leading-relaxed text-[#94A3B8] line-through">
+                              <p className="mb-1.5 max-h-24 overflow-hidden text-[14px] leading-relaxed text-[#94A3B8] line-through">
                                 {c.before}
                               </p>
                             ) : null}
-                            <p className="max-h-40 overflow-y-auto text-[12.5px] leading-relaxed text-[#0F172A] dark:text-white">
+                            <p className="max-h-40 overflow-y-auto text-[14px] leading-relaxed text-[#0F172A] dark:text-white">
                               {c.after}
                             </p>
 
@@ -340,7 +339,7 @@ export function AgentPanel({
                                 <button
                                   type="button"
                                   onClick={() => onAcceptChange(key)}
-                                  className="inline-flex items-center gap-1 rounded-lg bg-[#2563EB] px-2.5 py-1.5 text-[12px] font-medium text-white transition hover:bg-[#1D4FD8] active:scale-[0.98]"
+                                  className="inline-flex items-center gap-1 rounded-lg bg-[#007AFF] px-2.5 py-1.5 text-[13.5px] font-medium text-white transition hover:bg-[#0062CC] active:scale-[0.98]"
                                 >
                                   <Check className="h-3 w-3" />
                                   {t({ id: "Accept", message: "Accept" })}
@@ -348,7 +347,7 @@ export function AgentPanel({
                                 <button
                                   type="button"
                                   onClick={() => onRejectChange(key)}
-                                  className={cn(vp.btnGhost, "px-2.5 py-1.5 text-[12px]")}
+                                  className={cn(vp.btnGhost, "px-2.5 py-1.5 text-[13.5px]")}
                                 >
                                   <X className="h-3 w-3" />
                                   {t({ id: "Reject", message: "Reject" })}
@@ -366,9 +365,23 @@ export function AgentPanel({
           </div>
 
           {/* 输入区 */}
-          <div className="border-t border-[#E7EAF0] p-3 dark:border-white/10">
+          <div className="relative border-t border-black/[0.06] bg-white/90 p-3 backdrop-blur-xl dark:border-white/10 dark:bg-[#101010]/90">
+            {refsOpen ? (
+              <ReferenceSheet
+                materials={materials}
+                template={template}
+                uploading={uploading}
+                canUpload={!!(onUpload || onUploadTemplate)}
+                canRemoveMaterial={!!onRemoveMaterial}
+                onPick={(kind) => (kind === "template" ? templateRef.current : fileRef.current)?.click()}
+                onRemoveMaterial={onRemoveMaterial}
+                onRemoveTemplate={onRemoveTemplate}
+                onClose={() => setRefsOpen(false)}
+              />
+            ) : null}
+
             {lastSaved ? (
-              <p className="mb-2 truncate text-[11.5px] text-[#16A34A]" title={lastSaved}>
+              <p className="mb-2 truncate text-[13px] text-[#16A34A]" title={lastSaved}>
                 {t({
                   id: "Saved to my documents",
                   message: "Saved to My Documents: {name}",
@@ -377,7 +390,7 @@ export function AgentPanel({
               </p>
             ) : null}
             {notice ? (
-              <p className="mb-2 line-clamp-2 text-[11.5px] text-[#64748B]" title={notice}>
+              <p className="mb-2 line-clamp-2 text-[13px] text-[#64748B]" title={notice}>
                 {notice}
               </p>
             ) : null}
@@ -400,11 +413,11 @@ export function AgentPanel({
                   })}
                   className={cn(vp.input, "resize-none")}
                 />
-                <div className="mt-1.5 flex items-center gap-2">
-                  {/* 添加材料：一个按钮两项——「上传材料」是给 AI 分析的内容来源，
-                      「上传模板」是 AI 成文时遵循的结构蓝图 */}
+                <div className="mt-2 flex items-center gap-2">
+                  {/* 参考资料：一个独立按钮，点开是「左模板 / 右材料」两块。
+                      两块都不是必须的——没传也能直接开写，传了 agent 才有结构与依据。 */}
                   {onUpload || onUploadTemplate ? (
-                    <div className="relative">
+                    <div className="flex items-center gap-2">
                       <input
                         ref={fileRef}
                         type="file"
@@ -420,61 +433,36 @@ export function AgentPanel({
                       />
                       <button
                         type="button"
-                        onClick={() => setAddOpen((v) => !v)}
+                        onClick={() => setRefsOpen((v) => !v)}
                         disabled={!!uploading}
-                        className={cn(vp.btnText, "gap-1")}
+                        className={cn(
+                          "inline-flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-[14px] font-medium transition active:scale-[0.98]",
+                          refsOpen
+                            ? "border-[#007AFF]/30 bg-[#007AFF]/10 text-[#007AFF]"
+                            : "border-black/[0.07] bg-white text-[#475569] hover:border-[#CFE3FF] hover:text-[#007AFF]",
+                        )}
                       >
                         {uploading ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
+                          <Loader2 className="h-4 w-4 animate-spin" />
                         ) : (
-                          <Plus className="h-3 w-3" />
+                          <Paperclip className="h-4 w-4" />
                         )}
                         {uploading
                           ? t({ id: "Uploading…", message: "Uploading…" })
-                          : t({ id: "Attach material", message: "Attach material" })}
+                          : t({ id: "References", message: "References" })}
+                        {/* 有多少东西就直接写在按钮上，不用点开才知道 */}
+                        {template || materials.length ? (
+                          <span className="rounded-full bg-[#007AFF]/12 px-1.5 text-[12px] font-semibold text-[#007AFF]">
+                            {(template ? 1 : 0) + materials.length}
+                          </span>
+                        ) : null}
                       </button>
-                      {addOpen ? (
-                        <>
-                          {/* 透明底：点菜单外面就收起 */}
-                          <button
-                            type="button"
-                            aria-hidden="true"
-                            tabIndex={-1}
-                            className="fixed inset-0 z-10 cursor-default"
-                            onClick={() => setAddOpen(false)}
-                          />
-                          <div className="absolute bottom-8 left-0 z-20 w-52 rounded-xl border border-[#E7EAF0] bg-white py-1 shadow-lg dark:border-white/10 dark:bg-[#181818]">
-                            <button
-                              type="button"
-                              onClick={() => fileRef.current?.click()}
-                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12.5px] text-[#334155] transition hover:bg-[#F5F7FB] dark:text-slate-300 dark:hover:bg-white/5"
-                            >
-                              <Paperclip className="h-3.5 w-3.5" />
-                              {t({ id: "Upload material", message: "Upload material" })}
-                              <span className="ml-auto text-[10.5px] text-[#94A3B8]">
-                                {t({ id: "for AI to analyze", message: "for AI to analyze" })}
-                              </span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => templateRef.current?.click()}
-                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12.5px] text-[#334155] transition hover:bg-[#F5F7FB] dark:text-slate-300 dark:hover:bg-white/5"
-                            >
-                              <FileText className="h-3.5 w-3.5" />
-                              {t({ id: "Upload template", message: "Upload template" })}
-                              <span className="ml-auto text-[10.5px] text-[#94A3B8]">
-                                {t({ id: "follow its structure", message: "follow its structure" })}
-                              </span>
-                            </button>
-                          </div>
-                        </>
-                      ) : null}
                     </div>
                   ) : null}
                   <button type="button" onClick={onSave} className={cn(vp.btnText, "gap-1")}>
                     {t({ id: "Save to my documents", message: "Save to My Documents" })}
                   </button>
-                  <span className={cn(vp.meta, "ml-auto truncate text-[11px]")}>
+                  <span className={cn(vp.meta, "ml-auto truncate text-[12.5px]")}>
                     {modelLabel || ""}
                   </span>
                 </div>
@@ -497,7 +485,7 @@ export function AgentPanel({
                   className={cn(
                     "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white transition",
                     draft.trim() && sessionReady
-                      ? "bg-[#2563EB] hover:bg-[#1D4FD8] active:scale-[0.97]"
+                      ? "bg-[#007AFF] hover:bg-[#0062CC] active:scale-[0.97]"
                       : "bg-[#CBD5E1]",
                   )}
                   title={t({ id: "Send", message: "Send" })}
@@ -518,6 +506,199 @@ export function AgentPanel({
         />
       )}
     </aside>
+  );
+}
+
+/**
+ * 参考资料弹层（iOS 底部 sheet）。
+ *
+ * 左「专利模板」= 按什么结构写；右「参考材料」= 写什么、依据是什么。
+ * 两块**都不是必须的**：空着也能直接让 agent 开写，所以这里只提示、不拦人。
+ * 已传的文件直接在栏内列出并可单个撤掉——材料传上去要能收回，所以移除接到了
+ * 后端 `DELETE /sessions/{sid}/materials/{name}`。
+ */
+function ReferenceSheet({
+  materials,
+  template,
+  uploading,
+  canUpload,
+  canRemoveMaterial,
+  onPick,
+  onRemoveMaterial,
+  onRemoveTemplate,
+  onClose,
+}: {
+  materials: AiMaterial[];
+  template?: AiTemplate | null;
+  /** 正在上传的文件名（非空时按钮显示进度态） */
+  uploading: string | null;
+  canUpload: boolean;
+  canRemoveMaterial: boolean;
+  onPick: (kind: "material" | "template") => void;
+  onRemoveMaterial?: (name: string) => void;
+  onRemoveTemplate?: () => void;
+  onClose: () => void;
+}) {
+  const t = useExtracted();
+
+  /** 一栏（模板 / 材料共用的骨架）：图标 + 标题 + 说明 + 内容 */
+  const column = (
+    key: "template" | "material",
+    icon: React.ReactNode,
+    title: string,
+    hint: string,
+    children: React.ReactNode,
+  ) => (
+    <section
+      key={key}
+      className="flex min-w-0 flex-col rounded-2xl border border-black/[0.05] bg-[#F7F7FA] p-3.5 dark:border-white/10 dark:bg-white/[0.04]"
+    >
+      <div className="mb-3 flex items-center gap-2">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white text-[#007AFF] shadow-[0_1px_2px_rgba(0,0,0,0.06)] dark:bg-white/10">
+          {icon}
+        </span>
+        <div className="min-w-0">
+          <h3 className="text-[15px] font-semibold text-[#0F172A] dark:text-white">{title}</h3>
+          <p className="text-[12.5px] leading-tight text-[#94A3B8]">{hint}</p>
+        </div>
+      </div>
+      <div className="flex-1">{children}</div>
+    </section>
+  );
+
+  return (
+    <>
+      {/* 透明底：点弹层外面收起（iOS sheet 的 dismiss 手势位） */}
+      <button
+        type="button"
+        aria-hidden="true"
+        tabIndex={-1}
+        className="fixed inset-0 z-20 cursor-default"
+        onClick={onClose}
+      />
+      <div className="absolute bottom-2 left-2 right-2 z-30 animate-[sheet-up_180ms_ease-out] rounded-3xl border border-black/[0.06] bg-white p-4 shadow-[0_8px_40px_-12px_rgba(0,0,0,0.28)] dark:border-white/10 dark:bg-[#1C1C1E]">
+        <style>{`@keyframes sheet-up{from{opacity:0;transform:translateY(12px) scale(.985)}to{opacity:1;transform:none}}`}</style>
+
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="text-[17px] font-semibold tracking-[-0.01em] text-[#0F172A] dark:text-white">
+            {t({ id: "References", message: "References" })}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-black/[0.05] text-[#64748B] transition hover:bg-black/[0.08] dark:bg-white/10 dark:text-slate-300"
+            title={t({ id: "Close", message: "Close" })}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          {column(
+            "template",
+            <FileText className="h-4.5 w-4.5" strokeWidth={1.9} />,
+            t({ id: "Patent template", message: "Patent template" }),
+            t({
+              id: "Template column hint",
+              message: "The agent writes by its clauses.",
+            }),
+            <>
+              {template ? (
+                <div className="mb-2 rounded-xl border border-[#BBF7D0] bg-[#F6FEF9] px-2.5 py-2 dark:border-[#16A34A]/30 dark:bg-[#16A34A]/10">
+                  <p className="truncate text-[13.5px] font-medium text-[#15803D] dark:text-[#4ADE80]">
+                    {template.name}
+                  </p>
+                  <div className="mt-0.5 flex items-center justify-between gap-2">
+                    <p className="truncate text-[12.5px] text-[#94A3B8]">
+                      {template.parseError
+                        ? template.parseError
+                        : `${template.chars} ${t({ id: "chars", message: "chars" })}${template.truncated ? " · 已截断" : ""}`}
+                    </p>
+                    {onRemoveTemplate ? (
+                      <button
+                        type="button"
+                        onClick={() => onRemoveTemplate()}
+                        className="shrink-0 text-[12.5px] font-medium text-[#007AFF]"
+                      >
+                        {t({ id: "Remove", message: "Remove" })}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => onPick("template")}
+                disabled={!canUpload || !!uploading}
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-black/[0.07] bg-white px-3 py-2.5 text-[14px] font-medium text-[#007AFF] transition hover:bg-[#007AFF]/5 active:scale-[0.98] disabled:opacity-50 dark:border-white/10 dark:bg-white/5"
+              >
+                {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {t({ id: "Upload template", message: "Upload template" })}
+              </button>
+            </>,
+          )}
+
+          {column(
+            "material",
+            <Paperclip className="h-4.5 w-4.5" strokeWidth={1.9} />,
+            t({ id: "Materials", message: "Materials" }),
+            t({
+              id: "Material column hint",
+              message: "Anything the agent should read.",
+            }),
+            <>
+              {materials.length ? (
+                <ul className="mb-2 space-y-1.5">
+                  {materials.map((m) => (
+                    <li
+                      key={m.name}
+                      className="flex items-center gap-2 rounded-xl border border-black/[0.05] bg-white px-2.5 py-1.5 dark:border-white/10 dark:bg-white/5"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13.5px] text-[#334155] dark:text-slate-200">
+                          {m.name}
+                        </p>
+                        <p className="truncate text-[12px] text-[#94A3B8]">
+                          {m.parseError
+                            ? m.parseError
+                            : `${m.chars} ${t({ id: "chars", message: "chars" })}${m.truncated ? " · 已截断" : ""}`}
+                        </p>
+                      </div>
+                      {canRemoveMaterial && onRemoveMaterial ? (
+                        <button
+                          type="button"
+                          onClick={() => onRemoveMaterial(m.name)}
+                          className="shrink-0 text-[12.5px] font-medium text-[#007AFF]"
+                        >
+                          {t({ id: "Remove", message: "Remove" })}
+                        </button>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => onPick("material")}
+                disabled={!canUpload || !!uploading}
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-black/[0.07] bg-white px-3 py-2.5 text-[14px] font-medium text-[#007AFF] transition hover:bg-[#007AFF]/5 active:scale-[0.98] disabled:opacity-50 dark:border-white/10 dark:bg-white/5"
+              >
+                {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {t({ id: "Upload material", message: "Upload material" })}
+              </button>
+            </>,
+          )}
+        </div>
+
+        {/* 两块都可空：把「不是必须」说清楚，免得用户以为漏了一步 */}
+        <p className="mt-3 text-center text-[12.5px] text-[#94A3B8]">
+          {t({
+            id: "References optional hint",
+            message: "Both are optional — the agent can start without them.",
+          })}
+        </p>
+      </div>
+    </>
   );
 }
 
@@ -555,8 +736,8 @@ function AnalysisTab({
           <div className="mt-1.5 flex items-start gap-2 rounded-lg border border-[#BBF7D0] bg-[#F6FEF9] px-2.5 py-2">
             <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#16A34A]" />
             <div className="min-w-0 flex-1">
-              <p className="truncate text-[12px] font-medium text-[#15803D]">{template.name}</p>
-              <p className="text-[11px] text-[#94A3B8]">
+              <p className="truncate text-[13.5px] font-medium text-[#15803D]">{template.name}</p>
+              <p className="text-[12.5px] text-[#94A3B8]">
                 {template.parseError
                   ? template.parseError
                   : `${t({ id: "Draft template", message: "Draft template" })} · ${template.chars} ${t({ id: "chars", message: "chars" })}${template.truncated ? " · 已截断" : ""}`}
@@ -578,8 +759,8 @@ function AnalysisTab({
             {materials.map((m) => (
               <li key={m.name} className="flex items-start gap-2">
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-[12px] text-[#475569] dark:text-slate-300">{m.name}</p>
-                  <p className="text-[11px] text-[#94A3B8]">
+                  <p className="truncate text-[13.5px] text-[#475569] dark:text-slate-300">{m.name}</p>
+                  <p className="text-[12.5px] text-[#94A3B8]">
                     {m.parseError
                       ? m.parseError
                       : `${m.chars} ${t({ id: "chars", message: "chars" })}${m.truncated ? " · 已截断" : ""}`}
@@ -609,7 +790,7 @@ function AnalysisTab({
         {toolCalls.length ? (
           <ul className="mt-1.5 space-y-1">
             {toolCalls.map((n, i) => (
-              <li key={i} className="text-[12px] text-[#475569] dark:text-slate-300">
+              <li key={i} className="text-[13.5px] text-[#475569] dark:text-slate-300">
                 · {n}
               </li>
             ))}
