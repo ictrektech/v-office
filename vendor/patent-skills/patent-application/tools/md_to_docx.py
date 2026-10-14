@@ -665,9 +665,49 @@ def _add_rich_content_to_paragraph(
         _add_inline_to_paragraph(paragraph, text[pos:], mono=mono)
 
 
+def _mark_cjk_lang(rPr) -> None:
+    """把 run 的语言显式标成中文（w:lang w:eastAsia="zh-CN"）。
+
+    不标的后果很隐蔽：python-docx 默认模板把 docDefaults 的语言留成 en-US，
+    LibreOffice/Collabora 打开后就认为这些 run 是**英文**。于是 fontconfig 里
+    "lang 含 zh 才追加 Noto Sans SC 兜底"那条规则对全文不生效，只剩
+    宋体→Noto Serif SC / 黑体→Noto Sans SC 两条显式别名在撑；这两套字体覆盖
+    不到的字（生僻字、全角符号等）直接渲染成豆腐块 □。
+
+    手打的字没这个问题——编辑器按实际输入语言打标记，兜底自然生效。所以症状
+    就是"AI 生成的文档一片方框，手动输入却正常"。
+    """
+    lang = rPr.find(qn("w:lang"))
+    if lang is None:
+        lang = OxmlElement("w:lang")
+        rPr.append(lang)
+    lang.set(qn("w:val"), "zh-CN")
+    lang.set(qn("w:eastAsia"), "zh-CN")
+
+
+def _mark_doc_defaults_cjk(doc) -> None:
+    """把 docDefaults（rPrDefault/rPr）的语言也标成中文，兜住所有未显式设字体的 run。"""
+    try:
+        styles_el = doc.styles.element
+        defaults = styles_el.find(qn("w:docDefaults"))
+        if defaults is None:
+            return
+        rpr = defaults.find(qn("w:rPrDefault"))
+        if rpr is None:
+            return
+        rpr = rpr.find(qn("w:rPr"))
+        if rpr is None:
+            rpr = OxmlElement("w:rPr")
+            defaults.find(qn("w:rPrDefault")).append(rpr)
+        _mark_cjk_lang(rpr)
+    except (AttributeError, KeyError):
+        pass
+
+
 def _set_run_font(run, name: str = "宋体", size_pt: float | None = None, bold: bool | None = None):
     run.font.name = name
     run._element.rPr.rFonts.set(qn("w:eastAsia"), name)
+    _mark_cjk_lang(run._element.rPr)
     if size_pt is not None:
         run.font.size = Pt(size_pt)
     if bold is not None:
@@ -1127,9 +1167,14 @@ def convert_md_to_docx(
         style.font.name = "宋体"
         if style._element.rPr is not None:
             style._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
+            _mark_cjk_lang(style._element.rPr)
         style.font.size = Pt(10.5)
     except (AttributeError, KeyError):
         pass
+    # docDefaults 的语言也要标成中文：没走 _set_run_font 的 run（表格空单元格、
+    # 编号段落、图片说明等）会继承它。只改 Normal 样式不够——模板的 docDefaults
+    # 仍是 en-US，这些"漏网"run 的中文兜底依然不生效。
+    _mark_doc_defaults_cjk(doc)
 
     lines = md_text.splitlines()
     i = 0
