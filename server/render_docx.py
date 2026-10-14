@@ -1,3 +1,19 @@
+"""把 docx 渲染成页图（docx → PDF → PNG）。
+
+用途：**给人看**——预览「改成什么样了」，以及排查「数据写对了、页面却是坏的」那类
+问题（最典型的是中文字体没映射上：docx 里的字都在，渲染出来中文整段不画）。
+
+来源：huaqiang-huang/codex-doc-skill 的 `scripts/render_docx.py`
+      <https://github.com/huaqiang-huang/codex-doc-skill>（Apache-2.0，
+      许可全文见同目录 render_docx.LICENSE.txt）。
+
+      只取了这一个脚本：它原本配套的 SKILL.md 是给「有视觉的 agent」用的，而我们的
+      模型没有图像输入能力（实测把图喂进去，模型自述看不到），所以这里当**服务端
+      工具**用，不做成技能包——做成技能反而会让 AI 以为自己能"看一眼检查排版"。
+
+依赖：soffice（镜像里的 LibreOffice）、pdftoppm / pdfinfo（poppler-utils）、
+      pdf2image（见 requirements.txt）。缺 poppler 时直接抛错，不会静默出空图。
+"""
 import argparse
 import os
 import re

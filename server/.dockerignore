@@ -1,0 +1,18 @@
+# storage 镜像的构建上下文是 server/ 目录（见 build_image.sh 的 `-f server/Dockerfile`）。
+# 这里列出的东西**不会进镜像**——镜像里只该有能跑起来的运行时代码。
+
+# Python 字节码/缓存。本地跑过一次就会生成，而 `COPY skills/` 会把技能目录里的
+# 那些一起带进镜像（我们已经在这里挡掉一层）。
+__pycache__/
+*.pyc
+*.pyo
+
+# 测试文件：进 git 是应该的（要跑），进镜像没必要。
+test_*.py
+
+# 转换脚本的工作目录（_convert_docx 会在会话目录下建 .conv-<uuid>，正常不在
+# server/ 下；写上是为了万一有人拿会话目录当上下文时，别把用户的稿子打进镜像）。
+.conv-*
+
+# 本地素材
+samples/

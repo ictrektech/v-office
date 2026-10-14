@@ -51,10 +51,11 @@ RUN printf '#!/bin/sh\nexec /opt/pi-node/node /opt/pi/dist/bundle/cli.js "$@"\n'
 # 只是没有专用技能。
 COPY skills/ /opt/patent-skills/
 
-COPY main.py ./
-COPY ai.py ./
-# 材料解析（agent 不接触用户文件，docx/pdf/pptx/xlsx 都在这里变成文本）
-COPY extract_text.py ./
+# 一次性拷全部模块。**不要退回逐个列文件**：显式列表已经漏过一次——`safe_fs.py`
+# 和 `docx_revise.py` 都是 ai.py 顶部的硬 import，漏了容器一起来就 ModuleNotFoundError，
+# 而本地跑源码完全看不出来。哪些 .py 不该进镜像交给 .dockerignore 排除，
+# 而不是指望"以后加文件的人记得在这里补一行"。
+COPY *.py ./
 
 ENV DATA_ROOT=/data
 ENV VOS_OIDC_USERINFO_URL=http://172.17.0.1:8105/v1000/oauth2/userinfo
