@@ -17,6 +17,17 @@
 /.next/
 /out/
 
+# 本地 dev 的构建目录（见 next.config.ts 的 NEXT_DIST_DIR：dev 用 .next-dev，
+# 与 build 的 .next 隔离）。**必须在这里忽略**，否则 Tailwind v4 的自动内容
+# 探测会把 .next-dev 下的 turbopack 缓存（.sst 二进制）、日志、编译产物一并
+# 当源码扫描，扫出 `bg-[4dot=!]` 这类垃圾类名 → 生成出无法解析的 CSS →
+# lightningcss 报 "Parsing CSS source code failed" → 整站样式表作废、页面白屏
+# （2026-10-13 本地就是这么白屏的）。
+/.next-dev/
+
+# playwright-cli（浏览器自动化）的工作目录：快照、控制台日志、截图都落在这里，
+# 是本地调试产物，不该进仓库。
+/.playwright-cli/
 
 # production
 /build
