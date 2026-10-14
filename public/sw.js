@@ -13,7 +13,10 @@
  *
  * 只接管内核与内容寻址的前端产物，不碰业务接口（`/api/...` 不在 scope 内）。
  */
-const VERSION = "voffice-kernel-v1";
+// 改动 VERSION 会让 activate 阶段把旧缓存整批删掉。**必须这么升**：
+// 浏览器对 sw.js 本身的更新检查不受 HTTP 缓存影响，所以这是唯一能在
+// 用户不碰 DevTools 的情况下、把 cache-first 造成的"旧 chunk 粘住"清掉的手段。
+const VERSION = "voffice-kernel-v2";
 
 const KERNEL_PATTERNS = [
   /\/v\d[\d.]*-\d+\//, // 内核树：/v9.3.1-1/sdkjs/...  /v9.3.1-1/fonts/217
