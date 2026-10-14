@@ -31,7 +31,10 @@ RUN pip install --no-cache-dir -i "${PIP_INDEX_URL}" -r requirements.txt
 # LibreOffice headless：只服务 OnlyOffice 路线的老 .doc 往返（x2t 读不好也写不了
 # 老二进制）。老 ppt / xls 不走这条路——它们默认交给 Collabora（服务端 LibreOffice，
 # 自带全部过滤器），所以这里不需要 impress / calc。
-RUN apt-get update && apt-get install -y --no-install-recommends libreoffice-writer \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libreoffice-writer \
+        poppler-utils \
+        fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 
 # AI 运行时：node + pi bundle（见上面的 pi 阶段说明）

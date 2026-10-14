@@ -10,3 +10,7 @@ openpyxl>=3.1.2
 # 技能包的 docx_to_md.py 用它把 docx 转回 Markdown（编辑器改完的稿子回灌草稿）。
 # 纯 Python、无原生依赖；少了它回读接口会退回 502 而不是静默丢内容。
 mammoth>=1.8.0
+# docx 渲染预览（server/render_docx.py，来自 codex-doc-skill）：
+# docx→PDF 走镜像里的 LibreOffice，PDF→PNG 靠它封装 pdftoppm。
+# 缺了它渲染脚本直接报 ModuleNotFoundError。
+pdf2image>=1.17.0
