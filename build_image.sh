@@ -705,9 +705,22 @@ if [[ "$SKIP_BUILD" != "1" && "$BUILD_WEB" == "1" ]]; then
     .
 fi
 
-# 技能随镜像走（VOS 是 pull 模式，宿主机没有技能仓库可挂）：
-# 把技能仓库的子包同步进 server/skills/，不存在就跳过（AI 仍可用，只是没有专用技能）。
-PATENT_SKILLS_DIR="${PATENT_SKILLS_DIR:-../patent-disclosure-skill/skills}"
+# 技能随镜像走（VOS 是 pull 模式，宿主机没有技能仓库可挂）：把技能同步进
+# server/skills/ 再打进镜像。
+#
+# 来源顺序：显式指定的 PATENT_SKILLS_DIR → 隔壁的技能仓库（开发时改技能用那份）
+# → **仓库内的固定副本 vendor/patent-skills**。
+#
+# 为什么必须有最后这一档：以前找不到隔壁目录就**静默跳过**，结果产出一个
+# md↔docx 转换全坏、编辑器根本打不开的镜像（用户只看到「生成 docx 失败」）。
+# 换台机器 pull 下来构建就会踩到——固定副本让「pull 完就能构建」成立。
+if [[ -z "${PATENT_SKILLS_DIR:-}" ]]; then
+  if [[ -d "../patent-disclosure-skill/skills" ]]; then
+    PATENT_SKILLS_DIR="../patent-disclosure-skill/skills"
+  else
+    PATENT_SKILLS_DIR="vendor/patent-skills"
+  fi
+fi
 if [[ "$SKIP_BUILD" != "1" && "$BUILD_STORAGE" == "1" ]]; then
   if [[ -d "$PATENT_SKILLS_DIR" ]]; then
     log "Sync patent skills: ${PATENT_SKILLS_DIR} -> server/skills"
@@ -715,7 +728,13 @@ if [[ "$SKIP_BUILD" != "1" && "$BUILD_STORAGE" == "1" ]]; then
     find server/skills -mindepth 1 -maxdepth 1 ! -name README.md -exec rm -rf {} +
     cp -r "$PATENT_SKILLS_DIR"/. server/skills/
   else
-    log "Patent skills not found at ${PATENT_SKILLS_DIR}; storage image builds without them"
+    # 走到这里 = 显式指定的目录不存在（仓库内兜底副本由上面的逻辑保证存在）。
+    # **必须停下**：继续构建会产出一个 md↔docx 全坏、编辑器打不开的镜像，
+    # 而且要等用户点开文档才发现——比构建期失败贵得多。
+    log "ERROR: skills not found at ${PATENT_SKILLS_DIR}"
+    log "       storage 镜像不能没有技能（md↔docx 转换会全坏）。"
+    log "       修法：git pull 带上 vendor/patent-skills，或 PATENT_SKILLS_DIR 指向技能目录。"
+    exit 1
   fi
 
   docker_build_image \

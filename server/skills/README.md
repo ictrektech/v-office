@@ -9,16 +9,25 @@
 
 ## 怎么放技能进来
 
-构建 storage 镜像前，把技能仓库的子包拷进来即可（目录会被打进镜像）：
+**正常情况下不用手工拷**：`build_image.sh` 构建 storage 镜像前会自动同步，来源按
+顺序取
+
+1. `PATENT_SKILLS_DIR`（显式指定）
+2. `../patent-disclosure-skill/skills`（本地 clone 的技能仓库，改技能时用这份）
+3. `vendor/patent-skills`（**仓库内的固定副本**，兜底）
+
+第 3 档是必须的：以前第 2 档找不到就**静默跳过**，产出一个 md↔docx 转换全坏、
+编辑器打不开的镜像（用户只看到「生成 docx 失败」）——换台机器 pull 下来构建就会
+踩到。别去掉它。
+
+临时手工拷也可以（比如单独试某个技能）：
 
 ```bash
-# 例如 patent-disclosure-skill 仓库
-cp -r ../patent-disclosure-skill/skills/* server/skills/
+cp -r /path/to/skills/. server/skills/
 ```
 
-`build_image.sh` 在构建 storage 镜像前会做这件事：默认从
-`${PATENT_SKILLS_DIR:-../patent-disclosure-skill/skills}` 同步（目录不存在就跳过，
-镜像里就只有本文件，AI 仍可用、只是没有专用技能）。
+本目录在 .gitignore 里，**只是构建中转**，别往里提交东西——技能的可版本化副本在
+`vendor/patent-skills/`，来源与更新方式见那里的 README。
 
 ## 为什么不在运行时挂卷
 
