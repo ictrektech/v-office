@@ -524,6 +524,18 @@ export function useAiChat(options: {
                 if (t) setDraftTitle(t);
                 break;
               }
+              case "style": {
+                // 整篇样式（<doc-style/>）落地：更新草稿，并**明说一句**。
+                // 少了这句，用户只看到文档自己刷新了一下，不知道是 AI 改了样式，
+                // 会当成「AI 说改好了却没生效」。
+                if (event.draft) {
+                  setDraft(event.draft as AiDraft);
+                  const st = (event.draft as AiDraft)?.title;
+                  if (st) setDraftTitle(st);
+                }
+                addNote(String(event.message ?? "已更新整篇样式"));
+                break;
+              }
               case "saved":
                 setLastSaved(String(event.name ?? ""));
                 break;

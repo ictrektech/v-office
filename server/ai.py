@@ -638,8 +638,15 @@ def save_draft(username: str, sid: str, draft: dict) -> None:
 # （实测出现过 block[0] 末尾挂着 "<final-doc>"）。
 # 这里做一份服务端等价实现，所有落文入口统一走它。
 
-_TAG_RE = re.compile(r"</?(?:final-doc|patch)(?:\s[^>]*)?>", re.IGNORECASE)
+_TAG_RE = re.compile(r"</?(?:final-doc|patch|doc-style)(?:\s[^>]*)?>", re.IGNORECASE)
 _PATCH_BLOCK_RE = re.compile(r"<patch\b[^>]*>[\s\S]*?</patch>", re.IGNORECASE)
+# 自闭合的 <doc-style … />：整篇样式指令。它不产生正文，只改 docx 的字体/字号/行距
+# （写进草稿的 styles，导出时传给 md_to_docx.py）。
+_DOC_STYLE_RE = re.compile(r"<doc-style\b([^>]*)/?>", re.IGNORECASE)
+# 属性名专用：ATTR_RE 的 `\w+` **匹配不了连字符**，`body-size="14"` 会被读成
+# `size="14"`，白名单里对不上——整个指令静默失效（实测踩过）。现有 patch 的属性
+# 名都是纯字母（anchor/op/heading），所以那边一直没暴露这个问题。
+_DOC_STYLE_ATTR_RE = re.compile(r"([\w-]+)\s*=\s*\"([^\"]*)\"")
 _FENCE_RE = re.compile(r"^\s*```[a-zA-Z0-9_-]*\s*$", re.MULTILINE)
 
 
@@ -648,6 +655,7 @@ def strip_contract_tags(text: str) -> str:
     if not text:
         return ""
     out = _PATCH_BLOCK_RE.sub("", text)
+    out = _DOC_STYLE_RE.sub("", out)
     out = _TAG_RE.sub("", out)
     out = _FENCE_RE.sub("", out)
     out = re.sub(r"\n{3,}", "\n\n", out)
@@ -792,6 +800,44 @@ FINAL_RE = re.compile(r"<final-doc>(.*?)</final-doc>", re.S | re.I)
 ATTR_RE = re.compile(r"(\w+)\s*=\s*\"([^\"]*)\"")
 
 
+def _parse_doc_style(text: str) -> dict:
+    """解析 <doc-style …/>：整篇样式（字体 / 字号 / 行距）。
+
+    字段走白名单 + 范围校验：这些值会**直接写进 docx**，字号传成 0 或 9999，
+    用户拿到的就是一份打不开或没法看的文档——宁可不认。
+    """
+    style: dict = {}
+    for attrs in _DOC_STYLE_RE.findall(text or ""):
+        meta = {
+            k.lower().replace("_", "-"): v
+            for k, v in _DOC_STYLE_ATTR_RE.findall(attrs or "")
+        }
+        for key, field in (
+            ("body-font", "font"),
+            ("body-size", "size_pt"),
+            ("heading-font", "heading_font"),
+            ("heading-size", "heading_size_pt"),
+            ("line-spacing", "line_spacing"),
+        ):
+            raw = (meta.get(key) or "").strip()
+            if not raw:
+                continue
+            if field in ("size_pt", "heading_size_pt", "line_spacing"):
+                try:
+                    value = float(raw)
+                except ValueError:
+                    continue
+                if field == "line_spacing":
+                    if not (0.8 <= value <= 4.0):
+                        continue
+                elif not (6.0 <= value <= 72.0):
+                    continue
+                style[field] = value
+            else:
+                style[field] = raw[:64]
+    return style
+
+
 def parse_model_output(text: str) -> dict:
     """解析模型输出：patch 优先，整篇 <final-doc> 次之，都没有就是纯说明。"""
     patches: list[dict] = []
@@ -805,11 +851,13 @@ def parse_model_output(text: str) -> dict:
         })
     final = FINAL_RE.search(text or "")
     prose = PATCH_RE.sub("", (text or ""))
-    prose = FINAL_RE.sub("", prose).strip()
+    prose = FINAL_RE.sub("", prose)
+    prose = _DOC_STYLE_RE.sub("", prose).strip()
     return {
         "patches": patches,
         "final_doc": strip_contract_tags(final.group(1)) if final else None,
         "prose": strip_contract_tags(prose),
+        "doc_style": _parse_doc_style(text or ""),
     }
 
 
@@ -819,6 +867,15 @@ OUTPUT_CONTRACT = """# 改稿输出契约（严格遵守）
 - 删除段落：<patch anchor="段落编号" op="delete"></patch>
 - 只有需要重写整篇时才用 <final-doc>…</final-doc> 包裹完整全文
 - patch 之外可以写一两句说明你的改动理由；<patch> 里不要放代码块围栏
+
+整篇样式（字体 / 字号 / 行距）——**只在用户明确要求时写**：
+- <doc-style body-font="宋体" body-size="14" line-spacing="1.5"/>
+- 可用字段：body-font、body-size、heading-font、heading-size、line-spacing
+- 字号写磅值：五号=10.5、小四=12、四号=14、小三=15、三号=16、小二=18、二号=22
+- 行距写倍数：1.5 = 1.5 倍行距
+- 「调大一档」这类相对说法，先按常见字号换算成磅值再写进去（如 10.5 → 14）
+- 它管的是**整篇统一**的样式。要强调某几个字，用 Markdown 的 **粗体** 就够了
+- 用户没提样式就**不要写**这个标签，也不要为了「看起来更整齐」自作主张改
 
 关于段落编号（最容易错，务必照做）：
 - 编号只认「当前草稿」里方括号中的数字，例如 [2] 就是编号 2
@@ -896,6 +953,28 @@ def public_draft(draft: dict) -> dict:
     }
 
 
+def _style_args(draft: dict) -> list[str]:
+    """把草稿里的 styles 翻成 md_to_docx.py 的命令行参数。
+
+    没有样式（绝大多数稿子）就返回空表，转换命令与从前**逐字一致**——这个功能
+    对既有链路因此是零影响的，真出问题也只会出在「用户明确改过样式」的稿子上。
+    """
+    styles = draft.get("styles") or {}
+    args: list[str] = []
+    for key, flag in (
+        ("font", "--body-font"),
+        ("size_pt", "--body-size"),
+        ("heading_font", "--heading-font"),
+        ("heading_size_pt", "--heading-size"),
+        ("line_spacing", "--line-spacing"),
+    ):
+        value = styles.get(key)
+        if value in (None, ""):
+            continue
+        args.extend([flag, str(value)])
+    return args
+
+
 def _draft_doc_name(title: str) -> str:
     """草稿对应的那份 docx 文件名（「我的文档」里的名字）。
 
@@ -966,6 +1045,7 @@ async def _save_draft_docx(username: str, sid: str, draft: dict) -> Optional[str
             tool="md_to_docx.py", src=markdown.encode("utf-8"),
             src_suffix=".md", out_suffix=".docx", root=session_dir(username, sid),
             prefer=_session_skill(username, sid),
+            extra_args=_style_args(draft),
         )
     except Exception as exc:  # noqa: BLE001 转换挂了不该吞掉这一轮结果
         LOG.warning("ai: docx convert crashed user=%s sid=%s: %s", username, sid, exc)
@@ -1607,6 +1687,25 @@ async def _land_turn(
     final_doc: Optional[str] = parsed.get("final_doc")
     is_first = not (draft.get("blocks") or [])
 
+    # 整篇样式指令（<doc-style/>）：并进草稿的 styles，导出 docx 时生效。
+    # 它和文字改动是**两条独立的线**——用户只是想「换个字号」时，不该被迫接受
+    # 一堆文字变更，所以在这里单独落地，不参与下面的「待确认变更」流程。
+    style_changed = False
+    doc_style = parsed.get("doc_style") or {}
+    if doc_style:
+        merged_style = {**(draft.get("styles") or {}), **doc_style}
+        if merged_style != (draft.get("styles") or {}):
+            draft = {**draft, "styles": merged_style}
+            save_draft(username, sid, draft)
+            style_changed = True
+            LOG.info("ai: doc style applied sid=%s style=%s", sid, merged_style)
+            events.append({
+                "type": "style",
+                "styles": merged_style,
+                "message": _style_summary(doc_style),
+                "draft": public_draft(draft),
+            })
+
     if anchor and len(patches) == 1 and anchor.isdigit():
         requested = str(patches[0].get("anchor") or "")
         if requested != anchor:
@@ -1643,6 +1742,13 @@ async def _land_turn(
         return events
 
     if not patches:
+        # 只有样式变更：必须**整篇重新导出**。修订链路是在原 docx 上打 Word 修订、
+        # 不会重排样式，用它的话用户会看到「AI 说改好了，字号却没变」——这正是
+        # 这类功能最容易翻车的地方。
+        if style_changed and autosave:
+            saved = await _save_draft_docx(username, sid, draft)
+            if saved:
+                events.append({"type": "saved", "name": saved})
         return events
 
     if is_first:
@@ -2220,10 +2326,12 @@ async def _convert_docx(
     out_suffix: str,
     root: Path,
     prefer: str = "",
+    extra_args: Optional[list[str]] = None,
 ) -> Optional[bytes]:
     """把字节在 md / docx 之间转一次。转换失败返回 None（调用方决定怎么报错）。
 
     `prefer`：优先用哪个技能包里的同名脚本（见 `_skill_tool`）。
+    `extra_args`：追加给脚本的命令行参数（如 md_to_docx.py 的 `--body-size`）。
     """
     script = _skill_tool(tool, prefer)
     if script is None:
@@ -2240,10 +2348,10 @@ async def _convert_docx(
     out_path = tmp / f"out{out_suffix}"
     try:
         src_path.write_bytes(src)
-        code, tail = await _run_tool(
-            [sys.executable, str(script), "-i", str(src_path), "-o", str(out_path)],
-            DOCX_TOOL_TIMEOUT_S,
-        )
+        argv = [sys.executable, str(script), "-i", str(src_path), "-o", str(out_path)]
+        if extra_args:
+            argv.extend(str(a) for a in extra_args)
+        code, tail = await _run_tool(argv, DOCX_TOOL_TIMEOUT_S)
         if code != 0 or not out_path.is_file():
             LOG.warning("ai: %s failed code=%s tail=%s", tool, code, tail)
             return None
