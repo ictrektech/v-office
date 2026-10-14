@@ -135,6 +135,13 @@ FROM ${COLLABORA_BASE}
 
 COPY --from=patcher /work/global.js /usr/share/coolwsd/browser/dist/global.js
 
+# 中文字体：镜像里 fontconfig 只扫 /usr/share/fonts 等**并不存在**的目录，
+# 看不到 LO 自带的 Noto Serif SC / Noto Sans SC（在
+# /opt/collaboraoffice/share/fonts/truetype 下），于是文档请求「宋体」的正文
+# 会落到纯拉丁替身上 —— 中文整段不画（屏幕/PDF 都只剩数字）。
+# 这个 conf 把那个目录纳入扫描并把宋体/黑体映射过去；详细原因见文件内注释。
+COPY 99-voffice-cjk.conf /etc/fonts/conf.d/99-voffice-cjk.conf
+
 # 参数以环境变量形式固化；部署时可在平台侧覆盖（例如追加字体或调整 AS）。
 ENV extra_params="--o:ssl.enable=false --o:net.proto=IPv4 --o:ssl.termination=true"
 

@@ -20,6 +20,8 @@
 import { getVOSAccessToken, clearVOSAuthCache } from "@/utils/vos/fastpath";
 import type { SharedTarget } from "@/utils/vos/storage";
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const STORAGE_API =
   process.env.NEXT_PUBLIC_STORAGE_API || "/api/com.ictrek.v-office/api/v1";
 
@@ -463,6 +465,10 @@ export function followCollaboraEnd(iframe: HTMLIFrameElement): void {
  * Mimetype 用 text/html：标题/加粗/列表等格式都能带上（纯文本会丢格式）。
  * 配合 `sendUnoCommand(iframe, ".uno:SelectAll")` 就是「整篇替换」——
  * AI 重写稿子时走这条，用户眼看着文档整体变成新版（实测可用）。
+ *
+ * **单次粘贴的体量有上限**（实测：整篇一次粘，40KB 上下的稿子落盘只剩前面
+ * 一小段——本地联调样张「粘贴容量测试.docx」落盘后只剩标题）。大体量必须走
+ * `replaceDocumentWithHtml` 的分块协议，不要直接拿整篇调用本函数。
  */
 export function pasteIntoCollabora(iframe: HTMLIFrameElement, html: string): void {
   postToCollabora(iframe, {
@@ -470,6 +476,172 @@ export function pasteIntoCollabora(iframe: HTMLIFrameElement, html: string): voi
     SendTime: Date.now(),
     Values: { Mimetype: "text/html", Data: html },
   });
+}
+
+/**
+ * 单块粘贴的体量上限（字节）。
+ *
+ * 24KB 是刻意留了余量的：出问题的样本在 40KB 量级，而块太小又会让一轮注入
+ * 多出几十次 UNO 往返（每次都要等粘贴安静）。真实稿子（专利交底书四件套
+ * 3k～11k 字）通常 1～3 块就粘完。
+ */
+const PASTE_CHUNK_BYTES = 24 * 1024;
+
+/** HTML 里的 void 元素（没有闭合标签，扫描深度时不能把它们当成开标签）。 */
+const VOID_TAGS = new Set([
+  "area", "base", "br", "col", "embed", "hr", "img", "input",
+  "link", "meta", "param", "source", "track", "wbr",
+]);
+
+/**
+ * 把 HTML 按**完整顶层元素**切成若干块，每块不超过 `maxBytes`。
+ *
+ * 为什么必须在元素边界切：`Action_Paste` 的 Data 是一整段 HTML，从中间
+ * 砍断会留下未闭合的标签，LibreOffice 的 HTML 导入器对半截标签的处理是
+ * 丢弃或错位，粘出来的内容就是乱的。 mammoth 的输出是一串顶层
+ * `<p>/<h1>..<h6>/<ul>/<ol>/<table>/<blockquote>`，按完整顶层元素切最安全。
+ *
+ * 扫描器只认标签深度，不建 DOM：这段字符串可能很大（几十 KB），而
+ * DOMParser 在这里纯属浪费；且服务端渲染管线是确定性的，不会产出嵌套
+ * 错乱的 HTML。两个不变量由单测守着（块拼接 == 原文、块内标签配平）：
+ * - 只在 depth 归 0（一个完整顶层元素闭合）之后才决定切不切；
+ * - 元素内部的文本/子元素全部随元素整体走，绝不被单独切出去。
+ */
+export function splitHtmlForPaste(html: string, maxBytes = PASTE_CHUNK_BYTES): string[] {
+  const text = html || "";
+  const chunks: string[] = [];
+  let current = "";
+  let currentBytes = 0;
+  let depth = 0;
+  /** 当前顶层元素的起点（depth 0→1 时光标的位置）；-1 = 不在元素里 */
+  let elementStart = -1;
+  let i = 0;
+  const encoder = new TextEncoder();
+
+  const append = (piece: string) => {
+    current += piece;
+    currentBytes += encoder.encode(piece).length;
+  };
+  /** 超限就先切（块非空才切；单块超限的元素宁可超限也不拆） */
+  const appendBounded = (piece: string) => {
+    if (currentBytes > 0 && currentBytes + encoder.encode(piece).length > maxBytes) {
+      if (current) chunks.push(current);
+      current = "";
+      currentBytes = 0;
+    }
+    append(piece);
+  };
+  const flush = () => {
+    if (current) chunks.push(current);
+    current = "";
+    currentBytes = 0;
+  };
+
+  while (i < text.length) {
+    const lt = text.indexOf("<", i);
+    if (lt === -1) {
+      // 只剩裸文本尾巴：depth 0 时按独立片段处理，>0 时随残元素走
+      const tail = text.slice(i);
+      if (depth === 0) appendBounded(tail);
+      else append(tail);
+      break;
+    }
+    if (lt > i) {
+      const piece = text.slice(i, lt);
+      if (depth === 0) appendBounded(piece);
+      // depth > 0：元素内部文本，随元素整体切，这里跳过（不重复计入）
+      i = lt;
+      continue;
+    }
+    const close = text.indexOf(">", i);
+    if (close === -1) {
+      // 残尾（不该出现）：并进当前块，别丢内容
+      append(text.slice(i));
+      break;
+    }
+    const tag = text.slice(i, close + 1);
+    const nameMatch = tag.match(/^<\/?\s*([a-zA-Z0-9:-]+)/);
+    const name = (nameMatch?.[1] || "").toLowerCase();
+    const isClose = tag.startsWith("</");
+    const isSelfClose = tag.endsWith("/>");
+    const isVoid = VOID_TAGS.has(name);
+
+    if (depth === 0) {
+      if (!isClose && !isSelfClose && !isVoid) {
+        // 顶层开元素：记住起点，等它闭合再整体入块
+        elementStart = i;
+        depth += 1;
+      } else {
+        // 顶层自闭合 / void 元素 / 多余的闭合标签：本身即完整片段
+        appendBounded(tag);
+      }
+    } else {
+      if (!isClose && !isSelfClose && !isVoid) depth += 1;
+      else if (isClose && !isVoid) depth = Math.max(0, depth - 1);
+      if (depth === 0 && elementStart >= 0) {
+        // 一个完整顶层元素 [elementStart, close] 到手：整体入块
+        appendBounded(text.slice(elementStart, close + 1));
+        elementStart = -1;
+      }
+    }
+    i = close + 1;
+  }
+  // 收尾：HTML 不完整（元素没闭合）时，残串整体并进当前块，别丢内容
+  if (depth > 0 && elementStart >= 0) append(text.slice(elementStart));
+  flush();
+  return chunks.length ? chunks : [text];
+}
+
+/**
+ * 用 HTML **整篇替换**活文档里的内容——分块粘贴协议。
+ *
+ * 为什么必须分块（2026-10-14 本地联调实测）：`Action_Paste` 把整段 HTML 经
+ * WebSocket 一次性推给 coolwsd，体量一大就被截断——落盘只剩前面一小段，
+ * 用户看到的就是「AI 写的内容只显示最前面一点」。单块 40KB 的稿子必现，
+ * 且改格式（字体调大、行距变化）让文档变大后更容易撞上。曾经的补救是
+ * 「保存后数字数，短了就重贴」，但截断的那次保存已经先把服务端完整 docx
+ * 覆盖成残缺版，重载加载的就是残缺文件，补不完。
+ *
+ * 协议（两步都实测过）：
+ *   ① `.uno:SelectAll` → 等 700ms → 粘第一块（整篇替换）
+ *   ② 其余块：`.uno:GoToEndOfDoc` → 粘到光标处（文末追加）
+ * 每块之间等 `waitForCollaboraQuiet`——`Action_Paste` 是异步的，保存抢跑
+ * 会把贴到一半的文档写进文件（见 `waitForCollaboraQuiet` 的注释）。
+ *
+ * `GoToEndOfDoc` 会把光标移到文末并**收起选区**；收起是追加的前提——
+ * 收不起的话下一块会替换掉刚粘的内容（已本地验证：三块 100 段连粘，
+ * 落盘字数 = 三块之和）。
+ */
+export async function replaceDocumentWithHtml(
+  iframe: HTMLIFrameElement,
+  html: string,
+  {
+    chunkBytes = PASTE_CHUNK_BYTES,
+    onProgress,
+  }: { chunkBytes?: number; onProgress?: (done: number, total: number) => void } = {},
+): Promise<number> {
+  // 空内容不粘：全选后贴空串等于把文档清空（防御：正常链路不会走到这——
+  // 注入 effect 跳过空草稿，服务端对空草稿也给「只有标题」的 HTML）
+  if (!html || !html.trim()) return 0;
+  const chunks = splitHtmlForPaste(html, chunkBytes);
+  // ① 第一块：全选后粘 = 整篇替换
+  sendUnoCommand(iframe, ".uno:SelectAll");
+  await sleep(700);
+  pasteIntoCollabora(iframe, chunks[0]);
+  onProgress?.(1, chunks.length);
+  await waitForCollaboraQuiet(iframe);
+  // ② 其余块：到文末追加
+  for (let index = 1; index < chunks.length; index += 1) {
+    if (!iframe.isConnected) break;
+    // 光标到文末（收起上一块粘贴留下的选区，否则下一块会替换掉它）
+    sendUnoCommand(iframe, ".uno:GoToEndOfDoc");
+    await sleep(150);
+    if (!iframe.isConnected) break;
+    pasteIntoCollabora(iframe, chunks[index]);
+    onProgress?.(index + 1, chunks.length);
+    await waitForCollaboraQuiet(iframe);
+  }
+  return chunks.length;
 }
 
 /**
@@ -501,6 +673,111 @@ export function hideCollaboraSidebar(iframe: HTMLIFrameElement): void {
 /** 让 Collabora 走一次保存（WOPI PutFile 写回存储）。 */
 export function saveCollabora(iframe: HTMLIFrameElement): void {
   postToCollabora(iframe, { MessageId: "Action_Save", SendTime: Date.now() });
+}
+
+/**
+ * 读一回**用户在编辑器里选中的文字**（没有选区返回空串）。
+ *
+ * 协议（对照 bundle.js 的 PostMessageManager）：发 `Action_Copy` 带上
+ * Mimetype，coolwsd 做一次 `gettextselection`，再把内容以
+ * `Action_Copy_Resp`（Values.content）回给宿主。这条路**不碰浏览器剪贴板**——
+ * `isActionCopy` 为真时组件直接转发给我们，不会走 navigator.clipboard。
+ *
+ * 用途：「只改这里」——用户在 Word 里选中一段，右侧 AI 面板因此能把改动范围
+ * 收窄到那一处（而不是整篇重写）。选区是**读时**快照：用户之后又在文档里
+ * 点掉选区不影响已收窄的范围（改动照样落在那一段上）。
+ *
+ * 超时/无选区/跨源一律返回空串，由调用方决定怎么提示。
+ */
+export function readCollaboraSelection(
+  iframe: HTMLIFrameElement,
+  timeoutMs = 3000,
+): Promise<string> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (text: string) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      window.removeEventListener("message", onMessage);
+      resolve(text);
+    };
+    const onMessage = (ev: MessageEvent) => {
+      let data: { MessageId?: string; Values?: { content?: string } } | null = null;
+      try {
+        data =
+          typeof ev.data === "string"
+            ? JSON.parse(ev.data)
+            : (ev.data as { MessageId?: string; Values?: { content?: string } });
+      } catch {
+        return;
+      }
+      if (data?.MessageId === "Action_Copy_Resp") {
+        finish(String(data.Values?.content ?? ""));
+      }
+    };
+    const timer = window.setTimeout(() => finish(""), timeoutMs);
+    window.addEventListener("message", onMessage);
+    postToCollabora(iframe, {
+      MessageId: "Action_Copy",
+      SendTime: Date.now(),
+      // 纯文本就够定位与展示；HTML 版本对「改哪段」没有额外信息
+      Values: { Mimetype: "text/plain;charset=utf-8" },
+    });
+  });
+}
+
+/**
+ * 等文档「安静下来」——`Action_Paste` 这类异步操作真正做完的判据。
+ *
+ * 为什么必须有（2026-10-14 实测复现，本地 Collabora 26.04 + playwright）：
+ * `Action_Paste` 是**异步**的，粘贴过程中会持续吐 `Doc_PartChanged` /
+ * `Doc_ModifiedStatus`。曾经的实现是「粘贴后立刻 `Action_Save`」，32KB 的稿子
+ * 落盘只剩 **793 字（3%）**——保存动作把贴到一半的文档写成了文件，而服务端那份
+ * 完整 docx 反被这次不完整的保存盖掉。所以保存前必须等这些事件停止。
+ *
+ * 三条边界缺一不可：
+ * - `minMs`：粘贴刚发出去时也会安静一小会儿（事件还没开始吐），不等够下限会把
+ *   「还没开始贴」误判成「贴完了」；
+ * - `quietMs`：贴完到最后一个事件之间有间隔，500ms 实测能区分「贴完的间隙」
+ *   和「贴到一半的间隙」；
+ * - `maxMs`：信号万一不来（换内核版本、被禁用），到点放行——宁可存一份可能不全
+ *   的文档（上层还会核对字数、必要时重贴或重载），也不能把界面卡在「保存中」。
+ *
+ * 返回实际等了多久（毫秒），便于排查。
+ */
+export function waitForCollaboraQuiet(
+  iframe: HTMLIFrameElement,
+  { quietMs = 500, minMs = 300, maxMs = 15_000 }: { quietMs?: number; minMs?: number; maxMs?: number } = {},
+): Promise<number> {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    let lastEvent = started;
+    const onMessage = (ev: MessageEvent) => {
+      let data: { MessageId?: string } | null = null;
+      try {
+        data =
+          typeof ev.data === "string"
+            ? (JSON.parse(ev.data) as { MessageId?: string })
+            : (ev.data as { MessageId?: string });
+      } catch {
+        return;
+      }
+      if (data?.MessageId === "Doc_PartChanged" || data?.MessageId === "Doc_ModifiedStatus") {
+        lastEvent = Date.now();
+      }
+    };
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      const sinceStart = now - started;
+      if (sinceStart >= maxMs || (sinceStart >= minMs && now - lastEvent >= quietMs)) {
+        window.clearInterval(timer);
+        window.removeEventListener("message", onMessage);
+        resolve(sinceStart);
+      }
+    }, 50);
+    window.addEventListener("message", onMessage);
+  });
 }
 
 /**
