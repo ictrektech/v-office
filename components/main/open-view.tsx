@@ -31,7 +31,7 @@ import {
   useNasDocuments,
   type NasDocument,
 } from "@/hooks/use-nas-documents";
-import { useAppStore, useResolvedLanguage } from "@/store";
+import { useAppStore, useIsChineseUI, useResolvedLanguage } from "@/store";
 import DocumentNameDialog from "@/components/document-name-dialog";
 import PublishOverwriteDialog from "@/components/publish-overwrite-dialog";
 import SourceHistoryDialog from "@/components/source-history-dialog";
@@ -102,8 +102,11 @@ export function OpenView({
 
     const router = useRouter();
   const server = useAppStore((state) => state.server);
+  // language 用于拉数据 / 传给内核组件（都发生在水合之后），照旧要真实值；
+  // 但「中文 ? 中文文案 : 英文文案」这类分支必须用水合安全的判断，
+  // 否则首帧（服务端渲染的英文）与客户端（同步读到门户语言的中文）对不上。
   const language = useResolvedLanguage();
-  const zh = language.toLowerCase().startsWith("zh");
+  const zh = useIsChineseUI();
   // VOS 镜像在构建期写入了 basePath：用它区分"独立部署"与"VOS 部署但没拿到登录态"
   const isVOSDeployment = Boolean(process.env.NEXT_PUBLIC_BASE_PATH);
 
@@ -267,7 +270,7 @@ export function OpenView({
    */
   const publishStoredFile = async (file: StoredFile) => {
     if (!publicCategory || publishingStoredFile) return;
-    const isZh = language.toLowerCase().startsWith("zh");
+    const isZh = zh;
     setPublishingStoredFile(file.name);
     try {
       const outcome = await copyStoredFileToSource(
@@ -327,7 +330,9 @@ export function OpenView({
       setPublishPrompt({ file });
       return;
     }
-    void requestPublish(file);
+    // 这里必须落到真正的写入函数上。曾经误写成 requestPublish 自己，于是"公共目录
+    // 里还没有同名文件"这条最常见路径会同步无限递归、当场爆栈，按钮点了毫无反应。
+    void publishStoredFile(file);
   };
 
   const handleStoredFileClick = async (file: StoredFile) => {
@@ -386,7 +391,7 @@ export function OpenView({
       await renameStoredFile(oldName, newName);
     } catch (error) {
       if (
-        language.toLowerCase().startsWith("zh") &&
+        zh &&
         error instanceof Error &&
         error.message === "A file with that name already exists"
       ) {
@@ -562,7 +567,7 @@ export function OpenView({
               <PenLine className="w-5 h-5 text-violet-600 dark:text-violet-400 group-hover:text-white transition-colors" />
             </span>
             <span className="text-xs font-semibold text-muted-foreground group-hover:text-foreground transition-colors">
-              {language.toLowerCase().startsWith("zh")
+              {zh
                 ? "AI 公文写作"
                 : "AI Writing"}
             </span>
@@ -576,7 +581,7 @@ export function OpenView({
               <Scale className="w-5 h-5 text-blue-600 dark:text-blue-400 group-hover:text-white transition-colors" />
             </span>
             <span className="text-xs font-semibold text-muted-foreground group-hover:text-foreground transition-colors">
-              {language.toLowerCase().startsWith("zh")
+              {zh
                 ? "AI 专利撰写"
                 : "AI Patent"}
             </span>
@@ -988,13 +993,13 @@ export function OpenView({
                       }}
                       className="inline-flex items-center gap-1.5 rounded-lg bg-muted px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-sidebar-hover"
                       title={
-                        language.toLowerCase().startsWith("zh")
+                        zh
                           ? "重命名文档"
                           : "Rename document"
                       }
                     >
                       <Pencil className="h-4 w-4" />
-                      {language.toLowerCase().startsWith("zh")
+                      {zh
                         ? "重命名"
                         : "Rename"}
                     </button>
