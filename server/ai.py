@@ -43,6 +43,8 @@ import uuid
 from pathlib import Path
 from typing import AsyncIterator, Callable, Optional
 
+from safe_fs import discard_file, discard_tree
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -85,6 +87,16 @@ def init_ai(*, username_resolver, log, save_document=None, read_document=None) -
         AI_HOME,
         GLOBAL_CONCURRENCY,
     )
+    # 技能目录是 md↔docx 转换的**唯一**依赖：没有它，编辑器永远打不开，
+    # 而用户看到的只是一句「生成 docx 失败」。这里把它显式喊出来，
+    # 省掉「翻代码才知道缺什么」那一轮。
+    if not _looks_like_skills_dir(SKILLS_DIR):
+        log.warning(
+            "ai: no skills under %s — md/docx conversion will fail "
+            "(set V_OFFICE_AI_SKILLS, or run build_image.sh to sync "
+            "server/skills/, or keep the patent skill repo next to this one)",
+            SKILLS_DIR,
+        )
 
 
 async def _user(request: Request) -> str:
@@ -97,7 +109,55 @@ async def _user(request: Request) -> str:
 
 AI_HOME = Path(os.environ.get("V_OFFICE_AI_HOME", "/data/.ai"))
 PI_BIN = os.environ.get("V_OFFICE_AI_PI_BIN", "pi")
-SKILLS_DIR = os.environ.get("V_OFFICE_AI_SKILLS", "/opt/patent-skills")
+
+
+def _looks_like_skills_dir(path: Path | str) -> bool:
+    """目录里是否真的躺着技能包——判据是子目录自带 SKILL.md。
+
+    只判「目录存在」不够：镜像里 `server/skills/` 即使没同步进技能也仍是
+    一个目录（只有 README.md），拿它当技能目录会让后面每个转换都静默失败。
+    """
+    path = Path(path)
+    try:
+        return any(
+            (child / "SKILL.md").is_file()
+            for child in path.iterdir()
+            if child.is_dir()
+        )
+    except OSError:
+        return False
+
+
+def _resolve_skills_dir() -> Path:
+    """技能目录在哪：显式环境变量 > 镜像内固定路径 > 仓库内/同级技能包。
+
+    为什么要有这一串兜底：技能在镜像里固定放 `/opt/patent-skills`，而本地 dev
+    是直接起 `server/main.py`，那个路径**不存在**——此时 md↔docx 转换一律返回
+    None，前端只能看到「生成 docx 失败（技能脚本未就绪或超时）」，错误信息
+    指向不了真正的原因（技能目录没挂上）。这里按顺序探测，任一个真的是技能包
+    的目录都可用；一个都没有时仍返回镜像默认值，让启动日志把它原样暴露出来。
+    """
+    explicit = os.environ.get("V_OFFICE_AI_SKILLS", "").strip()
+    if explicit:
+        return Path(explicit)
+    here = Path(__file__).resolve().parent
+    for candidate in (
+        Path("/opt/patent-skills"),  # 镜像内（server/Dockerfile COPY skills/）
+        here / "skills",  # 仓库内同步副本（build_image.sh 会拷进来）
+        # 同级技能仓库。两种常见摆放都要认：
+        #   <repo>/server/../patent-disclosure-skill/skills   （仓库根旁）
+        #   <repo>/server/../../patent-disclosure-skill/skills（工作区根旁，本机就是这种）
+        here.parent / "patent-disclosure-skill" / "skills",
+        here.parent.parent / "patent-disclosure-skill" / "skills",
+    ):
+        if _looks_like_skills_dir(candidate):
+            return candidate
+    return Path("/opt/patent-skills")
+
+
+# 保持 str：这个值会直接进 /health 的 JSON（Path 不能 JSON 序列化），
+# 也会进日志与 pi 的 `--skill` 参数。
+SKILLS_DIR = str(_resolve_skills_dir())
 DEFAULT_BASE_URL = os.environ.get("V_OFFICE_AI_BASE_URL", "https://ai.ictrek.com/v1")
 # 读 pi 输出用的行缓冲上限（asyncio 默认 64KiB，长文必爆）
 STDOUT_LIMIT_BYTES = int(os.environ.get("V_OFFICE_AI_STDOUT_LIMIT", 8 * 1024 * 1024))
@@ -105,7 +165,10 @@ STDOUT_LIMIT_BYTES = int(os.environ.get("V_OFFICE_AI_STDOUT_LIMIT", 8 * 1024 * 1
 GLOBAL_CONCURRENCY = max(1, int(os.environ.get("V_OFFICE_AI_CONCURRENCY", "3")))
 QUEUE_WAIT_S = float(os.environ.get("V_OFFICE_AI_QUEUE_WAIT", "30"))
 MAX_UPLOAD_BYTES = int(os.environ.get("V_OFFICE_AI_MAX_UPLOAD", str(50 * 1024 * 1024)))
-PING_INTERVAL_S = 15.0
+# SSE 心跳间隔（秒）。**必须与前端看门狗成对改**：`hooks/use-ai-chat.ts` 的
+# `STREAM_WATCHDOG_MS` 要留在它的 2~3 倍以上，否则心跳稍晚到就会被判成断线。
+# 可调是为了本地验证心跳真的在发（调小到 3s，看流里有没有 type:"ping"）。
+PING_INTERVAL_S = float(os.environ.get("V_OFFICE_AI_PING_INTERVAL", "15"))
 # md↔docx 转换（技能自带脚本）的单次上限。脚本很小、正常不到 1 秒，
 # 给大文档留余量；超时就杀进程树，不让它把接口挂住。
 DOCX_TOOL_TIMEOUT_S = float(os.environ.get("V_OFFICE_AI_DOCX_TIMEOUT", "180"))
@@ -208,6 +271,9 @@ SYSTEM_POLICY = """你是 V-Office 内置的写作助手，只服务两件事：
 - 不动系统：不修改系统配置、不读取与本任务无关的文件、不查看环境变量里的密钥。
 - 不执行与写作无关的命令（进程管理、网络探测、权限操作、软件安装等）。
 - 只依据材料与技能写内容：材料里没有的事实不要编；不确定的写进「待确认」。
+- 交付物必须干净：正文整篇放进 `<final-doc>…</final-doc>`，**前后不要**写计划、理由、
+  自评，也不要写「我先读一下技能」「Reason for each choice」这类过程说明——
+  它们会被当成正文落进文档，变成开头的垃圾段落（实测发生过）。
 - 输出用简体中文；成稿用 Markdown，标题层级与文种规范对齐技能里的要求。"""
 
 
@@ -385,7 +451,9 @@ def read_meta(username: str, sid: str) -> dict:
 def list_sessions(username: str) -> list[dict]:
     out = []
     for child in sorted(_sessions_root(username).iterdir(), reverse=True):
-        if child.is_dir() and not child.name.endswith(".json"):
+        # 点目录跳过：会话 id 是十六进制，点开头的一定是内部目录（`safe_fs` 兜底
+        # 挪出来的 `.trash/`、历史遗留的 `.conv-*`），列出来只会变成幽灵会话
+        if child.is_dir() and not child.name.startswith("."):
             meta = read_meta(username, child.name)
             meta["dir"] = str(child)
             out.append(meta)
@@ -780,6 +848,17 @@ def _build_turn_prompt(
             locate.append(f"段落编号：{anchor}")
         if selection:
             locate.append(f"用户选中的原文：\n{selection}")
+        if anchor and selection:
+            # 「只改这里」（用户在 Word 里选中了一处）：改动范围必须收窄到这一段。
+            # 两条约束都是实测踩出来的：模型爱顺手改别的段（用户没要），也爱在
+            # 这种场景下整篇重出（final-doc）——那等于把整篇都改了。
+            # 选区常常只是半句话，而 patch 的落点是**整段**，所以要说清：
+            # 重写整个第 N 段，没选中的部分保留并衔接好。
+            locate.append(
+                "\n【只改这一处】用户只选中了上面这段文字。请只输出**一条**针对编号 "
+                f"{anchor} 的 patch：重写整个第 {anchor} 段（用户没选中的部分也要保留、"
+                "衔接自然），不要输出其他段落的 patch，不要用 <final-doc> 整篇重写。"
+            )
         parts.append("\n".join(locate))
 
     draft = load_draft(username, sid)
@@ -817,6 +896,58 @@ def public_draft(draft: dict) -> dict:
     }
 
 
+def _draft_doc_name(title: str) -> str:
+    """草稿对应的那份 docx 文件名（「我的文档」里的名字）。
+
+    全流程只有这一处口径：出稿、保存、空稿判重都按它算。以前是每个调用点各自
+    `_safe_name(f"{title}.docx")` 一遍，改一处漏一处就会出现「同一个草稿被当成
+    两个不同文档」（判重说没有、保存说覆盖，症状自相矛盾）。
+    """
+    stem = (title or "").strip() or "未命名稿件"
+    try:
+        return _safe_name(f"{stem}.docx")
+    except HTTPException:
+        return "未命名稿件.docx"
+
+
+def _doc_exists(username: str, name: str) -> bool:
+    """「我的文档」里是否已经有这个名字的文档。"""
+    if _read_document is None:
+        return False
+    try:
+        _read_document(username, name)
+        return True
+    except Exception:  # noqa: BLE001 不存在 / 越权 / 存储不可用，一律按「没有」
+        return False
+
+
+def _guard_empty_overwrite(username: str, name: str, draft: dict) -> Optional[str]:
+    """空草稿不许覆盖已有文档；被挡下时返回那份已有文档的名字，否则 None。
+
+    为什么必须挡（实测丢稿）：文档名 = **会话标题**，而新建会话用的还是同一套
+    标题（如「专利交底书 - 发明」）。于是新建一个空会话再打开撰写室，启动路径
+    会把一份**只有标题**的 docx 按同一个名字写进「我的文档」，把用户写了半天的
+    正文整份覆盖掉；空草稿紧接着还会触发编辑器注入（全选 + 粘贴只有标题的
+    HTML），把编辑器里活着的内容也清掉。
+
+    现场就是这条链：17:11 那份草稿有 5,875 字（完整的四件套），17:14 一个 0 字
+    的新会话把同名文档覆盖成 10 个字符（只剩标题）。
+
+    注意判据是「草稿没有 blocks」而不是「正文为空」：新建会话的草稿只带标题，
+    `draft_to_markdown` 会返回 `# 标题`，非空但**没有任何实质内容**。
+    """
+    if draft.get("blocks"):
+        return None  # 有实质内容：正常覆盖（AI 重写整篇就是要覆盖）
+    if not _doc_exists(username, name):
+        return None  # 同名文档还不存在：这份空稿就是在建新文档，放行
+    LOG.warning(
+        "ai: blocked EMPTY draft from overwriting existing doc user=%s name=%s",
+        username,
+        name,
+    )
+    return name
+
+
 async def _save_draft_docx(username: str, sid: str, draft: dict) -> Optional[str]:
     """成稿写进用户「我的文档」——**产出 Word**，Markdown 只留在会话目录当工作稿。
 
@@ -834,14 +965,15 @@ async def _save_draft_docx(username: str, sid: str, draft: dict) -> Optional[str
         data = await _convert_docx(
             tool="md_to_docx.py", src=markdown.encode("utf-8"),
             src_suffix=".md", out_suffix=".docx", root=session_dir(username, sid),
+            prefer=_session_skill(username, sid),
         )
     except Exception as exc:  # noqa: BLE001 转换挂了不该吞掉这一轮结果
         LOG.warning("ai: docx convert crashed user=%s sid=%s: %s", username, sid, exc)
     if data:
-        try:
-            name = _safe_name(f"{title}.docx")
-        except HTTPException:
-            name = "未命名稿件.docx"
+        name = _draft_doc_name(title)
+        kept = _guard_empty_overwrite(username, name, draft)
+        if kept:
+            return kept  # 空稿不覆盖：当作这一轮没产出新文档
         try:
             saved = _save_document(username, name, data)
             LOG.info("ai: saved docx to my-docs user=%s sid=%s name=%s bytes=%d",
@@ -997,13 +1129,24 @@ def _write_models_json(root: Path, settings: dict) -> None:
     """把用户在设置里填的网关写成 Pi 的自定义 provider。
 
     apiKey 用 `$VOFFICE_AI_KEY` 插值：密钥只经环境变量进入 pi，不落盘。
+
+    为什么要显式声明 `reasoning` 与 `thinkingFormat`（不是可选装饰）：
+      pi 只有在 `model.reasoning === true` 时才会去处理思考档位，否则一个
+      思考参数都不发 —— 于是「设置里选 off」形同虚设，网关按自己的默认档
+      （DeepSeek-V4.1-Flash 默认 effort=high）一路深度思考：实测同一道题
+      400 个输出 token **全部**是推理、正文一个字没出，首字要等三十多秒。
+      声明 `reasoning: true` 且 `thinkingFormat: "deepseek"` 后，选 off 会发出
+      `thinking: {"type": "disabled"}`，同一道题 1.2s 出正文（3.0s → 1.2s），
+      这才是「不思考」该有的速度。
     """
     model = settings.get("model") or ""
     provider = {
         "baseUrl": settings.get("base_url") or DEFAULT_BASE_URL,
         "api": "openai-completions",
         "apiKey": "$VOFFICE_AI_KEY",
-        "models": [{"id": model}] if model else [],
+        "models": [{"id": model, "reasoning": True, "compat": {"thinkingFormat": "deepseek"}}]
+        if model
+        else [],
     }
     payload = {"providers": {"voffice": provider}}
     target = root / ".pi-agent" / "models.json"
@@ -1078,6 +1221,34 @@ def _assistant_text(message: dict) -> str:
     return ""
 
 
+def _assistant_thinking(message: dict) -> str:
+    """取模型这一轮的思考过程（content 里 type=="thinking" 的块）。
+
+    与正文（`_assistant_text`）**分开走**：思考只给用户看，绝不进草稿，
+    也不进 text_parts —— 否则模型的内心戏会被当成专利正文落盘。
+    """
+    content = message.get("content")
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "thinking":
+            parts.append(str(block.get("thinking") or ""))
+    return "".join(parts)
+
+
+def _tool_target(args: dict) -> str:
+    """从工具入参里挑一个「人看得懂的对象」：文件路径 / 命令 / 检索词。
+
+    只报工具名（read）对用户毫无意义——一屏二十条「调用工具：read」就是这么来的。
+    """
+    for key in ("path", "file", "file_path", "command", "query", "pattern", "url"):
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def _translate(event: dict) -> list[dict]:
     """把一条 pi JSONL 事件翻成 0..n 条前端事件。
 
@@ -1091,12 +1262,38 @@ def _translate(event: dict) -> list[dict]:
         inner = event.get("assistantMessageEvent") or {}
         if inner.get("type") == "text_delta" and inner.get("delta"):
             return [{"type": "delta", "text": inner["delta"]}]
+        # 思考块也逐字转发：深度思考能持续几十秒，期间把推理过程实时显示出来，
+        # 用户就不用对着一个转圈干等（这次「连接中断」的根因正是这段长时间的
+        # 静默）。注意它和 delta 是**两种事件**：thinking 只上屏、不落稿。
+        if inner.get("type") == "thinking_delta" and inner.get("delta"):
+            return [{"type": "thinking", "text": inner["delta"]}]
+        # 每次工具调用**单独**发一条（带看得懂的对象）：前端因此能显示成
+        # 一行「正在读取 xxx（第 5 步）」并就地更新，而不是把每轮的
+        # 「调用工具：read、read」堆成一面墙。
+        if inner.get("type") == "toolcall_end":
+            call = inner.get("toolCall") or {}
+            name = str(call.get("name") or "")
+            args = call.get("arguments")
+            if name:
+                return [
+                    {
+                        "type": "tool",
+                        "name": name,
+                        "target": _tool_target(args if isinstance(args, dict) else {}),
+                    }
+                ]
+            return []
         return []
     if kind == "message_end":
         message = event.get("message") or {}
         if message.get("role") != "assistant":
             return []
         out = [{"type": "message_end", "text": _assistant_text(message), "usage": message.get("usage")}]
+        # 与正文同口径：delta 可能缺尾巴，以完整消息里的思考块做权威校正
+        # （final=true 让前端用这整段替换它自己拼的）。
+        think = _assistant_thinking(message)
+        if think:
+            out.append({"type": "thinking", "text": think, "final": True})
         if message.get("stopReason") == "error":
             out.append({"type": "warn", "message": message.get("errorMessage") or "模型请求失败"})
         return out
@@ -1231,9 +1428,28 @@ async def _run_turn(
     stop_kind: str | None = None
     stop_message: str | None = None
     last_activity = time.monotonic()
+    # 「上一次真的发东西给客户端」的时刻。必须与 last_activity 分开：
+    # last_activity 是「pi 打印了一行」（含被 _translate 丢掉的噪音），
+    # last_emit 才是「客户端看到了一个事件」——心跳要按后者算。
+    last_emit = time.monotonic()
     try:
         assert proc.stdout is not None
         while True:
+            # 心跳在**循环顶部**按时间判定，而不是只在"读超时"里发：
+            # pi 调工具/思考时会持续吐事件，但那些事件被 _translate 丢成 0 条，
+            # 客户端一个字节都收不到。只在读超时里发 ping，遇到"噪音行比切片下限
+            # 还密"的时候（实测首轮读技能那段连吐 35s）永远轮不到心跳，前端看门狗
+            # 就把一轮完全正常的回合掐成「连接中断」。
+            # 放这里 = 每读到一行、每次切片超时都重新判一次，噪音再密也拦不住心跳。
+            now = time.monotonic()
+            if now - last_emit >= PING_INTERVAL_S:
+                yield {
+                    "type": "ping",
+                    "elapsed_s": int(now - started),
+                    "idle_s": int(now - last_activity),
+                }
+                last_emit = time.monotonic()
+
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 killed = True
@@ -1244,9 +1460,16 @@ async def _run_turn(
                 )
                 break
             try:
-                # 等待切片同时受「整轮剩余」和「空闲上限」约束：
-                # 只按心跳间隔切的话，空闲超时永远不会触发（实测踩到过）
-                slice_timeout = max(0.5, min(remaining, PING_INTERVAL_S, idle_timeout))
+                # 等待切片受三件事约束：整轮剩余、空闲上限、距该发心跳还差多久。
+                # 第三条只负责把「完全没有输出」的静默期也切成能发心跳的片。
+                slice_timeout = max(
+                    0.5,
+                    min(
+                        remaining,
+                        idle_timeout,
+                        max(0.5, PING_INTERVAL_S - (time.monotonic() - last_emit)),
+                    ),
+                )
                 line = await asyncio.wait_for(
                     proc.stdout.readline(), timeout=slice_timeout
                 )
@@ -1263,11 +1486,6 @@ async def _run_turn(
                         "（可在「设置 → AI」里调大空闲超时）"
                     )
                     break
-                yield {
-                    "type": "ping",
-                    "elapsed_s": int(time.monotonic() - started),
-                    "idle_s": int(idle),
-                }
                 continue
             except (asyncio.LimitOverrunError, ValueError):
                 # 行缓冲仍不够（异常内容单行超过 limit）：中止并说人话，
@@ -1294,6 +1512,8 @@ async def _run_turn(
             except ValueError:
                 continue
             for item in _translate(event):
+                # 只有真的往客户端发了东西才算「发过事件」——ping 的判据就是它
+                last_emit = time.monotonic()
                 if item["type"] == "delta":
                     text_parts.append(item["text"])
                     yield item
@@ -1512,10 +1732,15 @@ async def stream_turn(
                 stopped: dict | None = None
                 # 每趟都重新拼 prompt：真值（材料 + 当前稿）在服务端，
                 # 所以第二趟哪怕丢了会话上下文也是完整的
+                #
+                # 材料**每轮都要带**：材料经常是会话进行到一半才上传的，
+                # pi 的会话记忆里根本没有它。早先只在首轮/重试带（靠记忆兜底），
+                # 结果「我上传了外部文件，你看看」这类追问里 agent 一份材料也看不到，
+                # 会理直气壮地回「没有收到材料」。
                 prompt = _build_turn_prompt(
                     username, sid, instruction,
                     anchor=anchor, selection=selection,
-                    include_materials=(attempt > 0) or (not resume),
+                    include_materials=True,
                 )
                 async for item in _run_turn(username, sid, prompt,
                                             resume=resume and attempt == 0):
@@ -1711,13 +1936,19 @@ async def post_session(request: Request, body: CreateSessionRequest) -> JSONResp
 
 @router.delete("/sessions/{sid}")
 async def delete_session(request: Request, sid: str) -> JSONResponse:
+    """删掉一条会话线（会话目录 + 它的 meta / 材料 / 草稿）。
+
+    删除全部走 `safe_fs` 的兜底：宿主环境的删除护栏会 `raise SystemExit`，用
+    `shutil.rmtree(..., ignore_errors=True)` 拦不住它，结果是「删除会话」500、
+    会话还在——用户点几次都是 500，比删不掉更糟。
+    """
     username = await _user(request)
     root = session_dir(username, sid)
     _kill_tree(_running.pop(sid, None))
-    shutil.rmtree(root, ignore_errors=True)
-    _meta_path(username, sid).unlink(missing_ok=True)
-    _materials_path(username, sid).unlink(missing_ok=True)
-    _draft_path(username, sid).unlink(missing_ok=True)
+    discard_tree(root)
+    discard_file(_meta_path(username, sid))
+    discard_file(_materials_path(username, sid))
+    discard_file(_draft_path(username, sid))
     LOG.info("ai: session deleted user=%s sid=%s", username, sid)
     return JSONResponse({"deleted": sid})
 
@@ -1786,15 +2017,144 @@ async def apply_many(request: Request, sid: str, body: ApplyRequest) -> JSONResp
 
 @router.post("/sessions/{sid}/save")
 async def save_to_docs(request: Request, sid: str) -> JSONResponse:
+    """「保存到我的文档」：把草稿出成 docx 写进「我的文档」。
+
+    最容易把人绕晕的是空草稿：文档名 = 会话标题，而**换会话 / 重开页面**都会新起
+    一个空草稿的会话，标题却一模一样。此时编辑器里开着的那份文档（内容都在）和
+    服务端的空草稿是同一个名字——早先这里直接报「草稿还是空的」，用户看到的却是
+    眼前一篇完整的稿子，只能理解成「保存坏了」。
+
+    正确做法：空草稿 + 盘上已有同名文档 = 用户手里这本就是那份文档，**如实回「已经
+    在「我的文档」里」**；真的什么都没有（既没草稿也没文档）才报错。
+    """
     username = await _user(request)
     session_dir(username, sid)
     draft = load_draft(username, sid)
     if not draft.get("blocks"):
-        raise HTTPException(status_code=400, detail="草稿还是空的，先生成内容")
+        name = _draft_doc_name(draft.get("title") or "")
+        if _doc_exists(username, name):
+            # 刻意什么都不做：不读回草稿、更不重写文件。
+            #  - 读回草稿要动 updated_at，而前端**就是**按 updated_at 决定是否
+            #    「全选 + 粘贴整篇」注入编辑器的（ai-studio 的注入 effect）——
+            #    借一次保存把用户在 Word 里排好的版式重排一遍，说不通；
+            #  - 重写文件更糟：md→docx 一圈回来，用户的版式/表格就没了。
+            # 文档本来就好好地在「我的文档」里，这就是「已保存」。
+            LOG.info(
+                "ai: save ok (nothing to write) user=%s sid=%s name=%s",
+                username, sid, name,
+            )
+            return JSONResponse({
+                "saved": name,
+                "draft": public_draft(draft),
+                "already": True,
+            })
+        raise HTTPException(
+            status_code=409,
+            detail="这份稿子还没有内容：先在对话里让 AI 生成，或直接在编辑器里写",
+        )
     saved = await _save_draft_docx(username, sid, draft)
     if not saved:
         raise HTTPException(status_code=502, detail="保存到「我的文档」失败")
     return JSONResponse({"saved": saved, "draft": public_draft(draft)})
+
+
+# ── 对话记录（模型的思考过程 + 输出）────────────────────────────────────────
+#
+# 为什么单独存一份：面板里的对话以前只活在浏览器内存里，刷新一下整段没了；而 pi
+# 自己的 `.pi-sessions/*.jsonl` 是它的私有格式，前端不该去解析它。这里由服务端
+# 按会话存一份干净的对话记录，下次进同一条会话线时原样恢复。
+#
+# 只存白名单字段（role / text / thinking / at / anchor）：`streaming`、
+# `activity` 这类转瞬即逝的 UI 状态存下来，恢复出来的界面会怪怪的。
+
+
+def _transcript_path(username: str, sid: str) -> Path:
+    return session_dir(username, sid) / "transcript.json"
+
+
+TRANSCRIPT_MAX_BYTES = 2 * 1024 * 1024
+TRANSCRIPT_MAX_ITEMS = 300
+
+
+class TranscriptBody(BaseModel):
+    messages: list[dict] = []
+
+
+@router.get("/sessions/{sid}/doc-chars")
+async def doc_chars(request: Request, sid: str, name: str = "") -> JSONResponse:
+    """量一下「我的文档」里那份 docx 的正文长度。**只读，绝不碰草稿。**
+
+    用途只有一个：AI 的稿子贴进编辑器之后，核对落盘的是不是完整那一版。
+    粘贴是异步的（见 ai-studio 的注入注释），保存抢跑就会存进半篇；这个数字
+    就是那条断言——短于草稿就重贴，再短就让编辑器从服务端那份完整 docx 重读。
+
+    读不到 / 转不动一律回 0：调用方把 0 当「这次没量上」，不当成失败（否则一次
+    存储抖动就会引发无谓的重贴）。
+    """
+    username = await _user(request)
+    root = session_dir(username, sid)
+    name = (name or "").strip()
+    if not name or _read_document is None:
+        return JSONResponse({"chars": 0})
+    try:
+        src = _read_document(username, name)
+    except Exception:  # noqa: BLE001 不存在 / 越权 / 存储不可用
+        return JSONResponse({"chars": 0})
+    markdown = await _convert_docx(
+        tool="docx_to_md.py", src=src,
+        src_suffix=".docx", out_suffix=".md", root=root,
+        prefer=_session_skill(username, sid),
+    )
+    if markdown is None:
+        return JSONResponse({"chars": 0})
+    text = _clean_converted_markdown(markdown.decode("utf-8", "replace"))
+    return JSONResponse({"chars": len(text)})
+
+
+@router.get("/sessions/{sid}/transcript")
+async def get_transcript(request: Request, sid: str) -> JSONResponse:
+    """取这条会话的对话记录；没有就返回空列表（不是错误）。"""
+    username = await _user(request)
+    path = _transcript_path(username, sid)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return JSONResponse({"messages": []})
+    msgs = data.get("messages") if isinstance(data, dict) else None
+    return JSONResponse({"messages": msgs if isinstance(msgs, list) else []})
+
+
+@router.put("/sessions/{sid}/transcript")
+async def put_transcript(request: Request, sid: str, body: TranscriptBody) -> JSONResponse:
+    """存下这条会话的对话记录（前端在对话停下来后落库）。"""
+    username = await _user(request)
+    clean: list[dict] = []
+    for raw in body.messages[-TRANSCRIPT_MAX_ITEMS:]:
+        if not isinstance(raw, dict):
+            continue
+        item = {
+            "role": "user" if raw.get("role") == "user" else "agent",
+            "text": str(raw.get("text") or "")[:20000],
+            "at": str(raw.get("at") or ""),
+        }
+        thinking = str(raw.get("thinking") or "")
+        if thinking:
+            item["thinking"] = thinking[:20000]
+        anchor = str(raw.get("anchor") or "")
+        if anchor:
+            item["anchor"] = anchor[:20]
+        clean.append(item)
+    path = _transcript_path(username, sid)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_bytes(json.dumps({"messages": clean}, ensure_ascii=False).encode("utf-8"))
+        os.replace(tmp, path)
+    except OSError as exc:
+        # 记录存不上不该影响用户：对话照常能用，只是这次刷新后恢复不了
+        LOG.warning("ai: transcript save failed user=%s sid=%s: %s", username, sid, exc)
+        return JSONResponse({"saved": False})
+    return JSONResponse({"saved": True})
 
 
 # ── 与编辑器内核（Collabora）互通：docx 出稿 / docx 回读 ────────────────────
@@ -1807,15 +2167,32 @@ async def save_to_docs(request: Request, sid: str) -> JSONResponse:
 # 让 agent 自己动手：转换必须有确定结果，不能看模型心情。
 
 
-def _skill_tool(filename: str) -> Optional[Path]:
-    """在技能目录里定位一个确定性脚本（技能包升级换目录也不写死路径）。"""
+def _skill_tool(filename: str, prefer: str = "") -> Optional[Path]:
+    """在技能目录里定位一个确定性脚本（技能包升级换目录也不写死路径）。
+
+    `prefer` 是**本次会话用的技能包名**（如 patent-disclosure）。必须优先它：
+    `md_to_docx.py` 这类工具在多个技能包里各有一份同名实现（专利交底 / 申请
+    文件 / 审查意见的排版口径并不相同），只按目录名排序取第一个，等于让
+    「审查意见」的稿子用「申请文件」的转换器——脚本各自能跑通，排版/结构却
+    悄悄按错的那套走。找不到该技能包自己的那份时再退回全局第一个。
+    """
     base = Path(SKILLS_DIR)
     if not base.is_dir():
         return None
+    if prefer:
+        own = base / prefer / "tools" / filename
+        if own.is_file():
+            return own
     for path in sorted(base.glob(f"*/tools/{filename}")):
         if path.is_file():
             return path
     return None
+
+
+def _session_skill(username: str, sid: str) -> str:
+    """本会话点名用的技能包名（读不到就当没点名，退回全局兜底）。"""
+    skill = read_meta(username, sid).get("skill")
+    return skill.strip() if isinstance(skill, str) else ""
 
 
 async def _run_tool(argv: list[str], timeout: float) -> tuple[int, str]:
@@ -1836,12 +2213,23 @@ async def _run_tool(argv: list[str], timeout: float) -> tuple[int, str]:
 
 
 async def _convert_docx(
-    *, tool: str, src: bytes, src_suffix: str, out_suffix: str, root: Path,
+    *,
+    tool: str,
+    src: bytes,
+    src_suffix: str,
+    out_suffix: str,
+    root: Path,
+    prefer: str = "",
 ) -> Optional[bytes]:
-    """把字节在 md / docx 之间转一次。转换失败返回 None（调用方决定怎么报错）。"""
-    script = _skill_tool(tool)
+    """把字节在 md / docx 之间转一次。转换失败返回 None（调用方决定怎么报错）。
+
+    `prefer`：优先用哪个技能包里的同名脚本（见 `_skill_tool`）。
+    """
+    script = _skill_tool(tool, prefer)
     if script is None:
-        LOG.warning("ai: skill tool missing name=%s skills=%s", tool, SKILLS_DIR)
+        LOG.warning(
+            "ai: skill tool missing name=%s prefer=%s skills=%s", tool, prefer or "-", SKILLS_DIR
+        )
         return None
     # 工作目录放在会话目录下（每用户可见、也方便排查）。刻意不用
     # TemporaryDirectory：它的清理是整棵树 rmtree，会撞上宿主环境的删除护栏；
@@ -1861,15 +2249,22 @@ async def _convert_docx(
             return None
         return out_path.read_bytes()
     finally:
+        # 收尾**只能尽力而为**，而且必须连 BaseException 一起吞。
+        #
+        # 踩过的坑：某些宿主环境（沙箱/IDE 的 safe-delete shim）会接管
+        # os.rmdir，把它当「删除目录」交给自己的批量删除护栏，护栏一不高兴就
+        # 直接 `raise SystemExit(1)`——转换早就成功了、字节也读出来了，却因为
+        # 删一个空目录把整个请求打成 500（前端只看到「编辑器内核打不开」）。
+        # 残留的 .conv-* 目录无害（下次同名目录照样复用），绝不能让它掀翻请求。
         for f in (src_path, out_path):
             try:
                 f.unlink()
-            except OSError:
+            except BaseException:  # noqa: BLE001
                 pass
         try:
             tmp.rmdir()
-        except OSError:
-            pass  # 里面还有技能脚本留下的东西就留着，下次同名目录直接复用
+        except BaseException:  # noqa: BLE001  # 见上：删除护栏可能抛 SystemExit
+            pass
 
 
 @router.post("/sessions/{sid}/docx")
@@ -1894,15 +2289,16 @@ async def export_docx(request: Request, sid: str) -> JSONResponse:
     data = await _convert_docx(
         tool="md_to_docx.py", src=markdown.encode("utf-8"),
         src_suffix=".md", out_suffix=".docx", root=root,
+        prefer=_session_skill(username, sid),
     )
     if not data:
         raise HTTPException(status_code=502, detail="生成 docx 失败（技能脚本未就绪或超时）")
 
-    title = (draft.get("title") or "未命名稿件").strip() or "未命名稿件"
-    try:
-        name = _safe_name(f"{title}.docx")
-    except HTTPException:
-        name = "未命名稿件.docx"
+    name = _draft_doc_name(draft.get("title") or "")
+    # 空稿不覆盖已有文档：直接把已有那份的名字回给前端（编辑器据此打开它）
+    kept = _guard_empty_overwrite(username, name, draft)
+    if kept:
+        return JSONResponse({"saved": kept, "draft": public_draft(draft)})
     saved = _save_document(username, name, data)
     LOG.info("ai: exported docx user=%s sid=%s name=%s bytes=%d", username, sid, saved, len(data))
     return JSONResponse({"saved": saved, "draft": public_draft(draft)})
@@ -1930,6 +2326,7 @@ async def draft_html(request: Request, sid: str) -> JSONResponse:
     data = await _convert_docx(
         tool="md_to_docx.py", src=markdown.encode("utf-8"),
         src_suffix=".md", out_suffix=".docx", root=root,
+        prefer=_session_skill(username, sid),
     )
     if not data:
         raise HTTPException(status_code=502, detail="生成 docx 失败（技能脚本未就绪或超时）")
@@ -1959,6 +2356,44 @@ def _clean_converted_markdown(text: str) -> str:
     return re.sub(r"\\([\\`*_{}\[\]()#+\-.!~>|])", r"\1", text)
 
 
+async def _read_docx_into_draft(
+    username: str, sid: str, name: str, draft: dict
+) -> Optional[dict]:
+    """把「我的文档」里那份 docx 读回草稿（回读）。读不到 / 转不了返回 None。
+
+    这是「草稿与文档恢复一致」的唯一手段：编辑器（Collabora）改的就是文档本身，
+    草稿只是它的镜像。换会话、重开页面之后草稿是空的，而文档里内容还在——此时
+    只有把文档读回来，两边才重新对上；否则用户看到的是**编辑器里满满的正文**，
+    而服务端张口就是「草稿是空的」。
+
+    这是确定性转换（技能脚本），不经过模型。
+    """
+    if _read_document is None:
+        return None
+    try:
+        src = _read_document(username, name)
+    except Exception:  # noqa: BLE001 不存在 / 越权 / 存储不可用，一律当读不到
+        return None
+    markdown = await _convert_docx(
+        tool="docx_to_md.py", src=src,
+        src_suffix=".docx", out_suffix=".md", root=session_dir(username, sid),
+        prefer=_session_skill(username, sid),
+    )
+    if markdown is None:
+        return None
+    text = _clean_converted_markdown(markdown.decode("utf-8", "replace"))
+    blocks = markdown_to_blocks(text, draft.get("title") or "")
+    if not blocks:
+        return None  # 文档是空的（比如只有标题）：认回来没意义，交给调用方按空稿处理
+    updated = {**draft, "blocks": blocks}
+    save_draft(username, sid, updated)
+    LOG.info(
+        "ai: read docx back into draft user=%s sid=%s name=%s blocks=%d",
+        username, sid, name, len(blocks),
+    )
+    return updated
+
+
 class DocxImport(BaseModel):
     """要回读的文件名（「我的文档」里的那份 docx）。"""
 
@@ -1969,33 +2404,21 @@ class DocxImport(BaseModel):
 async def import_docx(request: Request, sid: str, body: DocxImport) -> JSONResponse:
     """把「我的文档」里的 docx 回读成草稿：用户在编辑器里手改过，agent 是不知道的。"""
     username = await _user(request)
-    root = session_dir(username, sid)
+    session_dir(username, sid)
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="missing name")
     if _read_document is None:
         raise HTTPException(status_code=503, detail="存储服务不可用")
-    try:
-        src = _read_document(username, name)
-    except HTTPException:
-        raise
-    except Exception as exc:  # noqa: BLE001 读不到就当成「还没导出过」
-        raise HTTPException(status_code=404, detail=f"读不到文件：{name}") from exc
-
-    markdown = await _convert_docx(
-        tool="docx_to_md.py", src=src,
-        src_suffix=".docx", out_suffix=".md", root=root,
-    )
-    if markdown is None:
-        raise HTTPException(status_code=502, detail="读取 docx 失败（技能脚本未就绪或超时）")
-
     draft = load_draft(username, sid)
-    text = _clean_converted_markdown(markdown.decode("utf-8", "replace"))
-    draft["blocks"] = markdown_to_blocks(text, draft.get("title") or "")
-    save_draft(username, sid, draft)
-    LOG.info("ai: imported docx user=%s sid=%s name=%s blocks=%d",
-             username, sid, name, len(draft["blocks"]))
-    return JSONResponse({"draft": public_draft(draft), "source": name})
+    updated = await _read_docx_into_draft(username, sid, name, draft)
+    if updated is None:
+        # 与 /save 的空稿分支同一套判据：能读到的文档一定是「有内容」的，
+        # 读不回来只可能是读不到文件或转换失败，两者对用户是两件事。
+        if not _doc_exists(username, name):
+            raise HTTPException(status_code=404, detail=f"读不到文件：{name}")
+        raise HTTPException(status_code=502, detail="读取 docx 失败（技能脚本未就绪或超时）")
+    return JSONResponse({"draft": public_draft(updated), "source": name})
 
 
 @router.post("/sessions/{sid}/stop")
@@ -2162,10 +2585,7 @@ async def get_template(request: Request, sid: str) -> JSONResponse:
 async def delete_template(request: Request, sid: str) -> JSONResponse:
     """撤掉模板：下一轮 prompt 就不再带结构约束。"""
     username = await _user(request)
-    try:
-        _template_path(username, sid).unlink()
-    except OSError:
-        pass
+    discard_file(_template_path(username, sid))
     return JSONResponse({"template": None})
 
 
@@ -2310,10 +2730,7 @@ def delete_artifact(username: str, sid: str, key: str) -> None:
     if data.get("active") == key:
         data["active"] = ""
     _save_artifacts(username, sid, data)
-    try:
-        (_artifacts_dir(username, sid) / f"{key}.md").unlink()
-    except OSError:
-        pass
+    discard_file(_artifacts_dir(username, sid) / f"{key}.md")
 
 
 @router.get("/sessions/{sid}/artifacts")

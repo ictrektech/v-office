@@ -271,6 +271,7 @@ async def current_username(request: Request) -> str:
 # AI 路由直接挂在同一个服务里：复用上面这套 VOS 鉴权、同一份 DATA_ROOT 挂载，
 # 也就不用新增容器/镜像/Traefik 路由（对外仍是 /api/com.ictrek.v-office/api/v1/ai/*）。
 from ai import init_ai, router as ai_router  # noqa: E402  需在 app 与鉴权函数就绪后装配
+from safe_fs import discard_file, discard_tree  # noqa: E402  删除兜底（见该模块注释）
 
 
 def save_user_document(username: str, name: str, data: bytes) -> str:
@@ -470,7 +471,10 @@ async def delete_file(name: str, request: Request) -> JSONResponse:
     target = safe_target(username, name)
     if not target.is_file():
         raise HTTPException(status_code=404, detail="file not found")
-    target.unlink()
+    if not discard_file(target):
+        # 极少数情况：连「清空」都做不到（只读挂载）。这时候必须如实报错，
+        # 不能让前端以为文件已经不在了。
+        raise HTTPException(status_code=500, detail="delete failed")
     LOG.info("deleted %s for %s", name, username)
     return JSONResponse({"status": "ok"})
 
@@ -534,7 +538,9 @@ async def convert_file(request: Request, to: str = "docx", frm: str = "doc") -> 
             headers={"Content-Disposition": f'attachment; filename="converted.{to}"'},
         )
     finally:
-        shutil.rmtree(workdir, ignore_errors=True)
+        # 收尾不能抛：这是 finally，一次「删不掉临时目录」会把上面刚成功的
+        # 转换结果替换成 500（宿主环境的删除护栏正是这么干的）。
+        discard_tree(workdir)
 
 
 @app.patch("/api/v1/files/{name}")
@@ -1237,10 +1243,7 @@ def _atomic_write(target: Path, body: bytes) -> None:
         tmp.write_bytes(body)
         os.replace(tmp, target)
     except OSError as exc:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
+        discard_file(tmp)
         LOG.warning("shared write failed at %s: %s", target, exc)
         raise HTTPException(status_code=403, detail="shared source is not writable")
 
@@ -1518,10 +1521,7 @@ def _prune_history(history: Path, name: str, keep: int) -> None:
     except OSError:
         return
     for stale in siblings[keep:]:
-        try:
-            stale.unlink()
-        except OSError:
-            pass
+        discard_file(stale)
 
 
 def _snapshot_before_overwrite(
@@ -1740,10 +1740,9 @@ def _write_new_exclusive(target: Path, body: bytes) -> None:
     finally:
         # link 成功后临时文件仍在（只是多了一个目录项），replace 成功后它已被
         # 消费掉 —— 两种情况下这里都是"删一个不存在的文件"，静默忽略。
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
+        # 走 discard_file 而不是裸 unlink：这是 finally，删除失败绝不能变成
+        # 500（宿主环境的删除护栏会 raise SystemExit）。
+        discard_file(tmp)
 
 
 def _write_new_unique(directory: Path, name: str, body: bytes, tries: int = 20) -> Path:
