@@ -682,6 +682,9 @@ if [[ "$SKIP_BUILD" != "1" ]]; then
   )
   STORAGE_BASE_IMAGES=(
     "python:3.12-slim|python:3.12-slim"
+    # Pi 本地 AI 后端用（PI_NODE_IMAGE）。漏了它SWR 上又没有，构建会以
+    # "failed to resolve source metadata" 失败——清单必须跟着 Dockerfile 的 FROM 走。
+    "node:22-slim|node:22-slim"
   )
   if [[ "$BUILD_WEB" == "1" ]]; then
     ensure_base_images "${WEB_BASE_IMAGES[@]}"
