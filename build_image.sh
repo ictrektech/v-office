@@ -89,6 +89,8 @@ Environment:
   NEXT_PUBLIC_WORD_ENGINE     Default editor kernel: collabora | onlyoffice
   NPM_REGISTRY                Optional npm registry for the web build
   PIP_INDEX_URL               Optional PyPI index for the storage image
+  APT_MIRROR                  Optional Debian apt mirror for the storage image
+                              (empty string = use deb.debian.org upstream)
 EOF
 }
 
@@ -743,6 +745,7 @@ if [[ "$SKIP_BUILD" != "1" && "$BUILD_STORAGE" == "1" ]]; then
   docker_build_image \
     --build-arg "BASE_IMAGE=${BASE_REGISTRY_PREFIX}/python:3.12-slim" \
     --build-arg "PIP_INDEX_URL=${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}" \
+    --build-arg "APT_MIRROR=${APT_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn}" \
     --build-arg "PI_NODE_IMAGE=${BASE_REGISTRY_PREFIX}/node:22-slim" \
     --build-arg "NPM_REGISTRY=${NPM_REGISTRY:-https://registry.npmmirror.com}" \
     --build-arg "PI_VERSION=${PI_VERSION:-1.1.0}" \

@@ -28,10 +28,23 @@ COPY requirements.txt ./
 ARG PIP_INDEX_URL=https://pypi.org/simple
 RUN pip install --no-cache-dir -i "${PIP_INDEX_URL}" -r requirements.txt
 
+# apt 源。国内构建必配：官方 deb.debian.org 实测 1500s 还在爬 Packages 索引
+# （libreoffice-writer 是这一步的大头，几百 MB），换清华源同样的 update 只要 3s。
+# 置空 APT_MIRROR="" 即回退官方源（境外构建机或镜像已就位时用）。
+ARG APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn
 # LibreOffice headless：只服务 OnlyOffice 路线的老 .doc 往返（x2t 读不好也写不了
 # 老二进制）。老 ppt / xls 不走这条路——它们默认交给 Collabora（服务端 LibreOffice，
 # 自带全部过滤器），所以这里不需要 impress / calc。
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 基础镜像是 deb822 格式（/etc/apt/sources.list.d/debian.sources，没有 sources.list），
+# 所以换源改的是 URIs 行；先替 debian-security 再替 debian，前者含后者前缀。
+RUN set -eux; \
+    if [ -n "${APT_MIRROR}" ]; then \
+        sed -i \
+            -e "s|http://deb.debian.org/debian-security|${APT_MIRROR}/debian-security|g" \
+            -e "s|http://deb.debian.org/debian|${APT_MIRROR}/debian|g" \
+            /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    apt-get update && apt-get install -y --no-install-recommends \
         libreoffice-writer \
         poppler-utils \
         fonts-noto-cjk \
