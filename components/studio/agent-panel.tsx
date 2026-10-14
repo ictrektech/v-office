@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useExtracted } from "next-intl";
 import {
   AlertTriangle,
+  Brain,
   Check,
   ChevronDown,
   CornerDownLeft,
@@ -13,6 +14,7 @@ import {
   Paperclip,
   Sparkles,
   Square,
+  Target,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -48,6 +50,131 @@ function OperationLabel({ operation }: { operation: ChangeLike["operation"] }) {
 }
 
 /**
+ * 秒级走字的等待计时。
+ *
+ * 一块**静止**的提示和一块会走字的提示，观感差很远：前者像卡死，后者至少
+ * 证明进程活着。思考关掉时尤其需要——那时模型不产出推理文本，面板上真的
+ * 只有这一块东西可看（实测：首段正文 1.3s 就到，但中间读技能包要 10s）。
+ */
+function Elapsed({ since }: { since?: number }) {
+  const t = useExtracted();
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  if (!since) return null;
+  const secs = Math.max(0, Math.round((now - since) / 1000));
+  return (
+    <span className="ml-1.5 text-[12.5px] text-[#B4BDC9]">
+      {t({ id: "Elapsed seconds", message: "{count}s", values: { count: String(secs) } })}
+    </span>
+  );
+}
+
+/**
+ * 工具名的中文动词（静态分支：next-intl 的提取器要求消息可静态分析）。
+ */
+function ToolVerb({ name }: { name: string }) {
+  const t = useExtracted();
+  switch (name) {
+    case "read":
+      return <>{t({ id: "Tool read", message: "reading" })}</>;
+    case "write":
+      return <>{t({ id: "Tool write", message: "writing" })}</>;
+    case "edit":
+      return <>{t({ id: "Tool edit", message: "editing" })}</>;
+    case "bash":
+      return <>{t({ id: "Tool bash", message: "running" })}</>;
+    default:
+      return <>{t({ id: "Tool other", message: "calling" })}</>;
+  }
+}
+
+/**
+ * 「正在做的事」——**一行**，就地更新。
+ *
+ * 以前每轮往附注里塞一条「调用工具：read、read」，一次写作能堆出二十几行
+ * 一模一样的字（用户看到的就是一面墙）。现在只留最新一步，且带上对象：
+ * 「正在读取 SKILL.md · 第 7 步」。
+ */
+function ActivityLine({ activity }: { activity: NonNullable<ChatMessage["activity"]> }) {
+  const t = useExtracted();
+  // 路径只留文件名：全路径又长又占地方，同名在技能包内可以忽略
+  const base = activity.target.split(/[\\/]/).filter(Boolean).pop() || "";
+  return (
+    <div className="flex items-center gap-1.5 pl-1 text-[13px] text-[#94A3B8]">
+      <Loader2 className="h-3 w-3 shrink-0 animate-spin text-[#007AFF]" />
+      <span className="truncate">
+        <ToolVerb name={activity.name} /> {base || activity.name}
+        <span className="ml-1.5 text-[#B4BDC9]">
+          {t({ id: "Step N", message: "step {count}", values: { count: String(activity.steps) } })}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * 模型的思考过程。
+ *
+ * 深度思考能持续几十秒，这段时间以前是**彻底空白**（也正是「连接中断」误杀的
+ * 成因：没有任何事件可发）。把推理实时铺开，用户至少有东西读；正文一出现就
+ * 自动收起，不跟交付物抢视线——用户手动开合过就尊重他的选择，不再自动折叠。
+ *
+ * 思考**不是正文**：它只在这里显示，绝不进草稿、不落盘。
+ */
+function ThinkingBlock({ text, live }: { text: string; live: boolean }) {
+  const t = useExtracted();
+  const [open, setOpen] = useState(live);
+  const pinned = useRef(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!pinned.current) setOpen(live);
+  }, [live]);
+
+  // 思考在长，视线跟着走（只在展开时滚，收起后不动）
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (el && live) el.scrollTop = el.scrollHeight;
+  }, [text, live]);
+
+  const toggle = () => {
+    pinned.current = true;
+    setOpen((v) => !v);
+  };
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-[#E7EAF0] bg-white/70 dark:border-white/10 dark:bg-white/[0.02]">
+      <button
+        type="button"
+        onClick={toggle}
+        className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[13px] text-[#8B96A8] transition hover:bg-[#F7F9FC] dark:hover:bg-white/5"
+      >
+        <Brain className="h-3.5 w-3.5 shrink-0 text-[#007AFF]" />
+        <span className="font-medium">
+          {live
+            ? t({ id: "Thinking…", message: "Thinking…" })
+            : t({ id: "Reasoning", message: "Reasoning" })}
+        </span>
+        <ChevronDown
+          className={cn("ml-auto h-3.5 w-3.5 shrink-0 transition", open ? "rotate-180" : "")}
+        />
+      </button>
+      {open ? (
+        <div
+          ref={bodyRef}
+          className="max-h-64 overflow-y-auto whitespace-pre-wrap border-t border-[#F1F3F7] px-3 py-2 text-[13.5px] leading-relaxed text-[#7B8798] custom-scrollbar dark:border-white/10 dark:text-slate-400"
+        >
+          {text}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
  * 撰写室右栏：AI 面板。
  *
  * 数据全部来自 `useAiChat`（真实 SSE）；这里的「接受」会把变更交给服务端落文，
@@ -72,6 +199,11 @@ export function AgentPanel({
   onAcceptAll,
   onSave,
   onRemoveMaterial,
+  selection,
+  onCaptureSelection,
+  onClearSelection,
+  capturingSelection,
+  selectionHint,
   initialPrompt,
   panelWidth,
   className,
@@ -95,6 +227,21 @@ export function AgentPanel({
   onAcceptAll: () => void;
   onSave: () => void;
   onRemoveMaterial?: (name: string) => void;
+  /**
+   * 「只改这里」：用户在编辑器里选中、等 AI 动手的那一处（null = 不收窄）。
+   *
+   * 由宿主（ai-studio）经 Collabora 桥读选区后给出；带上 anchor（草稿段落
+   * 编号）时服务端的 patch 落点以它为准。改动送回后宿主会清掉它。
+   */
+  selection?: { text: string; anchor: string; preview: string } | null;
+  /** 点「改这里」：让宿主去读编辑器选区（宿主持有 iframe 桥） */
+  onCaptureSelection?: () => void;
+  /** 撤掉作用域（X）：下一轮照旧看整篇 */
+  onClearSelection?: () => void;
+  /** 正在读选区（按钮转圈） */
+  capturingSelection?: boolean;
+  /** 读了但文档里没有选区：给一句提示 */
+  selectionHint?: boolean;
   /** 起手话术（模板带进来的），只在输入框还空着时填入 */
   initialPrompt?: string;
   /** 面板宽度（Tailwind 宽度类，如 `w-[32rem]`）；不传用默认 23rem */
@@ -296,6 +443,17 @@ export function AgentPanel({
                     ) : null}
                   </div>
 
+                  {/* 正在做的事：一行，就地更新 */}
+                  {m.streaming && m.activity ? <ActivityLine activity={m.activity} /> : null}
+
+                  {/* 思考过程：正文一出现自动收起（用户手动开合过就听用户的） */}
+                  {m.thinking ? (
+                    <ThinkingBlock
+                      text={m.thinking}
+                      live={!!m.streaming && !visibleText(m.text)}
+                    />
+                  ) : null}
+
                   {visibleText(m.text) ? (
                     <div
                       className={cn(
@@ -307,9 +465,12 @@ export function AgentPanel({
                     >
                       {visibleText(m.text)}
                     </div>
-                  ) : m.streaming ? (
-                    <div className="rounded-2xl rounded-tl-md border border-[#E7EAF0] bg-[#F9FAFC] px-3.5 py-2.5 text-[15px] text-[#94A3B8]">
-                      {t({ id: "Thinking…", message: "Thinking…" })}
+                  ) : m.streaming && !m.thinking ? (
+                    // 既没有正文、也没有思考流（思考关掉时就一直是这样）：
+                    // 不给一句静止的「思考中…」，而是会走字的「正在处理 … 8s」
+                    <div className="flex items-center rounded-2xl rounded-tl-md border border-[#E7EAF0] bg-[#F9FAFC] px-3.5 py-2.5 text-[15px] text-[#94A3B8]">
+                      {t({ id: "Working…", message: "Working…" })}
+                      <Elapsed since={m.startedAt} />
                     </div>
                   ) : null}
 
@@ -458,6 +619,42 @@ export function AgentPanel({
               </p>
             ) : null}
 
+            {/* 「只改这里」：选中区域的作用域条。有它 = 这一轮 AI 只动这一处，
+                改完以 Word 修订送回（其他地方原样保留）；X 撤掉就回到整篇。 */}
+            {selection ? (
+              <div className="mb-2 flex items-start gap-2 rounded-xl border border-[#007AFF]/25 bg-[#007AFF]/8 px-3 py-2">
+                <Target className="mt-0.5 h-4 w-4 shrink-0 text-[#007AFF]" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[13px] font-semibold text-[#007AFF]">
+                    {t({ id: "Edit here only", message: "Editing here only" })}
+                    {selection.anchor ? (
+                      <span className="ml-1.5 font-normal text-[#007AFF]/80">
+                        {t({ id: "Clause", message: "Clause" })} {selection.anchor}
+                      </span>
+                    ) : null}
+                  </p>
+                  <p className="mt-0.5 line-clamp-2 text-[12.5px] leading-relaxed text-[#475569] dark:text-slate-300">
+                    {selection.preview}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={onClearSelection}
+                  className="-mr-1 -mt-0.5 shrink-0 rounded-lg p-1 text-[#007AFF]/60 transition hover:bg-[#007AFF]/10 hover:text-[#007AFF]"
+                  aria-label={t({ id: "Clear scope", message: "Clear scope" })}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : selectionHint ? (
+              <p className="mb-2 text-[13px] text-[#B45309]">
+                {t({
+                  id: "No selection hint",
+                  message: "No text is selected in the document — select first, then tap Edit here.",
+                })}
+              </p>
+            ) : null}
+
             <div className="flex items-end gap-2">
               <div className="flex-1">
                 <textarea
@@ -521,6 +718,32 @@ export function AgentPanel({
                         ) : null}
                       </button>
                     </div>
+                  ) : null}
+                  {/* 「改这里」：读编辑器选区，把这一轮的改动收窄到那一处。
+                      编辑视图之外（草稿视图）没有选区可读，按钮不出现。 */}
+                  {onCaptureSelection ? (
+                    <button
+                      type="button"
+                      onClick={onCaptureSelection}
+                      disabled={capturingSelection || !sessionReady}
+                      className={cn(
+                        vp.btnText,
+                        "gap-1",
+                        selection && "text-[#007AFF]",
+                        (capturingSelection || !sessionReady) && "opacity-50",
+                      )}
+                      title={t({
+                        id: "Edit here hint",
+                        message: "Select text in the document first — the AI will only change that part",
+                      })}
+                    >
+                      {capturingSelection ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Target className="h-3.5 w-3.5" />
+                      )}
+                      {t({ id: "Edit here", message: "Edit here" })}
+                    </button>
                   ) : null}
                   <button type="button" onClick={onSave} className={cn(vp.btnText, "gap-1")}>
                     {t({ id: "Save to my documents", message: "Save to My Documents" })}
@@ -781,8 +1004,11 @@ function AnalysisTab({
   onRemoveTemplate?: () => void;
 }) {
   const t = useExtracted();
-  const notes = messages.flatMap((m) => m.notes ?? []);
-  const toolCalls = notes.filter((n) => n.includes("调用工具"));
+  // 工具调用不再从 notes 里捞字符串（那种「调用工具：read」的堆积已经去掉了），
+  // 直接读每条消息上的活动摘要：总共几步 + 最后一步在读什么。
+  const toolSteps = messages.reduce((n, m) => n + (m.activity?.steps ?? 0), 0);
+  const lastActivity = [...messages].reverse().find((m) => m.activity)?.activity;
+  const lastTarget = (lastActivity?.target || "").split(/[\\/]/).filter(Boolean).pop();
 
   return (
     <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4 custom-scrollbar">
@@ -850,13 +1076,26 @@ function AnalysisTab({
 
       <div className={cn(vp.subCard, "p-3")}>
         <span className={vp.label}>{t({ id: "Tools", message: "Tools" })}</span>
-        {toolCalls.length ? (
+        {toolSteps ? (
           <ul className="mt-1.5 space-y-1">
-            {toolCalls.map((n, i) => (
-              <li key={i} className="text-[13.5px] text-[#475569] dark:text-slate-300">
-                · {n}
+            <li className="text-[13.5px] text-[#475569] dark:text-slate-300">
+              ·{" "}
+              {t({
+                id: "Tool call count",
+                message: "{count} tool calls",
+                values: { count: String(toolSteps) },
+              })}
+            </li>
+            {lastTarget || lastActivity?.name ? (
+              <li className="text-[13px] text-[#94A3B8]">
+                ·{" "}
+                {t({
+                  id: "Last tool target",
+                  message: "Latest: {what}",
+                  values: { what: lastTarget || String(lastActivity?.name) },
+                })}
               </li>
-            ))}
+            ) : null}
           </ul>
         ) : (
           <p className={cn(vp.meta, "mt-1.5")}>

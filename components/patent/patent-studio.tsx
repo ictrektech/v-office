@@ -106,6 +106,9 @@ export function PatentStudio() {
       })}
       backHref="/patent"
       icon={Scale}
+      // 进撰写室先问「这份稿子叫什么」：文件名就是会话标题，先定好，
+      // 后面建会话 / 出 docx / 打开编辑器全用同一个名字（问过就记住）
+      askFileName
       // 专利撰写对话要看得清权利要求全文，面板比公文写作那边宽一档
       panelWidth="w-[32rem]"
       nav={[

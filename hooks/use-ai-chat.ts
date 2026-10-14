@@ -24,8 +24,10 @@ import {
   fetchAiArtifact,
   fetchAiDraftHtml,
   getAiState,
+  getAiTranscript,
   importAiDocx,
   importAiDraft,
+  putAiTranscript,
   saveAiArtifact,
   saveAiDraft,
   stopAiSession,
@@ -38,11 +40,35 @@ import {
   type AiMaterial,
   type AiPatch,
   type AiTemplate,
+  type AiTranscriptMessage,
 } from "@/utils/ai/client";
 import type { AgentChange } from "@/utils/patent/types";
 
 /** 面板里的变更卡：AgentChange + 落文需要的额外字段 */
 export type ChangeLike = AgentChange & { key?: string; full?: boolean; fullText?: string };
+
+/**
+ * 上次那条会话线的 id（`persistKey` 存在 localStorage 里的值）。
+ *
+ * 无痕模式下 localStorage 会直接抛异常，一律当「没有」处理，别让它炸掉初始化。
+ */
+export function readPersistedSession(key?: string): string {
+  if (!key) return "";
+  try {
+    return localStorage.getItem(key) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function clearPersistedSession(key?: string): void {
+  if (!key) return;
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // 忽略
+  }
+}
 
 export interface ChatMessage {
   id: string;
@@ -51,10 +77,27 @@ export interface ChatMessage {
   at: string;
   streaming?: boolean;
   error?: boolean;
+  /** 这一条（agent 消息）开始生成的时间戳：面板据此显示「已思考 N 秒」 */
+  startedAt?: number;
   /** 附注：重试、工具调用、编号纠偏等 */
   notes?: string[];
   /** 待确认/已处理的文档变更 */
   changes?: ChangeLike[];
+  /**
+   * 模型的思考过程（流式累积）。
+   *
+   * 只上屏、**不进草稿**：它是模型的推理草稿，不是专利正文。服务端把它
+   * 作为独立的 `thinking` 事件发出来，就是为了让用户在长思考期间有东西看。
+   */
+  thinking?: string;
+  /**
+   * 正在做的事：**最新一步** + 累计步数，只占一行。
+   *
+   * 以前是每轮往 notes 里塞一条「调用工具：read、read」——一次写作能堆出
+   * 二十多行几乎一样的字，用户看到的就是一面墙。现在改成一行就地更新：
+   * 「正在读取 SKILL.md（第 7 步）」。
+   */
+  activity?: { name: string; target: string; steps: number };
   /** 这条用户消息指向的段落（用于在消息里显示「第 N 段」） */
   anchor?: string;
 }
@@ -77,12 +120,19 @@ export interface UseAiChat {
   health: AiHealth | null;
   /** 最近一次写进「我的文档」的文件名 */
   lastSaved: string | null;
+  /** 最近一次「保存到我的文档」的结果（界面据此给出明确反馈） */
+  lastSave: {
+    name: string;
+    /** 文档本来就在「我的文档」里，一个字都没改 */
+    already: boolean;
+    at: number;
+    error?: string;
+  } | null;
   /** 需要用户先去设置页处理的情况（未配密钥 / 没装 pi） */
   blocked: string | null;
   pendingChanges: number;
   send: (instruction: string, options?: SendOptions) => Promise<void>;
   stop: () => void;
-  reset: () => void;
   upload: (file: File) => Promise<AiMaterial>;
   /** 上传成稿模板：之后每轮都按它的结构成文 */
   uploadTemplate: (file: File) => Promise<AiTemplate>;
@@ -162,12 +212,39 @@ function blocksToMarkdown(blocks: { heading?: string; text?: string }[]): string
     .join("\n\n");
 }
 
+/**
+ * 心跳看门狗的阈值（毫秒）。
+ *
+ * 为什么需要：SSE 被掐断（dev 热刷新整页刷新、代理超时、切换网络、切标签…）时，
+ * 浏览器的 fetch 会**静默地结束**——既不报错也不抛异常。而组件里的 streaming
+ * 只有在 `finally` 里复位；Fast Refresh 还会把旧 state 留下来，于是界面永远
+ * 转圈「思考中…」，而后台其实早就没人跑了。
+ *
+ * 后端每轮都会发心跳（`type: "ping"`），所以「一段时间内一个事件都没有」
+ * 就等于连接已死：主动收尾 → 复位状态 → 拉回已落盘的内容。
+ *
+ * 阈值必须是后端心跳间隔（服务端 `PING_INTERVAL_S = 15s`）的**数倍**：
+ * 这里 45s = 连丢 3 个心跳才判定死亡。曾经是 20s，只比心跳大 5s——只要有一次
+ * 心跳因为后端切片、代理缓冲、主线程忙而晚到，看门狗就会把一轮完全正常的
+ * 回合掐成「连接中断」（实测撞过：首轮加载技能刚好跨过 20s）。
+ * 放宽到 3 倍是刻意的取舍：真断线时多等 45 秒可接受，误杀正常回合不可接受。
+ */
+const STREAM_WATCHDOG_MS = 45_000;
+const STREAM_WATCHDOG_TICK_MS = 3_000;
+
 export function useAiChat(options: {
   skill: string;
   title?: string;
   persistKey?: string;
+  /**
+   * 先别建会话：等调用方把标题（= 落盘文件名）定下来再说。
+   *
+   * 专利/写作撰写室进页面先问「这份稿子叫什么」——文件名就是会话标题，建完再改
+   * 等于把已经导出的 docx 改名，多一步还容易和编辑器里开着的那份对不上。
+   */
+  paused?: boolean;
 }): UseAiChat {
-  const { skill, title = "", persistKey } = options;
+  const { skill, title = "", persistKey, paused = false } = options;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState<AiDraft | null>(null);
   const [materials, setMaterials] = useState<AiMaterial[]>([]);
@@ -180,23 +257,82 @@ export function useAiChat(options: {
   const [health, setHealth] = useState<AiHealth | null>(null);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
   const [blocked, setBlocked] = useState<string | null>(null);
+  /** 最近一次「保存到我的文档」的结果：成功给文件名，失败给原因 */
+  const [lastSave, setLastSave] = useState<{
+    name: string;
+    already: boolean;
+    at: number;
+    error?: string;
+  } | null>(null);
   const [draftTitle, setDraftTitle] = useState(title);
   const abortRef = useRef<AbortController | null>(null);
   const sessionRef = useRef<string | null>(null);
+  /**
+   * 建会话的**在途 Promise**。
+   *
+   * 为什么必须有：`ensureSession` 有两个调用方——初始化 effect 和 `reset()`，
+   * 而 reset 会先把 `sessionRef` 清空再建。两道调用几乎同时进来时，两边都看到
+   * 「没有会话」，于是**并发建出两个会话**（本地日志实录：55 毫秒内连建两个，
+   * 每个都在 sessions/ 下落一个新文件夹）。在途Promise 让第二个调用等第一个
+   * 的结果，同一时刻只会有一个会话被创建。
+   */
+  const ensureInFlight = useRef<Promise<string> | null>(null);
+  /** 对话记录是否已经尝试恢复过（只恢复一次，别把进行中的对话覆盖掉） */
+  const transcriptLoadedRef = useRef(false);
+  /**
+   * 外部标题的**最新值**（= 落盘文件名）。
+   *
+   * 建会话时读它而不是 `draftTitle`：调用方（撰写室）可能刚把用户起的名字传进来，
+   * 而 `draftTitle` 是 useState 的初值，同一个渲染周期里还是旧名——用它建会话，
+   * 文件名就错了，事后再改等于把已导出的 docx 改名。渲染期赋值即可，Ref 就是这么用的。
+   */
+  const titleRef = useRef(title);
+  titleRef.current = title;
 
   const ensureSession = useCallback(async (): Promise<string> => {
     if (sessionRef.current) return sessionRef.current;
-    const meta = await createAiSession(draftTitle, skill);
-    sessionRef.current = meta.id;
-    setSessionId(meta.id);
-    if (persistKey) {
-      try {
-        localStorage.setItem(persistKey, meta.id);
-      } catch {
-        // 无痕模式忽略
+    // 在途去重：并发调用共用同一次创建（见 ensureInFlight 的注释）
+    if (ensureInFlight.current) return ensureInFlight.current;
+    const task = (async (): Promise<string> => {
+      // 先认领上次那条会话线。`persistKey` 的用意就是「同一条稿子线，刷新/重开
+      // 页面还接着用」，但这里以前**只写不读**：每次进页面都新建一个会话，而新
+      // 会话的草稿是空的。于是出现最费解的一幕——编辑器里明明开着整篇稿子（那是
+      // 「我的文档」里那份 docx），点「保存到我的文档」却回你一句「草稿是空的」；
+      // 顺带 AI 也看不见上一轮写了什么。
+      const remembered = readPersistedSession(persistKey);
+      if (remembered) {
+        try {
+          const state = await getAiState(remembered);
+          sessionRef.current = remembered;
+          setSessionId(remembered);
+          if (state.draft?.title) setDraftTitle(state.draft.title);
+          return remembered;
+        } catch {
+          // 会话已被清理（服务端重启/换机器/手动删过）：清掉记录往下新建，
+          // 别让一个死 id 卡住整个初始化
+          clearPersistedSession(persistKey);
+        }
       }
+      // 标题取 titleRef（见它的注释）：调用方刚把用户起的名字传进来时，
+      // draftTitle 这个 useState 初值在同一渲染周期里还是旧的
+      const meta = await createAiSession(titleRef.current || draftTitle, skill);
+      sessionRef.current = meta.id;
+      setSessionId(meta.id);
+      if (persistKey) {
+        try {
+          localStorage.setItem(persistKey, meta.id);
+        } catch {
+          // 无痕模式忽略
+        }
+      }
+      return meta.id;
+    })();
+    ensureInFlight.current = task;
+    try {
+      return await task;
+    } finally {
+      ensureInFlight.current = null;
     }
-    return meta.id;
   }, [draftTitle, persistKey, skill]);
 
   const refresh = useCallback(async () => {
@@ -215,9 +351,13 @@ export function useAiChat(options: {
     }
   }, []);
 
-  // 初始化：探活 → 建会话 → 拉状态
+  // 初始化：探活 → 建会话 → 拉状态 → 恢复对话记录
   useEffect(() => {
     let alive = true;
+    if (paused) {
+      // 标题还没定：先不建会话（文件名来自会话标题，建错就得改名）
+      return;
+    }
     (async () => {
       try {
         const h = await aiHealth();
@@ -234,6 +374,29 @@ export function useAiChat(options: {
       try {
         await ensureSession();
         await refresh();
+        // 对话记录（含思考过程）恢复：刷新/换设备再进来，上一段对话还在
+        const sid = sessionRef.current;
+        if (sid && !transcriptLoadedRef.current) {
+          transcriptLoadedRef.current = true;
+          try {
+            const saved = await getAiTranscript(sid);
+            if (!alive) return;
+            if (saved.messages?.length) {
+              setMessages(
+                saved.messages.map((m) => ({
+                  id: nextId(),
+                  role: m.role === "user" ? ("user" as const) : ("agent" as const),
+                  text: m.text || "",
+                  at: m.at || now(),
+                  thinking: m.thinking || undefined,
+                  anchor: m.anchor || undefined,
+                })),
+              );
+            }
+          } catch {
+            // 恢复失败不影响对话：就当是新开一段
+          }
+        }
       } catch {
         if (alive) setBlocked("无法创建 AI 会话");
       }
@@ -241,7 +404,7 @@ export function useAiChat(options: {
     return () => {
       alive = false;
     };
-  }, [ensureSession, refresh]);
+  }, [ensureSession, paused, refresh]);
 
   const patchMessage = useCallback(
     (id: string, patch: Partial<ChatMessage>) => {
@@ -259,7 +422,14 @@ export function useAiChat(options: {
       setMessages((prev) => [
         ...prev,
         { id: nextId(), role: "user", text, at: now(), anchor: options.anchor },
-        { id: agentId, role: "agent", text: "", at: now(), streaming: true },
+        {
+          id: agentId,
+          role: "agent",
+          text: "",
+          at: now(),
+          streaming: true,
+          startedAt: Date.now(),
+        },
       ]);
       setStreaming(true);
       setBlocked(null);
@@ -267,6 +437,21 @@ export function useAiChat(options: {
       abortRef.current = controller;
 
       let sawError = false;
+      // 看门狗：连接静默死亡时兜底（否则界面永远「思考中」）
+      let lastEventAt = Date.now();
+      const watchdog = setInterval(() => {
+        if (Date.now() - lastEventAt < STREAM_WATCHDOG_MS) return;
+        sawError = true;
+        patchMessage(agentId, {
+          streaming: false,
+          error: true,
+          text:
+            "连接中断（页面刷新、网络切换或代理超时），本轮已停止。" +
+            "已生成的内容仍保留在文档里，可继续发指令让 AI 接着写。",
+        });
+        controller.abort();
+      }, STREAM_WATCHDOG_TICK_MS);
+
       const addNote = (note: string) =>
         setMessages((prev) =>
           prev.map((m) => (m.id === agentId ? { ...m, notes: [...(m.notes ?? []), note] } : m)),
@@ -280,6 +465,7 @@ export function useAiChat(options: {
           save: !!options.save,
           signal: controller.signal,
           onEvent: (event: AiEvent) => {
+            lastEventAt = Date.now();
             switch (event.type) {
               case "delta":
                 setMessages((prev) =>
@@ -288,6 +474,36 @@ export function useAiChat(options: {
                   ),
                 );
                 break;
+              case "thinking": {
+                // 思考只上屏。final=true 时用服务端给的整段替换本地拼接的
+                // （流里的 delta 可能缺尾巴，口径与正文一致）。
+                const piece = String(event.text ?? "");
+                const isFinal = event.final === true;
+                if (!piece) break;
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === agentId
+                      ? { ...m, thinking: isFinal ? piece : (m.thinking ?? "") + piece }
+                      : m,
+                  ),
+                );
+                break;
+              }
+              case "tool": {
+                const name = String(event.name ?? "");
+                const target = String(event.target ?? "");
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === agentId
+                      ? {
+                          ...m,
+                          activity: { name, target, steps: (m.activity?.steps ?? 0) + 1 },
+                        }
+                      : m,
+                  ),
+                );
+                break;
+              }
               case "message_end": {
                 const full = String(event.text ?? "");
                 if (full) patchMessage(agentId, { text: full });
@@ -315,8 +531,20 @@ export function useAiChat(options: {
                 addNote(`模型未响应，自动重试第 ${event.attempt ?? 2} 次`);
                 break;
               case "tools": {
+                // 兜底（拿不到逐条 tool 事件时才用）：让步数动起来即可。
+                // 绝不写进 notes —— 那正是「一屏调用工具：read、read」的来源。
                 const names = Array.isArray(event.names) ? event.names : [];
-                if (names.length) addNote(`调用工具：${names.join("、")}`);
+                if (!names.length) break;
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === agentId && !m.activity
+                      ? {
+                          ...m,
+                          activity: { name: String(names[0]), target: "", steps: names.length },
+                        }
+                      : m,
+                  ),
+                );
                 break;
               }
               case "warn":
@@ -351,6 +579,7 @@ export function useAiChat(options: {
         sawError = true;
         patchMessage(agentId, { streaming: false, error: true, text: `发送失败：${String(err)}` });
       } finally {
+        clearInterval(watchdog);
         abortRef.current = null;
         setStreaming(false);
         setMessages((prev) =>
@@ -376,26 +605,6 @@ export function useAiChat(options: {
     const sid = sessionRef.current;
     if (sid) void stopAiSession(sid);
   }, []);
-
-  const reset = useCallback(() => {
-    abortRef.current?.abort();
-    sessionRef.current = null;
-    setSessionId(null);
-    setMessages([]);
-    setDraft(null);
-    setMaterials([]);
-    setArtifacts([]);
-    setActiveArtifact("");
-    setLastSaved(null);
-    if (persistKey) {
-      try {
-        localStorage.removeItem(persistKey);
-      } catch {
-        // 忽略
-      }
-    }
-    void ensureSession().then(() => refresh());
-  }, [ensureSession, persistKey, refresh]);
 
   const upload = useCallback(
     async (file: File) => {
@@ -494,7 +703,15 @@ export function useAiChat(options: {
       const res = await saveAiDraft(sid);
       setLastSaved(res.saved);
       setDraft(res.draft);
+      // 保存结果单独存一份（带时间戳）：界面要的是「刚存成了，文件名是这个」
+      // 这一下明确的反馈，而不是角落里一个永远亮着的小字。
+      setLastSave({
+        name: res.saved,
+        already: res.already === true,
+        at: Date.now(),
+      });
     } catch (err) {
+      setLastSave({ name: "", already: false, at: Date.now(), error: String(err) });
       setBlocked(String(err));
     }
   }, []);
@@ -611,6 +828,32 @@ export function useAiChat(options: {
     0,
   );
 
+  /**
+   * 对话停下来就落库（服务端 transcript.json）。
+   *
+   * 只在**不流式**时存：流式中每个 delta 都会改 messages，那时写库等于把一次
+   * 回合拆成几十次请求；等它停下来写一次，内容也齐了。思考过程（thinking）
+   * 一起存——用户问的就是「AI 想过什么」也要留得下。
+   */
+  useEffect(() => {
+    const sid = sessionRef.current;
+    if (!sid || streaming || !transcriptLoadedRef.current) return;
+    if (!messages.length) return;  // 空会话不写文件
+    const payload: AiTranscriptMessage[] = messages.map((m) => ({
+      role: m.role,
+      text: m.text,
+      at: m.at,
+      ...(m.thinking ? { thinking: m.thinking } : {}),
+      ...(m.anchor ? { anchor: m.anchor } : {}),
+    }));
+    const timer = window.setTimeout(() => {
+      void putAiTranscript(sid, payload).catch(() => {
+        // 存不上不打扰用户：对话照常能用
+      });
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [messages, streaming]);
+
   return {
     messages,
     draft,
@@ -620,11 +863,11 @@ export function useAiChat(options: {
     streaming,
     health,
     lastSaved,
+    lastSave,
     blocked,
     pendingChanges,
     send,
     stop,
-    reset,
     upload,
     uploadTemplate,
     removeTemplate,

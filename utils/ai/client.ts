@@ -330,11 +330,56 @@ export async function applyAiPatches(
 /** 主动保存当前草稿到「我的文档」 */
 export async function saveAiDraft(
   sid: string,
-): Promise<{ saved: string; draft: AiDraft }> {
+): Promise<{ saved: string; draft: AiDraft; already?: boolean }> {
   const resp = await aiFetch(`/sessions/${encodeURIComponent(sid)}/save`, {
     method: "POST",
   });
-  return jsonOrThrow<{ saved: string; draft: AiDraft }>(resp);
+  return jsonOrThrow<{ saved: string; draft: AiDraft; already?: boolean }>(resp);
+}
+
+/** 对话记录里的一条（服务端只认白名单字段，见 server/ai.py 的 transcript 段） */
+export interface AiTranscriptMessage {
+  role: "user" | "agent";
+  text: string;
+  at: string;
+  /** 模型的思考过程 */
+  thinking?: string;
+  anchor?: string;
+}
+
+/** 取这条会话的对话记录（含思考过程）；没有则返回空数组 */
+export async function getAiTranscript(
+  sid: string,
+): Promise<{ messages: AiTranscriptMessage[] }> {
+  const resp = await aiFetch(`/sessions/${encodeURIComponent(sid)}/transcript`);
+  return jsonOrThrow<{ messages: AiTranscriptMessage[] }>(resp);
+}
+
+/** 存下这条会话的对话记录（对话停下来后由 hook 自动落库） */
+export async function putAiTranscript(
+  sid: string,
+  messages: AiTranscriptMessage[],
+): Promise<{ saved: boolean }> {
+  const resp = await aiFetch(`/sessions/${encodeURIComponent(sid)}/transcript`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages }),
+  });
+  return jsonOrThrow<{ saved: boolean }>(resp);
+}
+
+/**
+ * 量一下「我的文档」里那份 docx 的正文长度（只读）。
+ *
+ * 注入完成后用它核对有没有贴全：粘贴是异步的，保存抢跑会落下一份截断的文档。
+ * 返回 0 = 这次没量上（文件不存在/转换失败），调用方按「不算失败」处理。
+ */
+export async function getDocChars(sid: string, name: string): Promise<number> {
+  const resp = await aiFetch(
+    `/sessions/${encodeURIComponent(sid)}/doc-chars?name=${encodeURIComponent(name)}`,
+  );
+  const data = await jsonOrThrow<{ chars: number }>(resp);
+  return data.chars || 0;
 }
 
 /**
