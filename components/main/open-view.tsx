@@ -125,6 +125,8 @@ export function OpenView({
     downloadDocument: downloadNasDocument,
     rescan: rescanNas,
     refreshCategory: refreshNasCategory,
+    publicDocuments: nasPublicDocuments,
+    refreshPublicDocuments: refreshNasPublicDocuments,
   } = useNasDocuments(language);
   const [view, setView] = useState<"mine" | "nas">("mine");
 
@@ -290,6 +292,9 @@ export function OpenView({
       );
       // 清掉该分类的扫描缓存：否则切到「NAS 数据」看到的还是旧列表
       refreshNasCategory(publicCategory);
+      // 刚写进去的这份也是公共目录的新内容：撞名判断用的那份名单一并刷新，
+      // 否则紧接着再存同名文件时会因为名单过期而漏判。
+      refreshNasPublicDocuments();
     } catch (error) {
       const detail = String(error);
       if (detail.includes("READ_ONLY")) {
@@ -323,9 +328,15 @@ export function OpenView({
    *
    * 覆盖本身可回退（服务端留底 + 「版本」），所以这里只弹一句确认，不做版本比对、
    * 不给"另存为"这类分支 —— 那套复杂度换来的信息，用户其实都不看。
+   *
+   * 撞名判断必须拿**公共目录自己**的名单（nasPublicDocuments）比，不能拿活动分类的
+   * nasDocuments：用户停在别的分类时后者不含那个同名文件，taken 会判假，于是不弹
+   * 确认直接盖掉公共盘上的文件。
    */
   const requestPublish = (file: StoredFile) => {
-    const taken = nasDocuments.some((doc) => doc.name === file.name && !doc.folder);
+    const taken = nasPublicDocuments.some(
+      (doc) => doc.name === file.name && !doc.folder,
+    );
     if (taken) {
       setPublishPrompt({ file });
       return;

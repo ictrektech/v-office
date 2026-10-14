@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   listSharedSources,
   listSourceDocuments,
   openSharedDocument,
   type SharedSourceRoot,
+  type SourceDocumentListing,
 } from "@/utils/vos/storage";
 
 /** NAS 数据下的一个分类：公共 / 用户（<用户名>） */
@@ -86,6 +87,22 @@ export function useNasDocuments(language: string) {
   const [truncated, setTruncated] = useState(seed.truncated);
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
+  /** 把一次列举结果翻成 NasDocument[]；key 用「源 + 源内路径」，天然唯一。 */
+  function toNasDocuments(
+    category: NasCategory,
+    listing: SourceDocumentListing,
+  ): NasDocument[] {
+    return listing.documents.map((doc) => ({
+      key: `${category.sourceId}:${doc.path}`,
+      name: doc.name,
+      folder: doc.folder,
+      path: doc.path,
+      sourceId: category.sourceId,
+      size: doc.size,
+      modified: doc.modified,
+    }));
+  }
+
   const scan = useCallback(
     async (category: NasCategory, force = false) => {
       const cached = scanCache.get(category.key);
@@ -105,15 +122,7 @@ export function useNasDocuments(language: string) {
           category.path,
           force,
         );
-        const scanned: NasDocument[] = listing.documents.map((doc) => ({
-          key: `${category.sourceId}:${doc.path}`,
-          name: doc.name,
-          folder: doc.folder,
-          path: doc.path,
-          sourceId: category.sourceId,
-          size: doc.size,
-          modified: doc.modified,
-        }));
+        const scanned = toNasDocuments(category, listing);
         scanCache.set(category.key, {
           documents: scanned,
           truncated: listing.truncated,
@@ -254,6 +263,67 @@ export function useNasDocuments(language: string) {
     [activeCategory, scan],
   );
 
+  // ---------------------------------------------------------------------------
+  // 公共目录的专属名单
+  //
+  // 「存入公共」的撞名判断必须拿**公共目录自己**的文档列表比，而不是活动分类的
+  // （documents）。用户停在别的分类时，活动分类里没有那个同名文件，于是 taken
+  // 判假、确认框不弹、公共盘上的同名文件被静默覆盖。覆盖虽可留底回退，但违背了
+  // 这个入口"撞名先确认一次"的约定。
+  //
+  // 所以这里固定扫一份公共目录的，与用户在浏览哪个分类完全无关。
+  // ---------------------------------------------------------------------------
+  const publicCategoryRef = useRef<NasCategory | null>(null);
+  const publicCategory = useMemo(
+    () => categories.find((item) => item.kind === "public") ?? null,
+    [categories],
+  );
+  publicCategoryRef.current = publicCategory;
+  const [publicDocuments, setPublicDocuments] = useState<NasDocument[]>([]);
+
+  /** 扫（或复用缓存里的）公共目录；失败时名单置空，让调用方按"没撞名"走。 */
+  const scanPublicCategory = useCallback(async () => {
+    const category = publicCategoryRef.current;
+    if (!category) {
+      setPublicDocuments([]);
+      return;
+    }
+    const cached = scanCache.get(category.key);
+    if (cached && Date.now() - cached.at < CACHE_FRESH_MS) {
+      setPublicDocuments(cached.documents);
+      return;
+    }
+    try {
+      const listing = await listSourceDocuments(
+        category.sourceId,
+        category.path,
+        false,
+      );
+      const scanned = toNasDocuments(category, listing);
+      scanCache.set(category.key, {
+        documents: scanned,
+        truncated: listing.truncated,
+        at: Date.now(),
+      });
+      setPublicDocuments(scanned);
+    } catch (error) {
+      console.error("Failed to scan public category:", error);
+      setPublicDocuments([]);
+    }
+  }, []);
+
+  // 分类列表就绪后扫一次公共目录。之后不随活动分类变化重跑——那份名单只跟
+  // 公共目录有关，用户在页签之间怎么切都不该影响它。
+  useEffect(() => {
+    void scanPublicCategory();
+  }, [scanPublicCategory]);
+
+  /** 写入公共目录后调用：名单已经过期，强制重扫。 */
+  const refreshPublicDocuments = useCallback(() => {
+    scanCache.delete(publicCategoryRef.current?.key ?? "");
+    void scanPublicCategory();
+  }, [scanPublicCategory]);
+
   return {
     categories,
     activeCategory,
@@ -268,6 +338,10 @@ export function useNasDocuments(language: string) {
     downloadDocument,
     rescan,
     refreshCategory,
+    /** 公共目录自己的文档列表（与活动分类无关）——「存入公共」撞名判断用它 */
+    publicDocuments,
+    /** 写入公共目录后调用：名单已过期，强制重扫 */
+    refreshPublicDocuments,
     reload: loadCategories,
   };
 }
