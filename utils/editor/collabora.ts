@@ -479,13 +479,17 @@ export function pasteIntoCollabora(iframe: HTMLIFrameElement, html: string): voi
 }
 
 /**
- * 单块粘贴的体量上限（字节）。
+ * 单块粘贴的体量上限（**字节**，按 UTF-8 算，见 splitHtmlForPaste）。
  *
- * 24KB 是刻意留了余量的：出问题的样本在 40KB 量级，而块太小又会让一轮注入
- * 多出几十次 UNO 往返（每次都要等粘贴安静）。真实稿子（专利交底书四件套
- * 3k～11k 字）通常 1～3 块就粘完。
+ * 原值 24KB 太大：一块推过去会在中途废掉，落盘只剩开头几行。实测把块压到
+ * 8KB 以下连续粘贴稳定到位（中文 1 字 ≈ 3 字节，8KB ≈ 2700 字，够一段正文）。
+ * 块多只是慢一点，块太大是直接丢内容，所以宁小勿大。
+ *
+ * 另一个必须盯住的是**块与块之间的等待**：见 `waitForCollaboraQuiet` ——
+ * 光把块切小、等待判据不对，照样丢（后一块的 `GoToEndOfDoc` 会落在还没排完的
+ * 文档上，追加变成错位）。
  */
-const PASTE_CHUNK_BYTES = 24 * 1024;
+const PASTE_CHUNK_BYTES = 8 * 1024;
 
 /** HTML 里的 void 元素（没有闭合标签，扫描深度时不能把它们当成开标签）。 */
 const VOID_TAGS = new Set([
@@ -595,18 +599,17 @@ export function splitHtmlForPaste(html: string, maxBytes = PASTE_CHUNK_BYTES): s
 /**
  * 用 HTML **整篇替换**活文档里的内容——分块粘贴协议。
  *
- * 为什么必须分块（2026-10-14 本地联调实测）：`Action_Paste` 把整段 HTML 经
- * WebSocket 一次性推给 coolwsd，体量一大就被截断——落盘只剩前面一小段，
- * 用户看到的就是「AI 写的内容只显示最前面一点」。单块 40KB 的稿子必现，
- * 且改格式（字体调大、行距变化）让文档变大后更容易撞上。曾经的补救是
- * 「保存后数字数，短了就重贴」，但截断的那次保存已经先把服务端完整 docx
- * 覆盖成残缺版，重载加载的就是残缺文件，补不完。
+ * 为什么必须分块：`Action_Paste` 的内容要经过 postMessage → iframe 内转 Blob →
+ * WebSocket 帧才到 coolwsd，**单块体量有硬上限**，超了一块直接废掉（落盘只剩开头
+ * 几行，用户看到的就是「AI 写的内容只显示最前面一点」）。上限见 `PASTE_CHUNK_BYTES`，
+ * 宁小勿大：块多只是慢一点，块太大是直接丢内容。
  *
  * 协议（两步都实测过）：
  *   ① `.uno:SelectAll` → 等 700ms → 粘第一块（整篇替换）
  *   ② 其余块：`.uno:GoToEndOfDoc` → 粘到光标处（文末追加）
- * 每块之间等 `waitForCollaboraQuiet`——`Action_Paste` 是异步的，保存抢跑
- * 会把贴到一半的文档写进文件（见 `waitForCollaboraQuiet` 的注释）。
+ * 每块之后必须等 `waitForCollaboraQuiet` **真的贴完**再发下一块：`Action_Paste`
+ * 是异步的，`GoToEndOfDoc` 一旦落在没排完的文档上，「追加」就会变成错位或替换 ——
+ * 一整篇稿子的内容就是这么少掉的（见 `waitForCollaboraQuiet` 的注释）。
  *
  * `GoToEndOfDoc` 会把光标移到文末并**收起选区**；收起是追加的前提——
  * 收不起的话下一块会替换掉刚粘的内容（已本地验证：三块 100 段连粘，
@@ -635,7 +638,8 @@ export async function replaceDocumentWithHtml(
     if (!iframe.isConnected) break;
     // 光标到文末（收起上一块粘贴留下的选区，否则下一块会替换掉它）
     sendUnoCommand(iframe, ".uno:GoToEndOfDoc");
-    await sleep(150);
+    // 给命令留出落地时间：文档越大这一步越慢，150ms 实测偏紧
+    await sleep(400);
     if (!iframe.isConnected) break;
     pasteIntoCollabora(iframe, chunks[index]);
     onProgress?.(index + 1, chunks.length);
@@ -728,31 +732,36 @@ export function readCollaboraSelection(
 }
 
 /**
- * 等文档「安静下来」——`Action_Paste` 这类异步操作真正做完的判据。
+ * 等这一块粘贴**真的贴完**。
  *
- * 为什么必须有（2026-10-14 实测复现，本地 Collabora 26.04 + playwright）：
- * `Action_Paste` 是**异步**的，粘贴过程中会持续吐 `Doc_PartChanged` /
- * `Doc_ModifiedStatus`。曾经的实现是「粘贴后立刻 `Action_Save`」，32KB 的稿子
- * 落盘只剩 **793 字（3%）**——保存动作把贴到一半的文档写成了文件，而服务端那份
- * 完整 docx 反被这次不完整的保存盖掉。所以保存前必须等这些事件停止。
+ * 判据是「先见到内容变化信号，再等它安静下来」，而不是「一段时间没信号就算完」。
+ * 后者正是这里最坑的一处：`lastEvent` 的初值就是起始时刻，于是 coolwsd 还没开始
+ * 吐事件（解析 + 排版一块要时间）就被判成「贴完了」，下一块的 `GoToEndOfDoc` 落在
+ * 没排完的文档上 —— 追加变成错位/替换，一整篇稿子就这么少掉一截，而且块越小越容易
+ * 撞上（每块都秒判「安静」）。
  *
- * 三条边界缺一不可：
- * - `minMs`：粘贴刚发出去时也会安静一小会儿（事件还没开始吐），不等够下限会把
- *   「还没开始贴」误判成「贴完了」；
- * - `quietMs`：贴完到最后一个事件之间有间隔，500ms 实测能区分「贴完的间隙」
- *   和「贴到一半的间隙」；
- * - `maxMs`：信号万一不来（换内核版本、被禁用），到点放行——宁可存一份可能不全
- *   的文档（上层还会核对字数、必要时重贴或重载），也不能把界面卡在「保存中」。
+ * 四条边界：
+ * - `quietMs`：两点事件之间的间隔，用来区分「贴完的间隙」和「贴到一半的间隙」；
+ * - `minMs`：粘贴刚发出去时本来就会安静一小会儿，不等够下限不算数；
+ * - `noEventMs`：一块内容都没等到（内容与上一版相同等）时放行，免得流程挂死；
+ * - `maxMs`：兜底上限 —— 宁可存一份可能不全的文档（上层还会核对字数、必要时重贴
+ *   或重载），也不把界面卡在「保存中」。
  *
  * 返回实际等了多久（毫秒），便于排查。
  */
 export function waitForCollaboraQuiet(
   iframe: HTMLIFrameElement,
-  { quietMs = 500, minMs = 300, maxMs = 15_000 }: { quietMs?: number; minMs?: number; maxMs?: number } = {},
+  {
+    quietMs = 500,
+    minMs = 800,
+    maxMs = 20_000,
+    noEventMs = 6_000,
+  }: { quietMs?: number; minMs?: number; maxMs?: number; noEventMs?: number } = {},
 ): Promise<number> {
   return new Promise((resolve) => {
     const started = Date.now();
-    let lastEvent = started;
+    /** 0 = 还没见到任何「内容变了」的信号 */
+    let lastEvent = 0;
     const onMessage = (ev: MessageEvent) => {
       let data: { MessageId?: string } | null = null;
       try {
@@ -767,14 +776,19 @@ export function waitForCollaboraQuiet(
         lastEvent = Date.now();
       }
     };
+    const finish = () => {
+      window.clearInterval(timer);
+      window.removeEventListener("message", onMessage);
+      resolve(Date.now() - started);
+    };
     const timer = window.setInterval(() => {
       const now = Date.now();
       const sinceStart = now - started;
-      if (sinceStart >= maxMs || (sinceStart >= minMs && now - lastEvent >= quietMs)) {
-        window.clearInterval(timer);
-        window.removeEventListener("message", onMessage);
-        resolve(sinceStart);
-      }
+      if (sinceStart >= maxMs) return finish();
+      // 正常路径：见到过内容变化，且已经安静下来
+      if (lastEvent > 0 && sinceStart >= minMs && now - lastEvent >= quietMs) return finish();
+      // 一块内容都没等到：别拿「没信号」冒充「贴完了」，但要放行免得挂死
+      if (lastEvent === 0 && sinceStart >= noEventMs) return finish();
     }, 50);
     window.addEventListener("message", onMessage);
   });

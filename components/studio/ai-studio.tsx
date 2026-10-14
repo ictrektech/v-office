@@ -27,13 +27,12 @@ import { ArrowLeft, AlertCircle, Check, CheckCircle2, FileText, Loader2, Message
 import { cn } from "@/lib/utils";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { clearPersistedSession, readPersistedSession, useAiChat, type UseAiChat } from "@/hooks/use-ai-chat";
-import { getAiState, getDocChars } from "@/utils/ai/client";
+import { getAiState } from "@/utils/ai/client";
 import { useResolvedLanguage } from "@/store";
 import {
   alignCollaboraHost,
   announceHostReady,
   followCollaboraEnd,
-  replaceDocumentWithHtml,
   fetchCollaboraSession,
   fetchCollaboraStatus,
   flushCollabora,
@@ -299,7 +298,16 @@ export function AiStudio({
   const [engineError, setEngineError] = useState<string | null>(null);
   const cancelRef = useRef(false);
   /** 会话版本：每次重载 +1，逼 Collabora 丢开内存里的旧文档、重新读盘 */
-  const versionRef = useRef(0);
+  /**
+   * 会话版本：每次重载 +1，逼 Collabora 丢开内存里的旧文档、重新读盘。
+   *
+   * 初值必须**每次加载都不同**。coolwsd 是按 WOPISrc 缓存文档会话的：版本一旦
+   * 回到同一个值（刷新后从 0 起 → 永远还是 `.v1`），它就认为「这文档我开着」，
+   * 直接把内存里那份**旧文档**还给你——服务端刚写好的文件它看都不看。
+   * 现象就是：注入、重载全都像没生效，内容一直是旧的，只有硬刷新（或等 coolwsd
+   * 回收会话）才会从盘上重读。日志实测：189 次 WOPI 请求清一色 `.v1`，从无 `.v2`。
+   */
+  const versionRef = useRef(Date.now());
   const openingRef = useRef(false);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
 
@@ -452,8 +460,9 @@ export function AiStudio({
    * 最后换一个会话版本取 WOPI 地址挂 iframe。任一步失败都给出原因（不白屏）。
    */
   const openEditor = useCallback(
-    async (reexport = true) => {
-      if (openingRef.current) return;
+    async (reexport = true): Promise<boolean> => {
+      // 并发只跑一个；被挡掉的那次如实回 false，调用方据此决定要不要重试
+      if (openingRef.current) return false;
       openingRef.current = true;
       setOpening(true);
       setEngineError(null);
@@ -511,8 +520,10 @@ export function AiStudio({
         setEditorDoc(name);
         setEditorUrl(alignCollaboraHost(session.editorUrl));
         setView("editor");
+        return true;
       } catch (err) {
         setEngineError(String(err instanceof Error ? err.message : err));
+        return false;
       } finally {
         setWaitSeconds(null);
         openingRef.current = false;
@@ -522,11 +533,35 @@ export function AiStudio({
     [chat, editorDoc, language],
   );
 
+  /**
+   * 注入用的三个 ref + 一个 state，声明在 boot effect **之前**：boot 要顺手把
+   * 「编辑器里已经对齐的那一版草稿」标记成已注入，否则进页面/刷新后紧接着会再
+   * 注入一遍（理由见 boot effect 里的注释）。
+   */
+  const injectedDraftAtRef = useRef<number | null>(null);
+  const injectSeqRef = useRef(0);
+  /** 注入进行中：粘贴→保存这段窗口里不接受新的注入 */
+  const injectBusyRef = useRef(false);
+  /** 注入中禁用发送（理由见注入 effect 的注释） */
+  const [injecting, setInjecting] = useState(false);
+  /**
+   * 最近一次编辑器加载，是不是「把 AI 的稿子写进去」引起的。
+   *
+   * `injecting` 在 `openEditor` 返回时就落回 false，而新文档往往还在加载——过渡幕
+   * 要一直盖到 `docReady`，文案也得跟着它走，否则会中途跳成「正在准备编辑器」。
+   */
+  const [reloadForDraft, setReloadForDraft] = useState(false);
+
   /** 进页面就开编辑器：不做任何「先看草稿再切」的中间态 */
   const bootRef = useRef(false);
   useEffect(() => {
     if (bootRef.current || !chat.draft || chat.blocked || askingName) return;
     bootRef.current = true;
+    // 编辑器这一份就是按当前草稿来的（有稿直接读盘、空稿先导出），内容已经对齐，
+    // 所以**必须标记成「已注入」**：注入是「全选 + 粘贴替换」，这一轮粘贴一旦不完整，
+    // 刚加载好的完整文档就会被残缺内容当面替掉 —— 用户看到的正是「F5 了也没用，
+    // 后面还是没了」。
+    injectedDraftAtRef.current = chat.draft.updated_at ?? null;
     // 有稿：直接打开现有 docx（可能带未审完的 AI 修订，重导出会毁掉它们）
     // 空稿：先导出（生成只有标题的文档），让用户一进来就是编辑器
     void openEditor((chat.draft.blocks?.length ?? 0) === 0);
@@ -609,6 +644,11 @@ export function AiStudio({
     };
   }, [editorUrl, language]);
 
+  /** 新文档就绪 = 这一轮「写进文档」结束，过渡幕上的文案可以复位了 */
+  useEffect(() => {
+    if (docReady) setReloadForDraft(false);
+  }, [docReady]);
+
   /**
    * AI 落文 → 写进**已经打开着的** Collabora 文档（整篇替换，零刷新）。
    *
@@ -644,18 +684,24 @@ export function AiStudio({
    * 另外：注入期间禁用发送——否则发指令前的 docx 回读会读到半截文档，草稿被
    * 残缺内容覆盖，断点会越滚越靠前。
    */
-  const injectedDraftAtRef = useRef<number | null>(null);
-  const injectSeqRef = useRef(0);
-  /** 注入进行中：SelectAll→粘贴→保存这段窗口里不接受新的注入 */
-  const injectBusyRef = useRef(false);
-  /** 注入中禁用发送（理由见上） */
-  const [injecting, setInjecting] = useState(false);
 
-  /** 把当前草稿贴进活文档，并保证落盘的是完整那一版（协议与三条坑见上方注释） */
+  /**
+   * 把 AI 写好的稿子送进编辑器：**服务端写成完整 docx + 编辑器换版本重读**。
+   *
+   * 不再走 postMessage 粘贴（`replaceDocumentWithHtml`）那条路：它要穿过
+   * postMessage 的结构化克隆 → iframe 内转 Blob → WebSocket 帧 → coolwsd 解析 →
+   * LibreOffice 的 HTML 导入器，体量一大就丢。现场实录：草稿 6940 字（1704 字
+   * 权利要求书 + 4927 字说明书），编辑器里只剩约 500 字。块大小、等待判据、块间隔
+   * 都逐个调过一遍，在这个环境里依然不可靠 —— 不再赌它。
+   *
+   * 重载没有「容量通道」这回事：Collabora 通过 WOPI 读整份文件，多大都进得来
+   * （跟用户自己打开一个大 docx 没区别）。前提是 WOPISrc 每次必须不同——见
+   * `versionRef` 的注释，那正是「重载像没生效」的根源，已经修掉了。
+   */
   const injectDraft = useCallback(
     async (seq: number) => {
-      if (injectBusyRef.current) {
-        // 关键：标记是「先置后干活」的，忙着的时候必须**回滚标记**，
+      if (injectBusyRef.current || injectSeqRef.current !== seq) {
+        // 关键：标记是「先置后干活」的，忙着/过期的时候必须**回滚标记**，
         // 否则这一版被标记成已处理却没注入，AI 这轮改动就永远丢了
         // （实测症状：正文停在上一版的一半）。
         injectedDraftAtRef.current = null;
@@ -663,46 +709,13 @@ export function AiStudio({
       }
       injectBusyRef.current = true;
       setInjecting(true);
-      const want = chat.draft?.chars ?? 0;
-      const name = editorDoc ?? "";
-      const sid = chat.sessionId ?? "";
+      // 过渡幕的文案：这一轮是「把稿子写进文档」，不是「第一次打开编辑器」
+      setReloadForDraft(true);
       try {
-        // 两次机会：第一次没贴全（保存抢跑/内核没吐事件）就重贴一次；
-        // 两次都不全，从服务端完整重导出再让编辑器重读。
-        for (let attempt = 1; attempt <= 2; attempt += 1) {
-          const html = await chat.fetchDraftHtml();
-          if (!html || injectSeqRef.current !== seq) return;
-          const frame = frameRef.current;
-          if (!frame?.isConnected) return;
-          // ① 分块整篇替换（SelectAll → 第一块 → 其余块到文末追加）。
-          //    整篇一次性粘会被 coolwsd 截断（40KB 稿子只剩前面一小段，
-          //    改格式后文档变大必现），必须分块，见 replaceDocumentWithHtml。
-          await replaceDocumentWithHtml(frame, html);
-          if (!frame.isConnected || injectSeqRef.current !== seq) return;
-          // ② 保存并等它写回存储（大稿多给点时间，别在写盘途中就去核对）
-          await flushCollabora(frame, 8000);
-          // ③ 核对：落盘正文明显短于草稿 → 这一版没贴全
-          if (!sid || !name || want <= 0) return;
-          const got = await getDocChars(sid, name);
-          // 0 = 这次没量上（存储抖动/文件正在写），不当失败
-          if (got === 0 || got >= want * 0.9) return;
-          console.warn(
-            `ai: 注入不完整，第 ${attempt} 次重贴（落盘 ${got} 字 / 草稿 ${want} 字）`,
-          );
-          if (attempt === 2) {
-            // 两次都没贴全：不赌时序了。**先从服务端完整重导出**再重载——
-            // 刚才那次截断的保存已经把盘上的 docx 覆盖成残缺版，直接重载
-            // 加载的就是残缺文件（曾经的坑：用户看到「只显示前面一点」）。
-            // 服务端 md→docx 管线是确定且完整的，重导出即恢复。
-            try {
-              await chat.exportDocx();
-            } catch {
-              // 导出失败（存储抖动等）：至少重载一次，让用户看到当前最好的一版
-            }
-            void openEditor(false);
-            return;
-          }
-        }
+        // openEditor(true)：先从服务端重新导出草稿为 docx（md→docx 管线确定且完整），
+        // 再换一个会话版本让编辑器重读盘。导出或加载失败会回 false 并置 engineError。
+        const ok = await openEditor(true);
+        if (!ok) injectedDraftAtRef.current = null;
       } catch {
         // 同样回滚标记：失败不能被当成「已注入」
         injectedDraftAtRef.current = null;
@@ -711,7 +724,7 @@ export function AiStudio({
         setInjecting(false);
       }
     },
-    [chat, editorDoc, openEditor],
+    [openEditor],
   );
 
   useEffect(() => {
@@ -726,10 +739,17 @@ export function AiStudio({
     // 呈现，其余部分原样保留。
     if (scopedTurnRef.current !== null) return;
     if (!docReady || chat.streaming || !chat.draft || !frameRef.current) return;
-    // 空草稿（刚新建的会话）**绝不注入**：注入是「全选 + 粘贴整篇替换」，
-    // 而空草稿转出来的 HTML 只有一行标题——粘进去等于把编辑器里活着的内容
-    // 整篇清掉，看起来就像「AI 生成的内容被截断成只剩一点」。
-    if (!(chat.draft.blocks?.length ?? 0)) return;
+    // 「只有标题、没有正文」的草稿**绝不注入**：注入是「全选 + 粘贴整篇替换」，
+    // 而空稿转出来的 HTML 只有一行标题——粘进去等于把编辑器里活着的内容整篇清掉，
+    // 看起来就是「AI 写的东西被截断成只剩一点」。
+    //
+    // 判据不能只看 block 个数：新建会话的草稿常常就是 1 个「只有 heading、text 为空」
+    // 的标题块，而它的文件名一旦和盘上某个已有文档撞了（服务端有空稿不覆盖的护栏），
+    // 编辑器打开的就是那份**旧文档**——此时一注入，完整的旧文档当场被清成一行标题。
+    // 现场实录：`注入不完整（落盘 9 字 / 草稿 19 字）`。
+    const blocks = chat.draft.blocks ?? [];
+    const hasBody = blocks.some((b) => (b.text || "").trim().length > 0);
+    if (!hasBody) return;
     const at = chat.draft.updated_at ?? 0;
     if (!at || injectedDraftAtRef.current === at) return;
 
@@ -874,6 +894,14 @@ export function AiStudio({
   }, [chat.messages, chat.streaming, docReady, view]);
 
   const editing = view === "editor";
+  /** 编辑器过渡幕：打开、重载、以及「文档还没就绪」都要盖住 */
+  const veilVisible = editing && (opening || waitSeconds !== null || !docReady);
+  /** 幕上那行字：写稿 / 准备编辑器 / 启动内核，三选一 */
+  const veilTitle = reloadForDraft
+    ? t({ id: "Applying draft", message: "Writing the AI draft into the document…" })
+    : waitSeconds === null
+      ? t({ id: "Preparing editor", message: "Preparing the editor…" })
+      : t({ id: "Starting Collabora", message: "Starting the Collabora engine…" });
 
   // 文件名还没定 / 正在给新稿起名：只弹这一个框，别的都不渲染（会话都没建，渲染了也是空壳）
   if (askingName || newDraftName !== null) {
@@ -1208,37 +1236,44 @@ export function AiStudio({
             />
           ) : null}
 
-          {/* 打开/重载编辑器期间盖一层：说明进度，绝不出现「点了没反应」 */}
-          {(opening || waitSeconds !== null) && editing ? (
-            <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-background/90 backdrop-blur-sm">
-              <Loader2 className="h-7 w-7 animate-spin text-[#007AFF]" />
-              <p className="text-sm font-medium">
-                {waitSeconds === null
-                  ? t({ id: "Preparing editor", message: "Preparing the editor…" })
-                  : t({ id: "Starting Collabora", message: "Starting the Collabora engine…" })}
-              </p>
-              {waitSeconds !== null ? (
-                <>
-                  <p className="max-w-sm text-center text-xs leading-relaxed text-muted-foreground">
-                    {t({
-                      id: "Collabora wait hint",
-                      message:
-                        "First boot takes about a minute. It will open automatically once ready.",
-                    })}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      cancelRef.current = true;
-                    }}
-                    className={vp.btnGhost}
-                  >
-                    {t({ id: "Cancel wait", message: "Cancel" })}
-                  </button>
-                </>
-              ) : null}
-            </div>
-          ) : null}
+          {/* 编辑器上的一层过渡幕：打开 / 重载都盖住 iframe 那张白脸。
+              关键是**一直盖到文档真正就绪**（docReady）——只跟 `opening` 走的话，
+              `openEditor` 一返回幕就撤，而这时新文档还在加载，用户看到的就是一闪
+              而过的空白。淡入淡出让它是「淡走」，而不是「啪」地换一屏。 */}
+          <div
+            className={cn(
+              "absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-background/90 backdrop-blur-sm transition-opacity duration-300",
+              veilVisible ? "opacity-100" : "pointer-events-none opacity-0",
+            )}
+            aria-hidden={!veilVisible}
+          >
+            {veilVisible ? (
+              <>
+                <Loader2 className="h-7 w-7 animate-spin text-[#007AFF]" />
+                <p className="text-sm font-medium">{veilTitle}</p>
+                {waitSeconds !== null && !reloadForDraft ? (
+                  <>
+                    <p className="max-w-sm text-center text-xs leading-relaxed text-muted-foreground">
+                      {t({
+                        id: "Collabora wait hint",
+                        message:
+                          "First boot takes about a minute. It will open automatically once ready.",
+                      })}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        cancelRef.current = true;
+                      }}
+                      className={vp.btnGhost}
+                    >
+                      {t({ id: "Cancel wait", message: "Cancel" })}
+                    </button>
+                  </>
+                ) : null}
+              </>
+            ) : null}
+          </div>
 
           {engineHint && editing ? (
             <div className="absolute inset-x-0 top-1/2 z-20 -translate-y-1/2 px-6">
@@ -1263,7 +1298,7 @@ export function AiStudio({
               {t({
                 id: "Editor save hint",
                 message:
-                  "The AI writes straight into this document — no reloads. Press Ctrl+S so the AI can pick up your edits.",
+                  "The AI's draft is written into this document and the editor refreshes once. Press Ctrl+S so the AI can pick up your edits.",
               })}
             </p>
           ) : null}
