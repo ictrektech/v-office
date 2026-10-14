@@ -14,7 +14,7 @@ import { useExtracted } from "next-intl";
 import { cn } from "@/lib/utils";
 import { getNewUrl } from "@/utils/editor/utils";
 import { getDocConfig } from "@/lib/document-types";
-import { useResolvedLanguage } from "@/store";
+import { useIsChineseUI } from "@/store";
 import {
   Popover,
   PopoverContent,
@@ -27,8 +27,8 @@ interface SidebarProps {
 
 export function Sidebar({ pathname }: SidebarProps) {
   const t = useExtracted();
-  const language = useResolvedLanguage();
-  const isChinese = language.toLowerCase().startsWith("zh");
+  // 水合安全：首帧必须与服务端一致（服务端拿不到门户语言，一律 en）
+  const isChinese = useIsChineseUI();
 
   const newDocTypes = [
     {

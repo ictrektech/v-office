@@ -1,6 +1,6 @@
 "use client";
 
-import { useAppStore, useResolvedLanguage } from "@/store";
+import { useAppStore, useUIResolvedLanguage } from "@/store";
 import {
   Globe,
   Palette,
@@ -59,7 +59,8 @@ export function SettingsView() {
   const t = useExtracted();
   usePageTitle(t("Settings — V-Office"));
   const { language, theme, plugins, setState } = useAppStore();
-  const resolvedLanguage = useResolvedLanguage();
+  // 水合安全：首帧和服务端一致（服务端读不到门户语言），避免文案 mismatch
+  const resolvedLanguage = useUIResolvedLanguage();
   const zh = resolvedLanguage.toLowerCase().startsWith("zh");
   const zhTw = resolvedLanguage === Locale.ZH_TW;
 

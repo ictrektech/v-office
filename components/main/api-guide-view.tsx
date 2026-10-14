@@ -15,7 +15,7 @@ import {
   UserCircle2,
 } from "lucide-react";
 import { usePageTitle } from "@/hooks/use-page-title";
-import { useResolvedLanguage } from "@/store";
+import { useIsChineseUI } from "@/store";
 import { whoAmI } from "@/utils/vos/storage";
 
 const GATEWAY_PATH = "/api/com.ictrek.v-office";
@@ -51,8 +51,8 @@ function CopyCode({ children }: { children: string }) {
 }
 
 export function ApiGuideView() {
-  const language = useResolvedLanguage();
-  const zh = language.toLowerCase().startsWith("zh");
+  // 水合安全：首帧与服务端一致，避免标题文案的 hydration mismatch
+  const zh = useIsChineseUI();
   const [username, setUsername] = useState<string | null>(null);
   const [origin, setOrigin] = useState("https://<vos-host>");
 

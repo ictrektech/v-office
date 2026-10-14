@@ -117,6 +117,31 @@ export function useResolvedLanguage(): Locale {
 }
 
 /**
+ * 水合安全的「界面语言」：**水合完成前**返回服务端那一版（en）。
+ *
+ * 为什么需要它（踩过的坑）：
+ *   服务端没有 `navigator`、也读不到门户语言，`resolveLanguage` 一律回落到 en，
+ *   所以首屏 HTML 里是英文（如侧栏 `API Guide`）；而客户端在 store 创建时就
+ *   **同步**读到了门户语言（`vosLanguage` 的赋值），首帧直接渲染中文
+ *   （`API 接入指南`）。两边文案不同 → React 判定 hydration mismatch，
+ *   dev 里直接弹「Recoverable Error」盖住整页。
+ *
+ * 用法：凡是「不走 i18n 目录、直接按语言分支」的文案都用这个 hook；
+ * 需要真实语言做非渲染用途（拉数据、初始化内核）的地方继续用
+ * `useResolvedLanguage()`——那些都发生在水合之后。
+ */
+export function useUIResolvedLanguage(): Locale {
+  const hydrated = useHasHydrated();
+  const resolved = useResolvedLanguage();
+  return hydrated ? resolved : standardizeLocale("en");
+}
+
+/** 水合安全的「界面是否中文」，给 `zh ? "中文" : "English"` 这类分支用。 */
+export function useIsChineseUI(): boolean {
+  return useUIResolvedLanguage().toLowerCase().startsWith("zh");
+}
+
+/**
  * 跟随 VOS：门户改了语言就写回 store，于是整个应用（含 OnlyOffice /
  * Collabora 的界面语言）一起切过去。
  *
