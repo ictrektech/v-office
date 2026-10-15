@@ -6,6 +6,8 @@ interface PublishOverwriteDialogProps {
   language: string;
   /** 即将写入公共目录的那个文件名 */
   name: string;
+  /** 撞名文件所在的子目录（相对公共目录根，根目录为空串/未传） */
+  location?: string;
   busy: boolean;
   onCancel: () => void;
   onConfirm: () => void;
@@ -21,6 +23,7 @@ interface PublishOverwriteDialogProps {
 export default function PublishOverwriteDialog({
   language,
   name,
+  location,
   busy,
   onCancel,
   onConfirm,
@@ -38,8 +41,8 @@ export default function PublishOverwriteDialog({
             </h2>
             <p className="mt-1 break-all text-sm text-muted-foreground">
               {zh
-                ? `将用你这份「${name}」直接覆盖它。被覆盖的那一版会留底，之后能在文件列表的「版本」里取回或退回。`
-                : `Your “${name}” will overwrite the existing file. The version it replaces is archived and can be restored from “Version history”.`}
+                ? `将用你这份「${name}」直接覆盖${location ? ` ${location}/ ` : ""}里的同名文件。被覆盖的那一版会留底，之后能在文件列表的「版本」里取回或退回。`
+                : `Your “${name}” will overwrite the existing file${location ? ` in ${location}/` : ""}. The version it replaces is archived and can be restored from “Version history”.`}
             </p>
           </div>
         </div>

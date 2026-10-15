@@ -87,10 +87,11 @@ export function OpenView({
   const [publishingStoredFile, setPublishingStoredFile] = useState<string | null>(
     null,
   );
-  /** 「存入公共」撞名时的轻确认：只记待写入的文件 */
-  const [publishPrompt, setPublishPrompt] = useState<{ file: StoredFile } | null>(
-    null,
-  );
+  /** 「存入公共」撞名时的轻确认：待写入的文件 + 撞名文件所在的子目录（根目录为空串） */
+  const [publishPrompt, setPublishPrompt] = useState<{
+    file: StoredFile;
+    location?: string;
+  } | null>(null);
   /** 「版本」：正在查看历史版本的共享盘文档（被覆盖时留下的旧版本可以回退） */
   const [historyDoc, setHistoryDoc] = useState<NasDocument | null>(null);
   const [downloadingStoredFile, setDownloadingStoredFile] = useState<
@@ -275,17 +276,33 @@ export function OpenView({
     const isZh = zh;
     setPublishingStoredFile(file.name);
     try {
+      // 同名文件可能不在公共根目录，而在某个子目录里（用户当初多半就是从那里
+      // 存进「我的文档」的）。落点跟随同名文件所在的目录——"把我这份放回去"
+      // 就该覆盖原文档；只认根目录会在根上再落一份、公共盘出现两个同名文件。
+      // 多个同名时根目录优先（写的就是这个名字），其余按最近修改的优先。
+      const sameName = nasPublicDocuments
+        .filter((doc) => doc.name.toLowerCase() === file.name.toLowerCase())
+        .sort(
+          (a, b) =>
+            Number(Boolean(a.folder)) - Number(Boolean(b.folder)) ||
+            b.modified - a.modified,
+        );
+      const target = sameName[0];
+      // 目录 = 文件路径去掉结尾的 "/文件名"（按长度裁，大小写不同也对）
+      const targetDir = target
+        ? target.path.slice(0, -(file.name.length + 1))
+        : publicCategory.path;
       const outcome = await copyStoredFileToSource(
         file.name,
         publicCategory.sourceId,
-        publicCategory.path,
+        targetDir,
       );
       setPublishPrompt(null);
       toast.success(
         outcome.status === "overwritten"
           ? isZh
-            ? `已覆盖公共目录里的同名文件：${file.name}（旧版本已归档，可在「版本」里取回）`
-            : `Overwrote the file in the public folder: ${file.name} (previous version archived — see Version history)`
+            ? `已覆盖公共目录里的同名文件：${file.name}${target?.folder ? `（${target.folder}/）` : ""}（旧版本已归档，可在「版本」里取回）`
+            : `Overwrote the file in the public folder: ${file.name}${target?.folder ? ` (${target.folder}/)` : ""} (previous version archived — see Version history)`
           : isZh
             ? `已存入公共目录：${file.name}`
             : `Saved to the public folder: ${file.name}`,
@@ -331,14 +348,16 @@ export function OpenView({
    *
    * 撞名判断必须拿**公共目录自己**的名单（nasPublicDocuments）比，不能拿活动分类的
    * nasDocuments：用户停在别的分类时后者不含那个同名文件，taken 会判假，于是不弹
-   * 确认直接盖掉公共盘上的文件。
+   * 确认直接盖掉公共盘上的文件。同名文件**在任何子目录里都算撞名**：覆盖会写到它
+   * 所在的目录（见 publishStoredFile），只认根目录就会漏掉 test/ 这类子目录里的
+   * 原文件，在根上多落一份。
    */
   const requestPublish = (file: StoredFile) => {
-    const taken = nasPublicDocuments.some(
-      (doc) => doc.name === file.name && !doc.folder,
+    const sameName = nasPublicDocuments.find(
+      (doc) => doc.name.toLowerCase() === file.name.toLowerCase(),
     );
-    if (taken) {
-      setPublishPrompt({ file });
+    if (sameName) {
+      setPublishPrompt({ file, location: sameName.folder });
       return;
     }
     // 这里必须落到真正的写入函数上。曾经误写成 requestPublish 自己，于是"公共目录
@@ -491,6 +510,7 @@ export function OpenView({
         <PublishOverwriteDialog
           language={language}
           name={publishPrompt.file.name}
+          location={publishPrompt.location}
           busy={publishingStoredFile !== null}
           onCancel={() => setPublishPrompt(null)}
           onConfirm={() => void publishStoredFile(publishPrompt.file)}
