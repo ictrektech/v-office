@@ -100,6 +100,10 @@ x-v-office-storage-base: &v-office-storage-base
     # 部署天然互不相同；写死成公共值等于所有服务器共用同一密钥。
     # 生产建议在安装配置里显式填写——固定值可让重启不影响在途编辑会话。
     V_OFFICE_WOPI_SECRET: ${V_OFFICE_WOPI_SECRET:-}
+    # Collabora 冷启动探活的放弃阈值（秒）。缺 CAP_SYS_ADMIN 的运行环境里
+    # coolwsd 退回"逐文件 hardlink 建 jail"，慢盘机器上要 10~15 分钟；默认
+    # 180 秒会把还在热身的内核误判成"不可用"（2026-10-15 线上实测）。
+    V_OFFICE_COLLABORA_WARMUP_TIMEOUT: ${V_OFFICE_COLLABORA_WARMUP_TIMEOUT:-900}
     # --- AI（Pi agent）：应用自带的 AI 服务，不再依赖 agentic-search 应用 ---
     # 工作目录落在应用私有存储的隐藏目录（不会出现在「我的文档」里）
     V_OFFICE_AI_HOME: /data/.ai
@@ -135,6 +139,11 @@ x-v-office-storage-base: &v-office-storage-base
 x-v-office-collabora-base: &v-office-collabora-base
   restart: unless-stopped
   pull_policy: always
+  # coolwsd 建 jail 需要 unshare 用户命名空间与 bind-mount（coolmount 要
+  # CAP_SYS_ADMIN）。缺它不报错但会退回"逐文件 hardlink"，几万个文件在慢盘
+  # 上要 10~15 分钟，期间 discovery 全部超时（2026-10-15 线上实测）。
+  cap_add:
+    - SYS_ADMIN
   environment:
     VOS_APP_VERSION: "__APP_VERSION__"
     # Collabora 只接受白名单内的 WOPI host 回调；取值必须与 storage 的
