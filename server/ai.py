@@ -49,9 +49,13 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+import egress_guard
+
 from extract_text import extract_text
 from docx_revise import apply_revisions as revise_docx
 from docx_revise import apply_scoped_style
+from docx_revise import apply_selection_replacement, apply_whole_doc_style
+from docx_revise import replace_selection_in_text
 
 # ── 装配点（由 main.py 注入）───────────────────────────────────────────────
 
@@ -639,8 +643,15 @@ def save_draft(username: str, sid: str, draft: dict) -> None:
 # （实测出现过 block[0] 末尾挂着 "<final-doc>"）。
 # 这里做一份服务端等价实现，所有落文入口统一走它。
 
-_TAG_RE = re.compile(r"</?(?:final-doc|patch|doc-style)(?:\s[^>]*)?>", re.IGNORECASE)
+_TAG_RE = re.compile(
+    r"</?(?:final-doc|patch|doc-style|replace-selection)(?:\s[^>]*)?>", re.IGNORECASE
+)
 _PATCH_BLOCK_RE = re.compile(r"<patch\b[^>]*>[\s\S]*?</patch>", re.IGNORECASE)
+# <replace-selection>…</replace-selection>：**文字级替换**的结果——只交回
+# 「选中的那段文字换成了什么」，落文时在 docx 里就地替换（见 docx_revise）。
+_SELECTION_REPL_RE = re.compile(
+    r"<replace-selection\b[^>]*>([\s\S]*?)</replace-selection>", re.IGNORECASE
+)
 # 自闭合的 <doc-style … />：整篇样式指令。它不产生正文，只改 docx 的字体/字号/行距
 # （写进草稿的 styles，导出时传给 md_to_docx.py）。
 _DOC_STYLE_RE = re.compile(r"<doc-style\b([^>]*)/?>", re.IGNORECASE)
@@ -663,16 +674,23 @@ def strip_contract_tags(text: str) -> str:
     return out.strip()
 
 
-def draft_to_prompt(draft: dict) -> str:
-    """草稿的「带编号」文本形式：编号就是 patch 里的 anchor。"""
+def draft_to_prompt(draft: dict, scope: Optional[list[int]] = None) -> str:
+    """草稿的「带编号」文本形式：编号就是 patch 里的 anchor。
+
+    `scope` 是「用户选中的区域」覆盖的段落编号：这几段的编号行会被标上
+    「← 本次只改这一段」。模型一眼就能看到改动边界在哪——比任何文字描述都直观，
+    也省掉它自己去猜「用户说的这块是哪儿」。
+    """
     blocks = draft.get("blocks") or []
     if not blocks:
         return ""
+    marked = set(scope or ())
     lines: list[str] = []
     for index, block in enumerate(blocks, 1):
         heading = (block.get("heading") or "").strip()
         text = (block.get("text") or "").strip()
-        lines.append(f"[{index}]{(' ' + heading) if heading else ''}")
+        mark = " ← 本次只改这一段" if index in marked else ""
+        lines.append(f"[{index}]{(' ' + heading) if heading else ''}{mark}")
         lines.append(text if text else "（空）")
         lines.append("")
     body = "\n".join(lines).strip()
@@ -700,6 +718,20 @@ def _strip_leading_duplicate_heading(text: str, heading: str) -> str:
     return text
 
 
+def _normalize_inline_markdown(text: str) -> str:
+    """把 `__粗体__` 统一成 `**粗体**`。
+
+    为什么必须做：回读（docx → markdown）出来的加粗是 `__…__` 形式，而导出用的
+    `md_to_docx.py` **只认 `**…**`**（它的行内正则是 `\\*\\*[^*]+?\\*\\*`）。
+    不统一的话 `__` 会被当成普通字符写进文档——实测现象是「**重新打开文档，
+    每段前面都多出一对 `__`**」：回读一次带上一层 `__`，导出一次写进文档一次。
+
+    只动 `__…__`（确认会出问题的那种），不碰单个下划线 / 星号，免得误伤正文里
+    的普通符号。
+    """
+    return re.sub(r"__([^_\n]+?)__", r"**\1**", text or "")
+
+
 def draft_to_markdown(draft: dict) -> str:
     """草稿 → Markdown，**只输出正文**，不含文档标题那一行。
 
@@ -717,7 +749,8 @@ def draft_to_markdown(draft: dict) -> str:
             parts.append(f"## {heading}")
         text = _strip_leading_duplicate_heading((block.get("text") or "").strip(), heading)
         if text:
-            parts.append(text)
+            # 行内标记先统一口径：回读带回来的 `__粗体__` 下游渲染器不认
+            parts.append(_normalize_inline_markdown(text))
     return "\n\n".join(parts).strip()
 
 
@@ -834,6 +867,31 @@ def apply_patches(draft: dict, patches: list[dict]) -> tuple[dict, list[dict], l
     return new_draft, applied, skipped
 
 
+def _replace_selection_in_blocks(
+    blocks: list[dict], selection: str, new_text: str
+) -> Optional[list[dict]]:
+    """在草稿块里把「选中的那段文字」替换掉；没命中返回 None。
+
+    草稿是下一轮 prompt 的真值，必须和 docx 同步改，否则模型看到的还是旧句子。
+    定位走「去空白对齐」（`replace_selection_in_text`）——编辑器里复制出来的
+    选区与草稿的换行/缩进常有出入，直接字符串包含会找不到。
+    """
+    for block in blocks:
+        current = block.get("text") or ""
+        merged = replace_selection_in_text(current, selection, new_text)
+        if merged is None:
+            continue
+        if merged == current:
+            # 定位到了，只是替换后内容没变（模型原样返回——常见于「只要求改样式」
+            # 那一轮）。这**不是**失败，照常算命中，否则会误报「没能定位」。
+            return [dict(b) for b in blocks]
+        return [
+            {**b, "text": merged if b is block else (b.get("text") or "")}
+            for b in blocks
+        ]
+    return None
+
+
 PATCH_RE = re.compile(r"<patch\s+([^>]*?)>(.*?)</patch>", re.S | re.I)
 FINAL_RE = re.compile(r"<final-doc>(.*?)</final-doc>", re.S | re.I)
 ATTR_RE = re.compile(r"(\w+)\s*=\s*\"([^\"]*)\"")
@@ -933,12 +991,20 @@ def parse_model_output(text: str) -> dict:
             "text": strip_contract_tags(body or ""),
         })
     final = FINAL_RE.search(text or "")
+    # 文字级替换（选区回合的主路径）：模型只交回「选中的那段文字换成了什么」
+    selection_repl = _SELECTION_REPL_RE.search(text or "")
     prose = PATCH_RE.sub("", (text or ""))
     prose = FINAL_RE.sub("", prose)
+    prose = _SELECTION_REPL_RE.sub("", prose)
     prose = _DOC_STYLE_RE.sub("", prose).strip()
     return {
         "patches": patches,
         "final_doc": strip_contract_tags(final.group(1)) if final else None,
+        "replace_selection": (
+            strip_contract_tags(selection_repl.group(1)).strip()
+            if selection_repl
+            else None
+        ),
         "prose": strip_contract_tags(prose),
         "doc_style": _parse_doc_style(text or ""),
     }
@@ -971,6 +1037,108 @@ OUTPUT_CONTRACT = """# 改稿输出契约（严格遵守）
 - 用户口头说「第几段」时，也按方括号编号理解；拿不准就按给定编号改"""
 
 
+# 短于这个长度的选区不做跨段推断：一个词/半句话在多段里都出现时，
+# 圈多了比圈少了更糟（会连带改到用户根本没选的段落）
+_SEL_MIN_CROSS_CHARS = 8
+# 参与匹配的最短片段：切片后像「。」这种残片不该拿去草稿里找
+_SEL_MIN_FRAGMENT_CHARS = 4
+
+
+def _strip_ws(text: str) -> str:
+    """只留可见字符：比对选区与草稿用（换行、缩进、空格不该影响「是不是同一句」）。"""
+    return re.sub(r"\s+", "", text or "")
+
+
+def _selection_blocks(draft: dict, selection: str, anchor: str = "") -> list[int]:
+    """本轮「用户选中的区域」覆盖了哪几段（1 起编号；算不出来返回空表）。
+
+    为什么服务端**必须自己算**：进 prompt 的只有一段**纯文本**（选区那侧走的是
+    Collabora 的 Action_Copy，拿不到任何位置信息），而跨段选区时前端那套
+    「整串完整落在一段里」的匹配必然落空、给不出段号。于是模型手上只有
+    「一段文字 + 一份带编号的稿子」，边界在哪全靠它自己猜——实测的
+    「选中一块区域说字体变大，结果全篇被放大／全篇变英文」就是这么来的。
+
+    `anchor` 是前端已经定位到的段号（只有选区完整落在单段里才有）：有它就直接
+    采信，这是最可靠的一路。其余情况按选区原文与草稿逐段比对：
+    - 整串落在某一段里 → 就是那一段；
+    - 跨段 → 把选区按换行切片，逐片去草稿里找，命中的段取闭区间；
+    - 一片都命中不上 → 空表（调用方按「定位不到」降级，绝不硬猜）。
+    """
+    blocks = draft.get("blocks") or []
+    if not blocks:
+        return []
+    if anchor.isdigit():
+        index = int(anchor)
+        return [index] if 1 <= index <= len(blocks) else []
+    want = _strip_ws(selection)
+    if not want:
+        return []
+    texts = [_strip_ws(b.get("text") or "") for b in blocks]
+
+    # 1) 整串落在某一段里：单段内的选区，最常见也最确定
+    for index, text in enumerate(texts, 1):
+        if text and want in text:
+            return [index]
+
+    if len(want) < _SEL_MIN_CROSS_CHARS:
+        return []
+
+    # 2) 跨段：按换行切片、逐片定位。
+    #    为什么不用「首/尾各取 N 字」那种做法：首尾片段常常**跨在段落边界上**
+    #    （前 30 字里含了上一段的尾巴），结果哪一段都匹配不上，白算一场。
+    #    切片天然沿段落边界切开，反而稳。
+    hits: set[int] = set()
+    for piece in (_strip_ws(part) for part in re.split(r"[\r\n]+", selection or "")):
+        if len(piece) < _SEL_MIN_FRAGMENT_CHARS:
+            continue
+        for index, text in enumerate(texts, 1):
+            if not text:
+                continue
+            # 双向包含：片段可能只是整段的一半（选了半句），
+            # 也可能整段被选了进去（选了一大块）。
+            # 反向那条要求整段够长，否则「1」「一」这种极短段会被任意片段命中。
+            if piece in text or (
+                len(text) >= _SEL_MIN_FRAGMENT_CHARS and text in piece
+            ):
+                hits.add(index)
+                break
+    if not hits:
+        return []
+    return list(range(min(hits), max(hits) + 1))
+
+
+def _scope_rule(scope: list[int], draft: dict) -> str:
+    """选区回合的输出契约（拼进 prompt 的「本次要改的位置」段）。
+
+    **主路径是文字级**：让模型只交回「选中文字的替换结果」，服务端拿它在 docx
+    里就地替换那段文字。为什么不再要求它按段落编号改：编辑器（Writer 段落）与
+    草稿（Markdown 按标题切块）的段落划分天然对不上——没有标题的稿子整篇就是
+    一块，"选区 → 段号" 的换算因此直接失效（实测踩到过）。而用户已经明确告诉
+    我们他选了哪段文字，**直接用这段文字当坐标最稳**。
+
+    `scope` 退居兜底：模型若无视上面的格式、仍输出 <patch>，服务端会按选区校验
+    落点，越界的一律丢弃（见 `_land_turn`）。
+    """
+    rule = (
+        "\n【只改选中的这段文字】用户已经选中了上面那段原文。"
+        "请把**替换结果**放进下面这个标签里交回，就这一行，不要别的内容：\n"
+        "<replace-selection>替换后的文字</replace-selection>\n"
+        "- 标签里**只放替换后的那几句**，不要把整段放进标签：例如选中「他哭了。」"
+        "要求改成英文，就写成 <replace-selection>He cried.</replace-selection>，"
+        "不要连前后文一起交回来；\n"
+        "- 不要用 <patch>，不要用 <final-doc>；\n"
+        '- 样式（字体 / 字号 / 行距）另用 <doc-style body-size="16"/> 表示，'
+        "**不要写 anchor**——服务端只会把它套在你选中的这段文字上。"
+    )
+    if scope:
+        nums = "、".join(str(n) for n in scope)
+        rule += (
+            f"\n- 万一你确实需要按段落改动：只允许第 {nums} 段。"
+            "服务端会逐条校验落点，越界的改动会被直接丢弃、不会进文档。"
+        )
+    return rule
+
+
 def _build_turn_prompt(
     username: str,
     sid: str,
@@ -986,29 +1154,33 @@ def _build_turn_prompt(
     所以重试、换模型、断线重连都不会让改稿结果漂移。
     """
     parts: list[str] = [instruction.strip()]
+    draft = load_draft(username, sid)
+    # 用户选中的区域覆盖哪几段。**以选区为准**：有 selection 才算「选区回合」；
+    # 只点了段号、没有选区（在草稿视图里点段定位）不算——那种操作也可能只是
+    # 「点一段、问整篇的问题」，加收窄约束反而误伤。
+    scope = _selection_blocks(draft, selection, anchor) if selection else []
+
     if anchor or selection:
         locate = ["# 本次要改的位置"]
         if anchor:
             locate.append(f"段落编号：{anchor}")
         if selection:
             locate.append(f"用户选中的原文：\n{selection}")
-        if anchor and selection:
-            # 「只改这里」（用户在 Word 里选中了一处）：改动范围必须收窄到这一段。
-            # 两条约束都是实测踩出来的：模型爱顺手改别的段（用户没要），也爱在
-            # 这种场景下整篇重出（final-doc）——那等于把整篇都改了。
-            # 选区常常只是半句话，而 patch 的落点是**整段**，所以要说清：
-            # 重写整个第 N 段，没选中的部分保留并衔接好。
-            locate.append(
-                "\n【只改这一处】用户只选中了上面这段文字。请只输出**一条**针对编号 "
-                f"{anchor} 的 patch：重写整个第 {anchor} 段（用户没选中的部分也要保留、"
-                "衔接自然），不要输出其他段落的 patch，不要用 <final-doc> 整篇重写。"
-            )
+        if scope:
+            locate.append(f"选区覆盖的段落编号：{'、'.join(str(n) for n in scope)}")
+        if selection:
+            locate.append(_scope_rule(scope, draft))
         parts.append("\n".join(locate))
 
-    draft = load_draft(username, sid)
-    draft_text = draft_to_prompt(draft)
+    draft_text = draft_to_prompt(draft, scope=scope)
     if draft_text:
-        parts.append("# 当前草稿（方括号里是段落编号）\n\n" + draft_text)
+        header = "# 当前草稿（方括号里是段落编号）"
+        if scope:
+            header = (
+                "# 当前草稿（方括号里是段落编号；"
+                "标了「← 本次只改这一段」的就是用户选中的范围）"
+            )
+        parts.append(f"{header}\n\n{draft_text}")
     else:
         parts.append(
             "# 当前草稿\n\n（还没有草稿：这一轮请写出完整初稿，"
@@ -1162,15 +1334,75 @@ async def _save_draft_docx(username: str, sid: str, draft: dict) -> Optional[str
         return None
 
 
-async def _apply_scoped_docx_style(
-    username: str, sid: str, draft: dict, anchor: str, style: dict
-) -> Optional[str]:
-    """把**按段**的样式改动直接写进「我的文档」里那份 docx，返回文件名。
+def _style_targets_for_blocks(draft: dict, indexes: list[int]) -> list[dict]:
+    """把草稿段号翻成样式定位项（带上该段原文）。
 
-    走的是「读 base docx → 只改那一段的 run 格式 → 写回」这条路，与修订链路
-    （`_save_draft_docx_revised`）共用同一个 base：用户选中的那段就活在编辑器
-    开着的那份 docx 里，改它才对。base 不存在（还没导出过）或定位不到段落时
+    带原文是因为 docx 的段落划分与草稿块并不一一对应，按原文匹配最稳——
+    `_style_scope_paragraph` 里也是原文优先、段号兜底。
+    """
+    blocks = draft.get("blocks") or []
+    return [
+        {"index": index, "before": blocks[index - 1].get("text") or ""}
+        for index in indexes
+        if 1 <= index <= len(blocks)
+    ]
+
+
+async def _apply_scoped_docx_style(
+    username: str, sid: str, draft: dict, targets: list[dict], style: dict
+) -> Optional[str]:
+    """把**指定段落**的样式改动直接写进「我的文档」里那份 docx，返回文件名。
+
+    走的是「读 base docx → 只改这几段的 run 格式 → 写回」这条路，与修订链路
+    （`_save_draft_docx_revised`）共用同一个 base：用户选中的那几段就活在编辑器
+    开着的那份 docx 里，改它才对。base 不存在（还没导出过）或一段都定位不到时
     返回 None——宁可不动，也不能把格式抹到错的段落上。
+
+    `targets` 是定位项列表：`{"before": 定位正文, "index": 草稿段号(0=不用)}`。
+    选区回合用**选区文字**当 `before`（docx 段落与草稿块对不上，段号会指错），
+    按段号来的时候带上草稿里那段的原文——docx 里按原文匹配最稳。
+    """
+    if _save_document is None or _read_document is None or not style or not targets:
+        return None
+    title = (draft.get("title") or "未命名稿件").strip() or "未命名稿件"
+    try:
+        base_name = _safe_name(f"{title}.docx")
+    except HTTPException:
+        base_name = "未命名稿件.docx"
+    try:
+        base = _read_document(username, base_name)
+    except Exception:  # noqa: BLE001 还没导出过就当没有
+        return None
+    if not base:
+        return None
+    try:
+        data, applied = apply_scoped_style(base, style, targets=targets)
+    except Exception as exc:  # noqa: BLE001 格式改动失败不影响其余链路
+        LOG.warning("ai: scoped style crashed user=%s sid=%s: %s", username, sid, exc)
+        return None
+    if applied <= 0:
+        LOG.warning(
+            "ai: scoped style missed user=%s sid=%s targets=%s（base 里没找到这些段）",
+            username, sid, targets,
+        )
+        return None
+    try:
+        saved = _save_document(username, base_name, data)
+        LOG.info("ai: saved scoped style user=%s sid=%s name=%s targets=%s style=%s",
+                 username, sid, saved, targets, style)
+        return saved
+    except Exception as exc:  # noqa: BLE001
+        LOG.warning("ai: save scoped style failed user=%s sid=%s: %s", username, sid, exc)
+        return None
+
+
+async def _apply_whole_docx_style(
+    username: str, sid: str, draft: dict, style: dict
+) -> Optional[str]:
+    """整篇样式：**就地改**现有的 docx（不重建）。
+
+    与按段样式只差作用范围；共同点是都直接改 docx——重建会把用户排好的字体、
+    颜色、表格样式全按脚本默认重排，也就是「打开一次就变一次样」的成因。
     """
     if _save_document is None or _read_document is None or not style:
         return None
@@ -1185,27 +1417,70 @@ async def _apply_scoped_docx_style(
         return None
     if not base:
         return None
-    index = int(anchor) if str(anchor).isdigit() else 0
-    blocks = draft.get("blocks") or []
-    before = blocks[index - 1].get("text") or "" if 1 <= index <= len(blocks) else ""
     try:
-        data, applied = apply_scoped_style(base, style, before=before, index=index)
-    except Exception as exc:  # noqa: BLE001 格式改动失败不影响其余链路
-        LOG.warning("ai: scoped style crashed user=%s sid=%s: %s", username, sid, exc)
+        data, applied = apply_whole_doc_style(base, style)
+    except Exception as exc:  # noqa: BLE001
+        LOG.warning("ai: whole style crashed user=%s sid=%s: %s", username, sid, exc)
+        return None
+    if applied <= 0:
+        LOG.warning("ai: whole style missed user=%s sid=%s", username, sid)
+        return None
+    try:
+        saved = _save_document(username, base_name, data)
+        LOG.info(
+            "ai: saved whole style user=%s sid=%s name=%s style=%s",
+            username, sid, saved, style,
+        )
+        return saved
+    except Exception as exc:  # noqa: BLE001
+        LOG.warning("ai: save whole style failed user=%s sid=%s: %s", username, sid, exc)
+        return None
+
+
+async def _save_selection_replacement(
+    username: str, sid: str, draft: dict, selection: str, new_text: str
+) -> Optional[str]:
+    """把「选中的那段文字」在「我的文档」那份 docx 里就地替换（带 Word 修订）。
+
+    与修订链路共用同一个 base：用户选中的那段文字就活在编辑器开着的那份 docx
+    里，改它才对。base 不存在（还没导出过）或定位不到选区时返回 None。
+    """
+    if _save_document is None or _read_document is None:
+        return None
+    title = (draft.get("title") or "未命名稿件").strip() or "未命名稿件"
+    try:
+        base_name = _safe_name(f"{title}.docx")
+    except HTTPException:
+        base_name = "未命名稿件.docx"
+    try:
+        base = _read_document(username, base_name)
+    except Exception:  # noqa: BLE001 还没导出过就当没有
+        return None
+    if not base:
+        return None
+    try:
+        data, applied = apply_selection_replacement(base, selection, new_text)
+    except Exception as exc:  # noqa: BLE001 替换失败不影响草稿那一侧
+        LOG.warning(
+            "ai: selection replace crashed user=%s sid=%s: %s", username, sid, exc
+        )
         return None
     if applied <= 0:
         LOG.warning(
-            "ai: scoped style missed user=%s sid=%s anchor=%s（base 里没找到该段）",
-            username, sid, anchor,
+            "ai: selection replace missed user=%s sid=%s selection=%.40s",
+            username, sid, selection,
         )
         return None
     try:
         saved = _save_document(username, base_name, data)
-        LOG.info("ai: saved scoped style user=%s sid=%s name=%s anchor=%s style=%s",
-                 username, sid, saved, anchor, style)
+        LOG.info(
+            "ai: saved selection replace user=%s sid=%s name=%s", username, sid, saved
+        )
         return saved
     except Exception as exc:  # noqa: BLE001
-        LOG.warning("ai: save scoped style failed user=%s sid=%s: %s", username, sid, exc)
+        LOG.warning(
+            "ai: save selection replace failed user=%s sid=%s: %s", username, sid, exc
+        )
         return None
 
 
@@ -1802,7 +2077,7 @@ async def _run_turn(
 
 async def _land_turn(
     username: str, sid: str, parsed: dict, *, save: bool, autosave: bool = True,
-    anchor: str = "",
+    anchor: str = "", selection: str = "",
 ) -> list[dict]:
     """把模型这一轮的输出「落地」：更新草稿 / 生成待确认变更 / 写进我的文档。
 
@@ -1812,6 +2087,7 @@ async def _land_turn(
     - 用户点名了段落（anchor）而模型给的是**单条**变更 → 以用户点的那段为准。
       模型在这件事上不可靠（实测会把「第 2 段」写成 3），而用户点的是哪一段
       是确定的；内容仍然是模型的，只有落点按用户的意图纠偏。
+    - 用户**框了一块**（selection）→ 越界的改动一律拦下，见下面「选区回合的硬校验」
     - 无论哪种，落盘都由服务端做，agent 不碰文件
     - `autosave=False` 表示「别自动存」：写作栏目自己管保存（它有独立的存稿链路）
     """
@@ -1821,51 +2097,205 @@ async def _land_turn(
     final_doc: Optional[str] = parsed.get("final_doc")
     is_first = not (draft.get("blocks") or [])
 
-    # 整篇样式指令（<doc-style/>）：并进草稿的 styles，导出 docx 时生效。
-    # 它和文字改动是**两条独立的线**——用户只是想「换个字号」时，不该被迫接受
-    # 一堆文字变更，所以在这里单独落地，不参与下面的「待确认变更」流程。
-    style_changed = False
-    doc_style = parsed.get("doc_style") or {}
-    # 作用域样式（<doc-style anchor="N"/>）：只改那一段，**不进 styles**。
+    # ── 选区回合的硬校验（机制保证，不靠模型自觉）──────────────────────────
+    #
+    # 用户在编辑器里框了一块地方（`selection` 非空）时，模型交回来的改动要按选区
+    # **逐条校验、越界的直接丢掉**。这是「选中一块区域说字体变大 / 中文变英文，
+    # 结果全篇被改」的机制性修复：prompt 里已经声明会这么做（见 `_scope_rule`），
+    # 这里真的执行——它看没看整篇、听不听话，都不影响最终进文档的内容。
+    #
+    # 首轮（草稿为空）没有可选的既有内容，不参与。
+    scoped_turn = bool(selection) and not is_first
+    scope = _selection_blocks(draft, selection, anchor) if scoped_turn else []
+    selection_repl = str(parsed.get("replace_selection") or "").strip()
+    # 模型按文字级契约交回时，整块段落级校验**跳过**：文字级替换天然只动选中的
+    # 文字，它顺手附带的 patch 会被直接忽略（见下面）——不能因为那些 patch 越界
+    # 就把这一轮整个拦掉，那等于把正确答案也丢了。
+    if scoped_turn and not selection_repl:
+        total = len(draft.get("blocks") or [])
+        blocked: list[str] = []
+        if scope:
+            kept: list[dict] = []
+            for patch in patches:
+                raw = str(patch.get("anchor") or "").strip()
+                if raw.isdigit() and int(raw) in scope:
+                    kept.append(patch)
+                else:
+                    blocked.append(raw or "未标编号")
+            if patches and not kept:
+                # 全部越界 = 模型把改动范围理解成了整篇。整轮不落地，而且**明说**：
+                # 静默收场会变成「AI 说改好了，文档却没动」，那是这个功能最坑的失败模式。
+                return [{
+                    "type": "warn",
+                    "message": (
+                        "AI 这一轮想改的内容都落在你选中的范围之外（第 "
+                        + "、".join(blocked) + " 段），已全部拦下，文档未改动。"
+                        "请重新选中后再试，或明确说「整篇」重来一次。"
+                    ),
+                }]
+            # 注意这里**不做重定向**：模型一次给多条时，哪条对应哪一段没有可靠
+            # 的对应关系，硬塞只会把内容写到错段上——「改错比不改更糟」。
+            patches = kept
+        if final_doc and len(scope) < total:
+            # 整篇重写必然是越界。`scope` 为空（选区没定位上）时也拦：这一轮用户
+            # 明确框了一块，而 <final-doc> 一定是整篇替换——他从没要过整篇。
+            final_doc = None
+            blocked.append("整篇重写")
+        if blocked:
+            events.append({
+                "type": "warn",
+                "message": "已拦下选区之外的改动：" + "、".join(blocked) + "。",
+            })
+
+    # ── 作用域样式（<doc-style anchor="N"/>）：只改指定的段落，**不进 styles** ──
+    #
+    # **必须排在文字替换之前**：它靠「选区文字」在 docx 里定位段落，而这轮如果
+    # 同时改了文字，那段原文在 docx 里就已经被换掉了——先做样式、再做文字，定位
+    # 才拿得到原文。实测：同一轮「换成英语 + 字体小一点」，字号总是落不上，
+    # 日志里就是 `scoped style missed`。
+    #
     # styles 是整篇口径（md→docx 时统一套用），用户选了一段说「字体变大」却
     # 全篇被放大，根因就是模型输出了不带 anchor 的整篇指令。
     #
-    # 作用域判定（按优先级）：
-    # - 模型明确写了 anchor="all" → 整篇（用户确实要全文统一，尊重它）；
-    # - 其余情况一律以**用户的选区段落**为准：模型写了 N 或漏写了 anchor，
-    #   都收敛到用户选中处——落点按用户的意图纠偏，与下面的 patch 校正同理。
-    style_scope = str(doc_style.pop("_anchor", "") or "").strip()
-    if style_scope.lower() in ("all", "doc", "whole", "document"):
-        style_scope = ""
+    # 作用域判定（顺序即优先级）：
+    # 1) **选区回合**：只落在**选中的那段文字所在的段落**上——用选区文字定位，
+    #    不用草稿段号（docx 段落与草稿块对不上，没有标题的稿子整篇一块时，
+    #    段号会直接退化成整篇）。
+    # 2) 模型写了 anchor="all" 且**没有**选区 → 整篇（用户确实要全文统一）。
+    # 3) 用户点名/前端定位的段号（anchor）→ 只改那一段。
+    # 4) 模型写了具体段号 → 只改那一段。
+    doc_style = parsed.get("doc_style") or {}
+    raw_scope = str(doc_style.pop("_anchor", "") or "").strip()
+    style_targets: list[dict] = []
+    style_anchor = ""      # 事件里的作用域标识（机器读，沿用「2」这种纯段号）
+    style_desc = ""        # message 里给用户看的人话
+    if scoped_turn:
+        style_targets = [{"before": selection, "index": 0}]
+        style_anchor = "selection"
+        style_desc = "选中的文字"
+    elif raw_scope.lower() in ("all", "doc", "whole", "document"):
+        style_targets = []          # 整篇：并进草稿 styles，导出时统一套用
     elif anchor and anchor.isdigit():
-        style_scope = anchor
-    if style_scope:
+        style_targets = _style_targets_for_blocks(draft, [int(anchor)])
+        style_anchor = anchor
+        style_desc = f"第 {anchor} 段"
+    elif raw_scope.isdigit():
+        style_targets = _style_targets_for_blocks(draft, [int(raw_scope)])
+        style_anchor = raw_scope
+        style_desc = f"第 {raw_scope} 段"
+    if style_targets and doc_style:
         saved_name = (
-            await _apply_scoped_docx_style(username, sid, draft, style_scope, doc_style)
+            await _apply_scoped_docx_style(
+                username, sid, draft, style_targets, doc_style
+            )
             if autosave
             else None
         )
-        events.append({
-            "type": "style",
-            "scope": "selection",
-            "anchor": style_scope,
-            "styles": doc_style,
-            "message": f"第 {style_scope} 段：{_style_summary(doc_style, whole=False)}",
-            "draft": public_draft(draft),
-        })
+        if autosave and not saved_name:
+            # 没落到 docx（定位不到那段文字 / 文档还没导出过）：如实提示。
+            # 谎报「已生效」是这个功能最容易翻车的地方——用户会以为改好了。
+            events.append({
+                "type": "warn",
+                "message": "字体 / 字号没能落到文档上（没能定位到那段文字，或文档还没打开过）。",
+            })
+        else:
+            events.append({
+                "type": "style",
+                "scope": "selection",
+                "anchor": style_anchor,
+                "styles": doc_style,
+                "message": f"{style_desc}：{_style_summary(doc_style, whole=False)}",
+                "draft": public_draft(draft),
+            })
         if saved_name:
             events.append({"type": "saved", "name": saved_name})
         LOG.info(
-            "ai: scoped doc style sid=%s anchor=%s style=%s saved=%s",
-            sid, style_scope, doc_style, bool(saved_name),
+            "ai: scoped doc style sid=%s target=%s style=%s saved=%s",
+            sid, style_desc, doc_style, bool(saved_name),
         )
         doc_style = {}  # 已经按段落地，不再当整篇指令处理
+
+    # ── 文字级替换：选区回合的**主路径** ──────────────────────────────────
+    #
+    # 用户已经告诉我们他选了哪段文字，那就**直接用这段文字当坐标**去替换，
+    # 不必换算成段落编号——编辑器（Writer 段落）与草稿（Markdown 按标题切块）
+    # 的划分天生对不上，换算经常落空（没有标题的稿子整篇就一块，实测踩到过）。
+    #
+    # 两处一起改：docx（用户看到的，带 Word 修订）+ 草稿（下一轮 prompt 的真值）。
+    if scoped_turn and selection_repl:
+        new_blocks = _replace_selection_in_blocks(
+            draft.get("blocks") or [], selection, selection_repl
+        )
+        synced = new_blocks is not None
+        if synced:
+            draft = {**draft, "blocks": new_blocks}
+            save_draft(username, sid, draft)
+            events.append({"type": "draft", "draft": public_draft(draft)})
+        saved_name = (
+            await _save_selection_replacement(
+                username, sid, draft, selection, selection_repl
+            )
+            if autosave
+            else None
+        )
+        if saved_name:
+            events.append({"type": "saved", "name": saved_name})
+        if not synced and not saved_name:
+            events.append({
+                "type": "warn",
+                "message": "没能定位你选中的那段文字（与草稿对不上），本轮未改动。",
+            })
+        elif not synced:
+            # docx 改了、草稿没对上：借「按段样式」那条信号让编辑器换版本重载，
+            # 否则草稿的 updated_at 没动，用户看到的还是旧版。
+            events.append({
+                "type": "style",
+                "scope": "selection",
+                "message": "已就地替换选中的文字。",
+                "draft": public_draft(draft),
+            })
+        # 文字改动已经通过「替换选中文字」完成：段落级 patch / 整篇重写不再采纳。
+        # 但这里**不 return**——用户可能同时要求了样式，后面的样式逻辑要照常跑。
+        if patches or final_doc:
+            events.append({
+                "type": "warn",
+                "message": "本轮模型还给了段落级改动，已按「只改选中文字」忽略。",
+            })
+        patches, final_doc = [], None
+
+    if (
+        scoped_turn
+        and not selection_repl
+        and not patches
+        and not final_doc
+        and not (parsed.get("doc_style") or {})
+    ):
+        # 模型什么都没交回（既没有替换结果，也没有段落改动 / 样式）：明说一句。
+        # 沉默地「什么都没发生」是这个功能最坑的失败模式——用户会以为改了。
+        events.append({
+            "type": "warn",
+            "message": (
+                "AI 这一轮没有返回可用的改动。可以再试一次，"
+                "或者把要求说得更具体（例如「把选中的这句改成英文」）。"
+            ),
+        })
+
+    # 整篇样式指令（<doc-style/>，不带 anchor）：**就地改 docx**，绝不重建。
+    # 重建会把用户在编辑器里排好的字体 / 字号 / 颜色 / 表格样式全部按脚本默认
+    # 重排——「打开一次就变一次样」就是这么来的。
+    # 它和文字改动是**两条独立的线**——用户只是想「换个字号」时，不该被迫接受
+    # 一堆文字变更，所以在这里单独落地，不参与下面的「待确认变更」流程。
     if doc_style:
+        whole_saved = (
+            await _apply_whole_docx_style(username, sid, draft, doc_style)
+            if autosave
+            else None
+        )
+        # 草稿里的 styles 只留作「将来从零生成 docx」时的默认值，不再是落地手段
         merged_style = {**(draft.get("styles") or {}), **doc_style}
         if merged_style != (draft.get("styles") or {}):
             draft = {**draft, "styles": merged_style}
             save_draft(username, sid, draft)
-            style_changed = True
             LOG.info("ai: doc style applied sid=%s style=%s", sid, merged_style)
             events.append({
                 "type": "style",
@@ -1873,6 +2303,8 @@ async def _land_turn(
                 "message": _style_summary(doc_style),
                 "draft": public_draft(draft),
             })
+        if whole_saved:
+            events.append({"type": "saved", "name": whole_saved})
 
     if anchor and len(patches) == 1 and anchor.isdigit():
         requested = str(patches[0].get("anchor") or "")
@@ -1910,13 +2342,8 @@ async def _land_turn(
         return events
 
     if not patches:
-        # 只有样式变更：必须**整篇重新导出**。修订链路是在原 docx 上打 Word 修订、
-        # 不会重排样式，用它的话用户会看到「AI 说改好了，字号却没变」——这正是
-        # 这类功能最容易翻车的地方。
-        if style_changed and autosave:
-            saved = await _save_draft_docx(username, sid, draft)
-            if saved:
-                events.append({"type": "saved", "name": saved})
+        # 样式已经**就地落进 docx** 了（上面按段 / 整篇各走了一步）：这里不再重建。
+        # 以前这里用 `_save_draft_docx` 重新生成整篇，正是「打开一次变一次样」的成因。
         return events
 
     if is_first:
@@ -2034,7 +2461,8 @@ async def stream_turn(
                     parsed = final.pop("parsed", None) or {}
                     try:
                         for event in await _land_turn(
-                            username, sid, parsed, save=save, autosave=autosave, anchor=anchor
+                            username, sid, parsed, save=save, autosave=autosave,
+                            anchor=anchor, selection=selection,
                         ):
                             yield event
                     except Exception as exc:  # noqa: BLE001 落地失败不能吞掉这一轮的正文
@@ -2193,6 +2621,9 @@ async def put_settings(request: Request, patch: SettingsPatch) -> JSONResponse:
         data = save_settings(username, {k: v for k, v in patch.model_dump().items() if v is not None})
     LOG.info("ai: settings updated user=%s model=%s base_url=%s",
              username, data.get("model"), data.get("base_url") or "(default)")
+    # 换了网关就得重建出网规则：旧规则只放行老的网关地址，新地址会被闸门挡掉，
+    # 现象是「设置一改，AI 立刻连不上」。异步跑，别拖慢这次请求。
+    egress_guard.refresh_soon()
     return JSONResponse(public_settings(data))
 
 
@@ -2328,6 +2759,27 @@ async def save_to_docs(request: Request, sid: str) -> JSONResponse:
             status_code=409,
             detail="这份稿子还没有内容：先在对话里让 AI 生成，或直接在编辑器里写",
         )
+    # 草稿有内容时：**盘上已经有这份 docx 就直接用，绝不重建**。
+    #
+    # 重建 = 拿草稿的 markdown 重新生成整篇 docx，代价是：
+    #   - 用户在编辑器里设的字体 / 字号 / 颜色 / 行距**全部按脚本默认重排**
+    #     （md_to_docx 是逐 run 写死「宋体 10.5 / 黑体」的）；
+    #   - markdown 表达不了的标记（`__` 这类）被当成普通字符写进正文。
+    # 实测现象：**重新打开文档，字体全变了、每段前面多出两个下划线**。
+    # 打开编辑器正好会走这里，于是每次打开都把用户的版式重排一遍。
+    #
+    # docx 才是格式的真值，草稿只是它的**文本投影**；AI 的改动一律直接写进
+    # docx（见 _land_turn），不依赖这次重建。
+    name = _draft_doc_name(draft.get("title") or "")
+    if _doc_exists(username, name):
+        LOG.info(
+            "ai: save reuse existing docx user=%s sid=%s name=%s", username, sid, name
+        )
+        return JSONResponse({
+            "saved": name,
+            "draft": public_draft(draft),
+            "already": True,
+        })
     saved = await _save_draft_docx(username, sid, draft)
     if not saved:
         raise HTTPException(status_code=502, detail="保存到「我的文档」失败")

@@ -72,6 +72,13 @@ x-v-office-web-base: &v-office-web-base
 x-v-office-storage-base: &v-office-storage-base
   restart: unless-stopped
   pull_policy: always
+  # agent 出网闸门要在容器内配 iptables（见 server/egress_guard.py）：按 agent
+  # 的专属 uid 把 pi 的出口收敛到模型网关，其余全丢。缺这个能力时闸门自动降级
+  # 成「不生效」并记日志（服务端只记 warning，不拒绝启动）。
+  # 量级说明：CAP_NET_ADMIN 弱于 collabora 已声明的 CAP_SYS_ADMIN —— 只影响
+  # 本容器网络空间的路由/过滤规则，不是任意提权。
+  cap_add:
+    - NET_ADMIN
   networks:
     vos_default:
       aliases:

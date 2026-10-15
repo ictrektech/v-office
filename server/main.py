@@ -44,6 +44,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+import egress_guard
+
 LOG = logging.getLogger("v-office-storage")
 
 # 让本服务自己的 INFO 日志真的落到容器输出。默认情况下根 logger 没有 handler，
@@ -168,9 +170,14 @@ USERNAME_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 async def lifespan(_app: FastAPI):
     """启动 Collabora 冷启动探活后台任务，停机时回收。"""
     _warn_if_single_process()
+    # agent 出网闸门：把 pi 的出口收敛到模型网关（详见 egress_guard 的模块说明）。
+    # 缺 NET_ADMIN / 没装 iptables 时只记日志，绝不阻塞服务启动。
+    egress_guard.install()
     task = asyncio.create_task(_collabora_warmup_loop())
+    egress_task = asyncio.create_task(egress_guard.refresh_loop())
     yield
     task.cancel()
+    egress_task.cancel()
 
 
 app = FastAPI(

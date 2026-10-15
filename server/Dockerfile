@@ -48,6 +48,7 @@ RUN set -eux; \
         libreoffice-writer \
         poppler-utils \
         fonts-noto-cjk \
+        iptables \
     && rm -rf /var/lib/apt/lists/*
 
 # AI 运行时：node + pi bundle（见上面的 pi 阶段说明）

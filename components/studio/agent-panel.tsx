@@ -26,6 +26,11 @@ import { vp } from "./visual-spec";
 export function visibleText(raw: string): string {
   return (raw || "")
     .replace(/<patch\s+[^>]*>[\s\S]*?<\/patch>/gi, "")
+    // 文字级替换的结果：整块去掉——它是给服务端落文用的，不是给用户读的说明；
+    // 用户要看的是文档里改成了什么，把整段替换结果贴在对话里只会淹掉说明文字。
+    .replace(/<replace-selection\b[^>]*>[\s\S]*?<\/replace-selection>/gi, "")
+    // 自闭合的样式指令（可能带 anchor）：同样不是正文
+    .replace(/<doc-style\b[^>]*\/?>/gi, "")
     .replace(/<\/?final-doc>/gi, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
