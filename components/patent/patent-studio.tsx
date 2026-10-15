@@ -90,7 +90,7 @@ export function PatentStudio() {
       // 后面建会话 / 出 docx / 打开编辑器全用同一个名字（问过就记住）
       askFileName
       // 专利撰写对话要看得清权利要求全文，面板比公文写作那边宽一档
-      panelWidth="w-[32rem]"
+      panelWidth="w-[28rem]"
       nav={[
         {
           href: "/patent/studio",

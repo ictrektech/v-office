@@ -7,7 +7,6 @@ import {
   FileText,
   FlaskConical,
   Home,
-  Palette,
   PenLine,
   Scale,
   Stamp,
@@ -102,13 +101,6 @@ export function PatentHome() {
             >
               <PenLine className="h-4.5 w-4.5" />
               {t({ id: "Start a patent draft", message: "Start a patent draft" })}
-            </Link>
-            <Link
-              href="/patent/spec"
-              className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-3 text-[15px] font-medium text-[#1C1C1E] shadow-[0_1px_2px_rgba(0,0,0,0.05)] ring-1 ring-black/[0.05] transition hover:bg-[#F2F2F7] active:scale-[0.98] dark:bg-white/10 dark:text-white"
-            >
-              <Palette className="h-4.5 w-4.5" />
-              {t({ id: "Visual Spec", message: "Visual Spec" })}
             </Link>
             {/* 栏目首页也要能回 V-Office 主界面，否则进了专利栏目就只剩栏目内导航 */}
             <Link

@@ -401,16 +401,6 @@ export function AgentPanel({
               onScroll={onListScroll}
               className="relative flex-1 space-y-4 overflow-y-auto px-4 py-4 custom-scrollbar"
             >
-            {messages.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-[#E7EAF0] p-4 text-[14px] leading-relaxed text-[#94A3B8] dark:border-white/10">
-                {t({
-                  id: "Studio empty hint",
-                  message:
-                    "Describe the invention, or upload drawings and test records. The agent reads them and drafts step by step.",
-                })}
-              </div>
-            ) : null}
-
             {messages.map((m) =>
               m.role === "user" ? (
                 <div key={m.id} className="flex flex-col items-end gap-1">

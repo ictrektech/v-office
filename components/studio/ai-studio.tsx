@@ -289,6 +289,15 @@ export function AiStudio({
   const [engineHint, setEngineHint] = useState<string | null>(null);
   /** 内核冷启动已等待秒数；null = 没在等 */
   const [waitSeconds, setWaitSeconds] = useState<number | null>(null);
+  /**
+   * 过渡幕的阶段：导出文档 → 连接内核 → 加载文档。
+   *
+   * 打开编辑器要串过三件事，全程一个「正在准备编辑器」会让用户对着不变的
+   * 转圈猜进度；按阶段换文案，体感上是「在动」，而不是「卡了」。
+   */
+  const [veilStage, setVeilStage] = useState<"export" | "engine" | "load">(
+    "load",
+  );
   const [engineError, setEngineError] = useState<string | null>(null);
   const cancelRef = useRef(false);
   /** 会话版本：每次重载 +1，逼 Collabora 丢开内存里的旧文档、重新读盘 */
@@ -471,9 +480,16 @@ export function AiStudio({
         // 完全等价。用户在 UI 上主动「出稿」走的是另一条路（不传 blank），空稿
         // 会被明确拒绝——那份只有标题的 docx 就是从那条兜底里来的。
         let name = editorDoc ?? "";
-        if (reexport || !name) {
-          name = await chat.exportDocx(true);
-        }
+        const needExport = reexport || !name;
+        setVeilStage(needExport ? "export" : "load");
+        // 导出与内核探活**并行**：两者互不依赖，串行只是白等一个往返；
+        // 内核冷启动等待期间导出照常进行，总耗时取两者的最大值而不是相加。
+        const exporting = needExport
+          ? chat.exportDocx(true)
+          : Promise.resolve(name);
+        // 内核不可用会提前抛错，先给导出挂一个空 catch：拒绝不能没人接
+        exporting.catch(() => {});
+        setVeilStage("engine");
         let state = await fetchCollaboraStatus().catch(() => "unknown" as const);
         if (state === "warming_up") {
           setWaitSeconds(0);
@@ -491,6 +507,8 @@ export function AiStudio({
             zh ? "Collabora 内核当前不可用" : "The Collabora engine is unavailable",
           );
         }
+        // 会话要用文件名：等并行的导出落地（内核若在冷启动，这里早已导完）
+        name = await exporting;
         versionRef.current += 1;
         let session = await fetchCollaboraSession(
           name,
@@ -516,6 +534,7 @@ export function AiStudio({
         if (!session) {
           throw new Error(zh ? "取 Collabora 会话失败" : "Could not open a Collabora session");
         }
+        setVeilStage("load");
         setEditorDoc(name);
         setEditorUrl(alignCollaboraHost(session.editorUrl));
         setView("editor");
@@ -984,12 +1003,14 @@ export function AiStudio({
   const editing = view === "editor";
   /** 编辑器过渡幕：打开、重载、以及「文档还没就绪」都要盖住 */
   const veilVisible = editing && (opening || waitSeconds !== null || !docReady);
-  /** 幕上那行字：写稿 / 准备编辑器 / 启动内核，三选一 */
+  /** 幕上那行字：写稿 / 生成文档 / 启动内核 / 准备编辑器，按阶段走 */
   const veilTitle = reloadForDraft
     ? t({ id: "Applying draft", message: "Writing the AI draft into the document…" })
-    : waitSeconds === null
-      ? t({ id: "Preparing editor", message: "Preparing the editor…" })
-      : t({ id: "Starting Collabora", message: "Starting the Collabora engine…" });
+    : waitSeconds !== null || veilStage === "engine"
+      ? t({ id: "Starting Collabora", message: "Starting the Collabora engine…" })
+      : veilStage === "export"
+        ? t({ id: "Preparing document", message: "Preparing the document…" })
+        : t({ id: "Preparing editor", message: "Preparing the editor…" });
 
   // 文件名还没定 / 正在给新稿起名：只弹这一个框，别的都不渲染（会话都没建，渲染了也是空壳）
   if (askingName || newDraftName !== null) {

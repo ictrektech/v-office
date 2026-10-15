@@ -248,6 +248,7 @@
   "Back to draft hint": "回到草稿视图，并把编辑器里改过的内容带回来",
   "Applying draft": "正在把 AI 的稿子写进文档…",
   "Preparing editor": "正在准备编辑器…",
+  "Preparing document": "正在生成文档…",
   "Starting Collabora": "正在启动 Collabora 内核…",
   "Collabora wait hint": "首次启动约需 1 分钟，就绪后会自动打开。",
   "Cancel wait": "取消",

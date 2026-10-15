@@ -296,6 +296,7 @@
   "No tool calls yet": "No tool calls yet — the agent reads skills and writes text only.",
   "Applying draft": "Writing the AI draft into the document…",
   "Preparing editor": "Preparing the editor…",
+  "Preparing document": "Preparing the document…",
   "Starting Collabora": "Starting the Collabora engine…",
   "New draft hint": "A separate file for this new draft. The one you leave stays in My Documents.",
   "Draft name taken": "That is the draft you are leaving — pick a different name.",
