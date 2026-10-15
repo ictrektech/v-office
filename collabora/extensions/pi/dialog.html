@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>PI</title>
+<!--
+  扩展的官方对话框页。由面板发 Extension_ShowDialog 打开，
+  URL 必须落在扩展自己的 baseUrl 之内（越界会被前端拒绝并要求 cancelled）。
+
+  关闭方式只有两条消息（发给 parent）：
+    Extension_DialogClose {value}   → 编辑器回 Extension_DialogResult{ cancelled:false, value }
+    Extension_DialogCancel          → 编辑器回 Extension_DialogResult{ cancelled:true,  value:null }
+-->
+<style>
+  body {
+    margin: 0; padding: 14px;
+    font: 13px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    color: #1f2328;
+  }
+  h1 { margin: 0 0 4px; font-size: 14px; }
+  p { margin: 0 0 10px; color: #6b7280; font-size: 12px; }
+  input { width: 100%; padding: 6px 8px; font: inherit; border: 1px solid #d0d7de; border-radius: 6px; }
+  .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+  button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid #d0d7de; background: #f6f8fa; cursor: pointer; }
+  button.primary { border-color: #0969da; background: #0969da; color: #fff; }
+</style>
+</head>
+<body>
+  <h1>PI 对话框</h1>
+  <p>这条通道证明扩展可以通过官方对话框接收用户输入。</p>
+  <input id="value" value="来自 PI 的内容" />
+  <div class="row">
+    <button id="cancel">取消</button>
+    <button class="primary" id="ok">确定</button>
+  </div>
+
+<script>
+(function () {
+  function post(msg) { window.parent.postMessage(JSON.stringify(msg), "*"); }
+  document.getElementById("ok").onclick = function () {
+    post({ msgId: "Extension_DialogClose", value: document.getElementById("value").value });
+  };
+  document.getElementById("cancel").onclick = function () {
+    post({ msgId: "Extension_DialogCancel" });
+  };
+})();
+</script>
+</body>
+</html>

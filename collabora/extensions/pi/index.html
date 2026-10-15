@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>PI</title>
+<!--
+  PI 在 Collabora 里的官方扩展面板（Extension）。
+
+  它由 coolwsd 前端在**文档加载完成后**发现并加载（见 bundle 里的
+  ServerConnectionService.onDocumentLoaded → L.loadExtensions），
+  渲染位置是编辑器侧边栏 #sidebar-panel 里的一个 sandbox iframe，
+  入口是菜单栏的「Extensions」菜单 / notebookbar 的「Extensions」标签页。
+
+  与编辑器之间只有一条通道：JSON 字符串 postMessage（iframe → window.parent）。
+
+  本页可发（→ 编辑器）：
+    Extension_Resize       {height}                      面板高度
+    Extension_ShowDialog   {dialogId,url,title,width,height}  在 baseUrl 内开官方对话框
+    Extension_Call         {callId,fn,args}              编辑器转成
+                                                          executescript <callId> (<fn>).apply(null,<args>);
+                                                          交给文档脚本引擎执行
+    Extension_ProxyReturn  {callId,value}               回填宿主代发的请求结果
+    Extension_Close                                      关掉面板
+    Extension_TeardownDone                               拆除完成（收到 Teardown 后回）
+
+  编辑器会发来（→ 本页）：
+    Extension_DocumentEvent {name,payload}              文档事件（如 commentAdded）
+    Extension_ProxyCall     {proxyId,callId,method,args} 让宿主代发请求（绕 CORS 调自己的后端）
+    Extension_CallResult    {callId,ok,err}             脚本执行结果
+    Extension_DialogResult  {dialogId,cancelled,value}  对话框结果
+    Extension_Teardown                                   要关掉了，做完清理回 TeardownDone
+-->
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 12px 14px;
+    font: 13px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    color: #1f2328;
+  }
+  h1 { margin: 0 0 2px; font-size: 15px; letter-spacing: .02em; }
+  .sub { margin: 0 0 12px; color: #6b7280; font-size: 12px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  button {
+    font: inherit; padding: 6px 12px; border-radius: 6px;
+    border: 1px solid #d0d7de; background: #f6f8fa; cursor: pointer;
+  }
+  button:hover { background: #eef1f4; }
+  button.primary { border-color: #0969da; background: #0969da; color: #fff; }
+  button.primary:hover { background: #0a5cc0; }
+  h2 { margin: 14px 0 6px; font-size: 12px; color: #6b7280; font-weight: 600; }
+  #log {
+    margin: 0; padding: 8px 10px; max-height: 200px; overflow: auto;
+    background: #f6f8fa; border: 1px solid #e5e9ef; border-radius: 6px;
+    font: 11px/1.6 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all;
+  }
+  .empty { color: #9aa4b2; }
+  @media (prefers-color-scheme: dark) {
+    body { color: #e6edf3; }
+    #log { background: #161b22; border-color: #30363d; }
+    button { border-color: #30363d; background: #21262d; color: #e6edf3; }
+    button:hover { background: #262c36; }
+  }
+</style>
+</head>
+<body>
+  <h1>PI</h1>
+  <p class="sub">已作为扩展进入 Collabora 侧边栏</p>
+
+  <div class="row">
+    <button class="primary" id="dialog">打开 PI 对话框</button>
+    <button id="close">关闭面板</button>
+  </div>
+
+  <h2>收到的编辑器消息</h2>
+  <pre id="log"><span class="empty">等待…</span></pre>
+
+<script>
+(function () {
+  var el = function (id) { return document.getElementById(id); };
+
+  /** 与编辑器的唯一通道：JSON 字符串 postMessage 到 parent */
+  function post(msg) {
+    window.parent.postMessage(JSON.stringify(msg), "*");
+  }
+
+  /** 面板高度自适应 */
+  function resize() {
+    post({ msgId: "Extension_Resize", height: document.body.scrollHeight });
+  }
+
+  var entries = [];
+  function log(text) {
+    entries.unshift(new Date().toLocaleTimeString() + "  " + text);
+    entries = entries.slice(0, 30);
+    el("log").textContent = entries.join("\n");
+    resize();
+  }
+
+  el("dialog").onclick = function () {
+    // dialogId 是这次的调用号，结果会以 Extension_DialogResult 回来
+    var dialogId = "pi-" + Date.now();
+    log("→ Extension_ShowDialog " + dialogId);
+    post({
+      msgId: "Extension_ShowDialog",
+      dialogId: dialogId,
+      url: "dialog.html",
+      title: "PI",
+      width: 420,
+      height: 240
+    });
+  };
+
+  el("close").onclick = function () { post({ msgId: "Extension_Close" }); };
+
+  window.addEventListener("message", function (ev) {
+    var data = ev.data;
+    try { data = typeof data === "string" ? JSON.parse(data) : data; } catch (e) { return; }
+    if (!data || typeof data.msgId !== "string") return;
+
+    switch (data.msgId) {
+      case "Extension_Teardown":
+        // 编辑器在拆这个面板：清理完必须回 TeardownDone，否则面板不会真正移除
+        post({ msgId: "Extension_TeardownDone" });
+        return;
+      case "Extension_DialogResult":
+        log("← DialogResult cancelled=" + data.cancelled + " value=" + JSON.stringify(data.value));
+        return;
+      case "Extension_CallResult":
+        log("← CallResult ok=" + data.ok + " err=" + (data.err || ""));
+        return;
+      case "Extension_DocumentEvent":
+        log("← DocumentEvent " + data.name);
+        return;
+      case "Extension_ProxyCall":
+        // 编辑器把「代发请求」派下来：这里应去 fetch 自己的后端，
+        // 再 post Extension_ProxyReturn{callId,value}
+        log("← ProxyCall method=" + data.method);
+        post({ msgId: "Extension_ProxyReturn", callId: data.callId, value: null });
+        return;
+      default:
+        log("← " + data.msgId);
+    }
+  });
+
+  window.addEventListener("load", resize);
+})();
+</script>
+</body>
+</html>

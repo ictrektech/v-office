@@ -135,6 +135,47 @@ FROM ${COLLABORA_BASE}
 
 COPY --from=patcher /work/global.js /usr/share/coolwsd/browser/dist/global.js
 
+# ------------------------------------------------------------
+# PI 扩展（官方 Extension，不是补丁）
+#
+# 26.04 起 coolwsd 自带扩展机制，且本镜像默认就开着：
+#   - coolwsd.xml 的 <experimental_features> 默认 true，
+#     渲染 cool.html 时替换 %EXPERIMENTAL_FEATURES%，前端拿到
+#     window.enableExperimentalFeatures === true（curl 出来的页面里
+#     data-enable-experimental-features = "true" 可核对）；
+#   - 镜像 dist 里已经带官方扩展 SDK：browser/dist/extensions/cool.js；
+#   - 前端在**文档加载完成后**（ServerConnectionService.onDocumentLoaded
+#     → L.loadExtensions）依次 fetch：
+#         extensions/index.json                  → 扩展 id 列表
+#         extensions/<id>/manifest.json          → 清单（manifestVersion 必须 "0.1"）
+#         extensions/<id>/<manifest.entry>       → 扩展自己的面板页（iframe）
+#     加载后出现在菜单栏的 Extensions 菜单与 notebookbar 的 Extensions 标签页，
+#     点开在侧边栏插入一个可折叠面板，里面就是那个 iframe。
+#
+# 为什么必须是构建期 COPY（而不是部署后拷进容器）：
+#   coolwsd 启动时把整个 dist 目录预读进内存（启动日志：
+#   `Caching files in [.../dist/extensions]` / `Pre-read N file(s) from directory`），
+#   运行期才出现的文件不会被收录。实测：docker cp 拷进去，即使重启容器，
+#   /browser/<hash>/extensions/index.json 仍然 404（对照实验：把同样的文件
+#   在容器**启动前**挂载进去，四个文件全部 200）。
+#
+# 目录约定见 collabora/extensions/：
+#   extensions/index.json          ["pi"]
+#   extensions/pi/manifest.json    {manifestVersion,name,entry,icon,supports}
+#   extensions/pi/index.html       面板本体（自带样式，无外部依赖）
+#   extensions/pi/dialog.html      面板通过 Extension_ShowDialog 打开的对话框
+#   extensions/pi/icon.svg         notebookbar/菜单里的图标
+#
+# 面板与编辑器之间只有一条通道：JSON 字符串 postMessage。
+# 面板 → 编辑器：Extension_Call / Extension_ProxyReturn / Extension_ShowDialog /
+#                 Extension_Resize / Extension_Close / Extension_TeardownDone
+# 编辑器 → 面板：Extension_DocumentEvent / Extension_ProxyCall /
+#                 Extension_CallResult / Extension_DialogResult / Extension_Teardown
+# 官方还提供 helpers（browser/dist/extensions/cool.js，挂 window.cool）
+# 封装了 call / proxy / dialog 三种用法，PI 面板后续接真逻辑时用它更省事。
+# ------------------------------------------------------------
+COPY extensions/ /usr/share/coolwsd/browser/dist/extensions/
+
 # 中文字体：镜像里 fontconfig 只扫 /usr/share/fonts 等**并不存在**的目录，
 # 看不到 LO 自带的 Noto Serif SC / Noto Sans SC（在
 # /opt/collaboraoffice/share/fonts/truetype 下），于是文档请求「宋体」的正文
