@@ -714,6 +714,38 @@ def draft_to_markdown(draft: dict) -> str:
     return "\n\n".join(parts).strip()
 
 
+def _drop_leading_title_lines(lines: list[str], title: str) -> list[str]:
+    """剥掉开头连续的、与文档标题同名的标题行。
+
+    一级标题（`# 标题`）是**文档标题本身**：draft_to_markdown 导出时会自己写这一行
+    （`parts = [f"# {title}"]`）。它若再被 markdown_to_blocks 当成一个正文块存进
+    blocks，导出时就成了「# 标题」紧跟着「## 标题」——标题在文档里连着出现两次。
+
+    而且它会**累积**：从编辑器回读（docx_to_md → markdown_to_blocks）时，首行标题
+    又变成一个块；下一次导出多出一行标题，再回读又多一个（实测：每回读一轮多一
+    个，标题能堆成一串）。
+
+    为什么按「同名」而不是「一律剥掉」：文档标题只出现在最前面，且只有与
+    draft.title 相同的那几行才是重复产物。title 未知（空）时一律保留，别把内容
+    丢了；文档中间出现的同名标题是合法的段落标题，不动。
+    """
+    want = re.sub(r"\s+", "", title or "")
+    if not want:
+        return lines
+    index = 0
+    while index < len(lines):
+        line = lines[index].strip()
+        if not line:
+            index += 1
+            continue
+        m = re.match(r"^#{1,6}\s+(.*\S)\s*$", line)
+        if m and re.sub(r"\s+", "", m.group(1)) == want:
+            index += 1
+            continue
+        break
+    return lines[index:]
+
+
 def markdown_to_blocks(text: str, title: str = "") -> list[dict]:
     text = strip_contract_tags(text)
     """把 Markdown 拆成「段落块」。用于两种场景：整篇重出、从编辑器导入当前稿。"""
@@ -728,7 +760,7 @@ def markdown_to_blocks(text: str, title: str = "") -> list[dict]:
             blocks.append({"heading": heading or "", "text": body})
         heading, buffer = None, []
 
-    for raw in (text or "").splitlines():
+    for raw in _drop_leading_title_lines((text or "").splitlines(), title):
         line = raw.rstrip()
         if line.startswith("## ") or line.startswith("# "):
             flush()
@@ -836,6 +868,36 @@ def _parse_doc_style(text: str) -> dict:
             else:
                 style[field] = raw[:64]
     return style
+
+
+# <doc-style/> 落地后要跟用户说一句人话（前端 case "style" 直接 addNote 显示）。
+# 字段顺序按「正文字体 → 正文字号 → 标题字体 → 标题字号 → 行距」排，与用户下指令
+# 时的自然顺序一致，读起来才像在复述他刚做的事。
+_STYLE_FIELDS: tuple[tuple[str, str, str], ...] = (
+    ("font", "正文字体", ""),
+    ("size_pt", "正文字号", " 磅"),
+    ("heading_font", "标题字体", ""),
+    ("heading_size_pt", "标题字号", " 磅"),
+    ("line_spacing", "行距", " 倍"),
+)
+
+
+def _style_summary(doc_style: dict) -> str:
+    """把 <doc-style/> 的落地结果说成一句人话。
+
+    少了这句，用户只看到文档自己刷新了一下，不知道是 AI 改了样式，会当成
+    「AI 说改好了却没生效」——这正是前端那条注释要防的事。
+
+    `%g` 去掉浮点尾巴：14.0 说成「14 磅」而不是「14.0 磅」，1.15 保持原样。
+    """
+    items: list[str] = []
+    for field, label, unit in _STYLE_FIELDS:
+        if not (doc_style or {}).get(field):
+            continue
+        value = doc_style[field]
+        shown = f"{value:g}" if isinstance(value, (int, float)) else str(value)
+        items.append(f"{label} {shown}{unit}")
+    return "整篇样式已更新：" + "、".join(items) if items else "整篇样式已更新"
 
 
 def parse_model_output(text: str) -> dict:
@@ -2103,7 +2165,9 @@ async def apply_many(request: Request, sid: str, body: ApplyRequest) -> JSONResp
         raise HTTPException(status_code=400, detail="empty patches")
     # 整篇替换：patch 里带 full=true（前端从 <final-doc> 变更里带来的）
     if len(body.patches) == 1 and body.patches[0].get("full"):
-        draft = {**draft, "blocks": markdown_to_blocks(body.patches[0].get("text") or "")}
+        draft = {**draft, "blocks": markdown_to_blocks(
+            body.patches[0].get("text") or "", draft.get("title") or "",
+        )}
         applied, skipped = [{"anchor": "all", "op": "replace"}], []
     else:
         draft, applied, skipped = apply_patches(draft, body.patches)

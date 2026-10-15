@@ -191,5 +191,73 @@ class StyleConversionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body[:1], [10.5])
 
 
+class StyleSummaryTest(unittest.TestCase):
+    """_style_summary：落地后那句要显示给用户的「人话」。"""
+
+    def test_lists_fields_in_natural_order(self):
+        # 字段顺序按「正文字体 → 正文字号 → 行距」，与用户下指令的顺序一致，
+        # 不按 dict 的插入顺序——模型给的属性顺序不固定。
+        s = ai._style_summary({"line_spacing": 1.15, "size_pt": 14.0, "font": "宋体"})
+        self.assertEqual(s, "整篇样式已更新：正文字体 宋体、正文字号 14 磅、行距 1.15 倍")
+
+    def test_float_tail_dropped(self):
+        """14.0 说成「14 磅」而不是「14.0 磅」；1.15 这类真小数保持原样。"""
+        self.assertIn("正文字号 14 磅", ai._style_summary({"size_pt": 14.0}))
+        self.assertIn("行距 1.15 倍", ai._style_summary({"line_spacing": 1.15}))
+
+    def test_empty_does_not_crash(self):
+        self.assertEqual(ai._style_summary({}), "整篇样式已更新")
+
+
+class StyleLandTurnTest(unittest.IsolatedAsyncioTestCase):
+    """样式回合**真的**发得出 style 事件。
+
+    这层曾经整个漏掉：`_land_turn` 调用了一个从未定义的 `_style_summary`，于是模型
+    每次输出 <doc-style/> 都在这里抛 NameError，用户看到的是「改稿落地失败:
+    name '_style_summary' is not defined」——而外面三层测试（解析 / 参数 / 真导出
+    docx）全绿，谁也没发现，因为它们都不经过事件分支。样式却已经存进草稿了，
+    于是症状变成「字号其实改了，但整轮报错」，比单纯失败更难查。
+
+    autosave=False 跳过落盘回调：这个测试只管事件，不该依赖 save_document 注入。
+    """
+
+    async def test_style_only_turn_emits_style_event(self):
+        uid, sid = "tester", "style-land-turn"
+        ai.save_draft(uid, sid, {
+            "title": "测试稿",
+            "blocks": [{"heading": "一", "text": "正文段落"}],
+        })
+        parsed = ai.parse_model_output(
+            '<doc-style body-font="宋体" body-size="14" line-spacing="1.15"/>'
+        )
+        events = await ai._land_turn(uid, sid, parsed, save=True, autosave=False)
+
+        styles = [e for e in events if e.get("type") == "style"]
+        self.assertEqual(
+            len(styles), 1, f"没有 style 事件，实际：{[e.get('type') for e in events]}"
+        )
+        self.assertEqual(
+            styles[0]["styles"],
+            {"font": "宋体", "size_pt": 14.0, "line_spacing": 1.15},
+        )
+        self.assertIn("正文字号 14 磅", styles[0]["message"])
+        # 样式要真落进草稿：下一轮导出 docx 靠的就是它
+        self.assertEqual(
+            (ai.load_draft(uid, sid).get("styles") or {}).get("size_pt"), 14.0
+        )
+
+    async def test_identical_style_reports_nothing(self):
+        """同样的样式再来一次不该反复报「已更新」——用户只会觉得 AI 在空转。"""
+        uid, sid = "tester", "style-land-turn-idempotent"
+        ai.save_draft(uid, sid, {
+            "title": "测试稿",
+            "blocks": [{"heading": "一", "text": "正文段落"}],
+            "styles": {"size_pt": 14.0},
+        })
+        parsed = ai.parse_model_output('<doc-style body-size="14"/>')
+        events = await ai._land_turn(uid, sid, parsed, save=True, autosave=False)
+        self.assertEqual([e for e in events if e.get("type") == "style"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
