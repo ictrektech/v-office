@@ -316,7 +316,6 @@
   "AI panel": "AI panel",
   "Generating": "Generating",
   "N pending": "{count} pending",
-  "Patent type": "Patent type",
   "Collabora wait hint": "First boot takes about a minute. It will open automatically once ready.",
   "Cancel wait": "Cancel",
   "Engine error": "The editor engine could not be opened: {reason}",

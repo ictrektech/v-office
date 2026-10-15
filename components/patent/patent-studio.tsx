@@ -8,14 +8,13 @@
  * 专利栏目自己的三件事：模板解析（含交底书的类型切换）、栏目顶栏、页面文案。
  */
 
-import { useCallback, useMemo } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 import { useExtracted, useLocale } from "next-intl";
 import { Scale } from "lucide-react";
 import { AiStudio, type AiStudioTemplate } from "@/components/studio/ai-studio";
 import {
   getPatentTemplate,
-  getTemplateVariants,
   localizeTemplate,
   localizeVariant,
   resolveVariant,
@@ -60,28 +59,16 @@ export function PatentStudio() {
   const t = useExtracted();
   const locale = useLocale();
   const isZh = locale.toLowerCase().startsWith("zh");
-  const router = useRouter();
   const searchParams = useSearchParams();
   /** 从栏目页点进来的模板（决定技能包与会话线与起手话术） */
   const templateId = searchParams.get("template") || "";
   /** 交底书的专利类型（invention / utility / design），默认发明 */
   const variantId = searchParams.get("variant") || "";
   const tpl = useMemo(() => getPatentTemplate(templateId), [templateId]);
-  const variants = useMemo(() => getTemplateVariants(tpl), [tpl]);
   const variant = useMemo(() => resolveVariant(tpl, variantId), [tpl, variantId]);
   const template = useMemo(
     () => (tpl ? toStudioTemplate(tpl, variant, isZh) : null),
     [isZh, tpl, variant],
-  );
-
-  /** 换类型 = 换一条会话线（成文结构不同，别让实用新型的稿子串到外观设计里） */
-  const switchVariant = useCallback(
-    (id: string) => {
-      const params = new URLSearchParams(searchParams.toString());
-      params.set("variant", id);
-      router.replace(`?${params.toString()}`);
-    },
-    [router, searchParams],
   );
 
   return (
@@ -91,13 +78,6 @@ export function PatentStudio() {
       // 每个模板（+ 类型变体）一条独立会话线
       persistKey={`patent:studio:${template?.id ?? "default"}${variant ? `:${variant.id}` : ""}`}
       template={template}
-      variants={variants.map((v) => ({
-        id: v.id,
-        label: localizeVariant(v, isZh).name,
-        note: localizeVariant(v, isZh).note,
-      }))}
-      activeVariant={variant?.id}
-      onVariantChange={switchVariant}
       pageTitle={t({ id: "AI Patent Studio", message: "AI Patent Studio" })}
       defaultTitle={t({ id: "Patent disclosure", message: "Patent disclosure" })}
       subtitle={t({

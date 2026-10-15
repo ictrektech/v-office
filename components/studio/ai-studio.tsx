@@ -153,13 +153,6 @@ export interface AiStudioTemplate {
   note?: string;
 }
 
-/** 同一入口下的类型变体（交底书的发明 / 实用新型 / 外观设计） */
-export interface AiStudioVariant {
-  id: string;
-  label: string;
-  note?: string;
-}
-
 export interface AiStudioNavItem {
   href: string;
   label: string;
@@ -183,14 +176,6 @@ export interface AiStudioProps {
   askFileName?: boolean;
   /** 从栏目页点进来的模板（决定技能包与会话线） */
   template?: AiStudioTemplate | null;
-  /**
-   * 入口下的类型变体（交底书：发明 / 实用新型 / 外观设计）。
-   * 有值时在顶栏下显示一行分段控件；切换由栏目侧改 URL（连带换会话线）。
-   */
-  variants?: AiStudioVariant[];
-  /** 当前变体的 id（与 variants 里某项一致） */
-  activeVariant?: string;
-  onVariantChange?: (id: string) => void;
   /** 浏览器标签标题 */
   pageTitle: string;
   /** 顶栏标题（模板没匹配上时的兜底） */
@@ -213,9 +198,6 @@ export function AiStudio({
   persistKey,
   askFileName = false,
   template,
-  variants,
-  activeVariant,
-  onVariantChange,
   pageTitle,
   defaultTitle,
   subtitle,
@@ -1271,37 +1253,6 @@ export function AiStudio({
           ) : null}
         </div>
       </header>
-
-      {/* 类型变体：交底书把「发明 / 实用新型 / 外观设计」合成一个入口后，
-          选类型落到这里——换类型等于换一条会话线（成文结构不同，别串稿）。 */}
-      {variants?.length && onVariantChange ? (
-        <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-black/[0.06] bg-white/80 px-4 py-2.5 backdrop-blur-xl dark:border-white/10 dark:bg-[#0b0b0b]/70">
-          <span className="text-[13.5px] font-medium text-[#6E6E73] dark:text-slate-400">
-            {t({ id: "Patent type", message: "Patent type" })}
-          </span>
-          <div className={cn(vp.segGroup, "flex-wrap")}>
-            {variants.map((v) => {
-              const on = v.id === activeVariant;
-              return (
-                <button
-                  key={v.id}
-                  type="button"
-                  onClick={() => onVariantChange(v.id)}
-                  className={cn(on ? vp.segOn : vp.segOff, "px-4 py-1.5 text-[14px]")}
-                  title={v.note}
-                >
-                  <span className={on ? "text-[#007AFF]" : undefined}>{v.label}</span>
-                </button>
-              );
-            })}
-          </div>
-          {variants.find((v) => v.id === activeVariant)?.note ? (
-            <p className="text-[13.5px] text-[#94A3B8]">
-              {variants.find((v) => v.id === activeVariant)?.note}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
 
       <div className="flex min-h-0 flex-1">
         <main className="relative flex min-w-0 flex-1 bg-white dark:bg-[#0e0e0e]">
