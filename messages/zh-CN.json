@@ -264,6 +264,7 @@
   "Editor view": "编辑器",
   "Draft view": "草稿",
   "Editor save hint": "AI 的稿子会写入这份文档，编辑器随之刷新一次；按 Ctrl+S 保存，AI 才能读到你的改动。",
+  "Selection auto hint": "在文档里框选一段文字，右侧 AI 面板会亮出这一行——这一轮 AI 就只改选中的地方。",
   "Upload material": "上传材料",
   "Upload template": "上传模板",
   "Draft template": "成稿模板",

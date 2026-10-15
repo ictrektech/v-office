@@ -732,6 +732,51 @@ export function readCollaboraSelection(
 }
 
 /**
+ * 盯着活文档里的选区：文本变了就回调（没有选区 = 空串）。
+ *
+ * 为什么是轮询：鼠标事件发生在 iframe **内部**（本地是跨源的 :9980，生产是
+ * 网关同源 `/cool/` 前缀），父页面既监听不到 `mouseup`，COOL 也没有向宿主
+ * 推送「选区变化」的消息（翻遍 PostMessageManager 只有 `Doc_PartChanged` /
+ * `App_LoadingStatus` 这类）。轮询 `Action_Copy` 是唯一跨源/同源通吃的手段，
+ * 也是这里刻意选择的形态：一套代码、两种部署行为一致。
+ *
+ * 实现要点：
+ * - 同一时刻只允许一次读取在飞（`busy`）：读取超时（3s）比轮询间隔（默认
+ *   800ms）长，不拦的话响应会错配到上一轮的 listener 上
+ * - 启动即刻读一次，不等第一个间隔：从草稿视图切回编辑器时 iframe 里的
+ *   选区还活着，应当立刻亮出作用域而不是等 800ms
+ * - 读取失败/超时按空串处理：调用方（ai-studio）会把它当成「选区没了」，
+ *   一次慢读最多让 chip 闪一下，下一轮读取就会恢复
+ *
+ * 返回 stop 函数；iframe 卸载后调用方必须调用（effect 的 cleanup 就是干这个的）。
+ */
+export function watchCollaboraSelection(
+  iframe: HTMLIFrameElement,
+  onChange: (text: string) => void,
+  { intervalMs = 800, timeoutMs = 3000 }: { intervalMs?: number; timeoutMs?: number } = {},
+): () => void {
+  let alive = true;
+  let busy = false;
+  const tick = async () => {
+    if (!alive || busy || !iframe.isConnected) return;
+    busy = true;
+    try {
+      const text = (await readCollaboraSelection(iframe, timeoutMs)).trim();
+      if (!alive) return;
+      onChange(text);
+    } finally {
+      busy = false;
+    }
+  };
+  void tick();
+  const timer = window.setInterval(() => void tick(), intervalMs);
+  return () => {
+    alive = false;
+    window.clearInterval(timer);
+  };
+}
+
+/**
  * 等这一块粘贴**真的贴完**。
  *
  * 判据是「先见到内容变化信号，再等它安静下来」，而不是「一段时间没信号就算完」。

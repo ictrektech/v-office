@@ -321,6 +321,7 @@
   "Cancel wait": "Cancel",
   "Engine error": "The editor engine could not be opened: {reason}",
   "Editor save hint": "The AI's draft is written into this document and the editor refreshes once. Press Ctrl+S so the AI can pick up your edits.",
+  "Selection auto hint": "Select text in the document — it shows up as a line in the AI panel, and the AI then only changes that part.",
   "Name this draft": "Name this draft",
   "Name this draft hint": "It becomes the file name in My Documents (.docx). You can keep the default and change it later.",
   "File name": "File name",

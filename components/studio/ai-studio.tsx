@@ -41,6 +41,7 @@ import {
   hideCollaboraWelcomeScreen,
   readCollaboraSelection,
   waitForCollaboraDocumentLoaded,
+  watchCollaboraSelection,
 } from "@/utils/editor/collabora";
 import { toCollaboraLang } from "@/utils/editor/locale";
 import { listStoredFiles } from "@/utils/vos/storage";
@@ -51,6 +52,15 @@ import { vp } from "./visual-spec";
 /** Collabora 冷启动的最长等待（与编辑器页口径一致：首启约 1 分钟） */
 const ENGINE_WAIT_MS = 150_000;
 const ENGINE_POLL_MS = 3_000;
+
+/**
+ * 自动捕获选区的字数下限。
+ *
+ * 双击选词、误拖一下都会产生小选区：不设门槛的话 chip 会跟着双击频繁闪烁，
+ * 「可能要改的地方」也变得廉价。4 字以下不当成作用域（手动「改这里」同样
+ * 走这条判断，读到的选区太短就当作没选中，给原有提示）。
+ */
+const MIN_SELECTION_CHARS = 4;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -789,35 +799,25 @@ export function AiStudio({
     }
   }, [chat.streaming, chat.draft?.updated_at, view, editorDoc, openEditor]);
 
+  /** 用户显式撤过的作用域文本（点 X）：记住它，轮询才不会把 chip 请回来 */
+  const dismissedSelectionRef = useRef<string | null>(null);
+  /** 最近一次落成作用域的选区文本：轮询读到和它一样就跳过，省掉无谓重渲染 */
+  const lastSelectionTextRef = useRef("");
+
   /**
-   * 发指令前先把编辑器里的内容回读进草稿。
+   * 把一次读到的选区文本落成作用域——按钮手动捕获与轮询自动捕获共用。
    *
-   * 两步顺序不能反：
-   * 1) **先落盘**（flush）：用户在 Word 里手改的内容 agent 看不见（草稿是 AI
-   *    的工作面），不先 Ctrl+S 式地冲一次，下一轮 AI 拿旧稿改，用户刚敲的
-   *    内容就被覆盖了——协作者的规矩：你保存，我才动手
-   * 2) **再回读**（import）：把盘上的 docx 转成草稿，agent 才知道当前稿子
-   *    长什么样
+   * 两步：① 归一化后按包含匹配，定位选区落在草稿哪一段（先整段、再退到
+   * 选区前 30 字——用户常只选半句）；② 定位上了就把段落编号一并带上，服务端
+   * 的 patch 落点以它为准，不靠模型猜。
+   *
+   * 返回是否形成了作用域：太短的选取（双击选词、误拖）返回 false，由调用方
+   * 决定要不要提示。
    */
-  /**
-   * 「改这里」：把用户在编辑器里选中的文字收窄成这一轮的改动范围。
-   *
-   * 两步：① 经 postMessage 桥读回选区纯文本；② 在草稿里定位它落在哪一段
-   * （归一化后按包含匹配，先整段、再退到选区前 30 字——用户常只选半句）。
-   * 定位上了就把段落编号一并带上：服务端的 patch 落点以它为准，不靠模型猜。
-   *
-   * 读不到选区（没选 / 跨源 / 超时）就如实说，不静默失败。
-   */
-  const captureSelection = useCallback(async () => {
-    const frame = frameRef.current;
-    if (!frame?.isConnected) return;
-    setCapturingSelection(true);
-    try {
-      const text = (await readCollaboraSelection(frame)).trim();
-      if (!text) {
-        setSelectionHint(true);
-        return;
-      }
+  const applySelection = useCallback(
+    (raw: string): boolean => {
+      const text = (raw || "").trim();
+      if (text.length < MIN_SELECTION_CHARS) return false;
       const norm = (s: string) => s.replace(/\s+/g, "");
       const want = norm(text);
       const blocks = chat.draft?.blocks ?? [];
@@ -834,10 +834,38 @@ export function AiStudio({
       });
       // 选区命中段落时，同步给草稿视图的高亮（两边看到的是同一处）
       if (anchor) setSelectedAnchor(anchor);
+      lastSelectionTextRef.current = text;
+      // 手动捕获 = 显式要这个作用域：撤回过守卫随之解除
+      dismissedSelectionRef.current = null;
+      return true;
+    },
+    [chat.draft],
+  );
+
+  /**
+   * 「改这里」按钮：读一回编辑器选区，落成作用域。
+   *
+   * 读不到选区（没选 / 跨源 / 超时 / 太短）就如实提示——手动路径必须给反馈；
+   * 轮询路径读到空只是「用户没选中」，不提示（见下面的自动捕获 effect）。
+   */
+  const captureSelection = useCallback(async () => {
+    const frame = frameRef.current;
+    if (!frame?.isConnected) return;
+    setCapturingSelection(true);
+    try {
+      const text = (await readCollaboraSelection(frame)).trim();
+      if (!applySelection(text)) setSelectionHint(true);
     } finally {
       setCapturingSelection(false);
     }
-  }, [chat.draft]);
+  }, [applySelection]);
+
+  /** 撤掉作用域（chip 上的 X）：iframe 里的选区还在，得记住「这一处撤过」 */
+  const clearSelection = useCallback(() => {
+    dismissedSelectionRef.current = editorSelection?.text ?? null;
+    lastSelectionTextRef.current = "";
+    setEditorSelection(null);
+  }, [editorSelection]);
 
   // 「没有选区」的提示只露几面：用户看到就去选了，别常驻
   useEffect(() => {
@@ -846,6 +874,66 @@ export function AiStudio({
     return () => window.clearTimeout(timer);
   }, [selectionHint]);
 
+  /**
+   * 选中即在右侧亮出作用域（Claude Code 式「选中即引用」）。
+   *
+   * 用户在左边文档里按住左键框选一段，右侧对话框上方就出现那一行——agent
+   * 由此知道「可能要改的地方」是哪一处；用户接着输入指令即可，不必再点
+   * 「改这里」（按钮保留作手动刷新）。
+   *
+   * 为什么是轮询：鼠标事件发生在 iframe 内部，父页面监听不到，COOL 也不向
+   * 宿主推送选区变化——唯一跨源/同源通吃的手段就是定时 `Action_Copy`，
+   * 细节见 `watchCollaboraSelection` 的注释。
+   *
+   * 撤回过守卫：点 X 撤掉后 iframe 里的选区仍在，不记住「这一处撤过」的
+   * 话，下一轮轮读到同一处又会把 chip 请回来，X 等于白点。撤过之后重新
+   * 选中别处照常亮出；超时导致的空读不清守卫——否则一次慢读会让撤掉的
+   * chip 在下一轮读取后又弹回来。
+   */
+  useEffect(() => {
+    const frame = frameRef.current;
+    // 三个条件缺一个都不盯：
+    // - 文档没就绪：发了指令也被 COOL 的门卫丢掉（not loaded yet）
+    // - 不在编辑视图：草稿视图里没有选区可读
+    // - AI 正在出字：用户在读输出，不会同时去框选
+    if (!docReady || view !== "editor" || chat.streaming || !frame || !editorUrl) return;
+    let alive = true;
+    const stop = watchCollaboraSelection(frame, (text) => {
+      if (!alive) return;
+      if (text === lastSelectionTextRef.current) return; // 选区没变
+      if (!text) {
+        // 选区没了（用户在文档里点掉了 / 这一轮回合后文档重载过）：撤掉
+        // 作用域。anchor 一并清掉——sendInstruction 在 editorSelection 为
+        // 空时会回落到 selectedAnchor，不清就会把「已撤作用域」的这一轮
+        // 又变成 anchored 回合。
+        lastSelectionTextRef.current = "";
+        setEditorSelection(null);
+        setSelectedAnchor(undefined);
+        return;
+      }
+      if (text === dismissedSelectionRef.current) {
+        // 撤过的那一处：记下文本免得每轮比对，但不加回 chip
+        lastSelectionTextRef.current = text;
+        return;
+      }
+      applySelection(text);
+    });
+    return () => {
+      alive = false;
+      stop();
+    };
+  }, [applySelection, chat.streaming, docReady, editorUrl, view]);
+
+  /**
+   * 发指令前先把编辑器里的内容回读进草稿。
+   *
+   * 两步顺序不能反：
+   * 1) **先落盘**（flush）：用户在 Word 里手改的内容 agent 看不见（草稿是 AI
+   *    的工作面），不先 Ctrl+S 式地冲一次，下一轮 AI 拿旧稿改，用户刚敲的
+   *    内容就被覆盖了——协作者的规矩：你保存，我才动手
+   * 2) **再回读**（import）：把盘上的 docx 转成草稿，agent 才知道当前稿子
+   *    长什么样
+   */
   const sendInstruction = useCallback(
     async (text: string, options?: { anchor?: string; selection?: string }) => {
       if (editorDoc && docReady && frameRef.current) {
@@ -1294,13 +1382,24 @@ export function AiStudio({
           ) : null}
 
           {editing && editorUrl && !opening ? (
-            <p className="pointer-events-none absolute bottom-2 left-1/2 z-10 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-[12.5px] text-white/90">
-              {t({
-                id: "Editor save hint",
-                message:
-                  "The AI's draft is written into this document and the editor refreshes once. Press Ctrl+S so the AI can pick up your edits.",
-              })}
-            </p>
+            <div className="pointer-events-none absolute bottom-2 left-1/2 z-10 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-col items-center gap-0.5 rounded-2xl bg-black/60 px-3.5 py-1.5 text-center text-[12.5px] leading-relaxed text-white/90">
+              <p>
+                {t({
+                  id: "Editor save hint",
+                  message:
+                    "The AI's draft is written into this document and the editor refreshes once. Press Ctrl+S so the AI can pick up your edits.",
+                })}
+              </p>
+              {/* 选中即引用：把「选中文字 → 右侧亮出一行」这条路子写在编辑器常驻提示里，
+                  免得用户不知道框选完该干什么（手动「改这里」按钮保留作刷新） */}
+              <p className="text-white/70">
+                {t({
+                  id: "Selection auto hint",
+                  message:
+                    "Select text in the document — it shows up as a line in the AI panel, and the AI then only changes that part.",
+                })}
+              </p>
+            </div>
           ) : null}
         </main>
 
@@ -1328,7 +1427,7 @@ export function AiStudio({
           onSave={() => void chat.saveNow()}
           selection={editorSelection}
           onCaptureSelection={() => void captureSelection()}
-          onClearSelection={() => setEditorSelection(null)}
+          onClearSelection={clearSelection}
           capturingSelection={capturingSelection}
           selectionHint={selectionHint}
           panelWidth={panelWidth}
@@ -1369,7 +1468,7 @@ export function AiStudio({
             onSave={() => void chat.saveNow()}
             selection={editorSelection}
             onCaptureSelection={() => void captureSelection()}
-            onClearSelection={() => setEditorSelection(null)}
+            onClearSelection={clearSelection}
             capturingSelection={capturingSelection}
             selectionHint={selectionHint}
             className="relative z-10 flex h-full w-[min(26rem,88vw)] shadow-[-24px_0_60px_-24px_rgba(0,0,0,0.35)]"
