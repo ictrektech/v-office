@@ -29,7 +29,6 @@ function resolveTemplate(id: string): AiStudioTemplate | null {
     name: tpl.name,
     // 写作栏全部文种共用 writing 技能包；结构差异由模板字段与 prompts 承载
     skill: "writing",
-    outline: (tpl.fields ?? []).map((f) => f.label).join("、"),
   };
 }
 

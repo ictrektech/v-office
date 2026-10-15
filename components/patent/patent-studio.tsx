@@ -37,7 +37,6 @@ function toStudioTemplate(
   variant: PatentTemplateVariant | undefined,
   isZh: boolean,
 ): AiStudioTemplate {
-  const fields = variant?.fields ?? tpl.fields;
   const loc = localizeTemplate(tpl, isZh);
   const vloc = variant ? localizeVariant(variant, isZh) : null;
   return {
@@ -47,7 +46,6 @@ function toStudioTemplate(
     name: vloc ? `${loc.name}·${vloc.name}` : loc.name,
     sessionTitle: vloc ? `${loc.name} - ${vloc.name}` : loc.name,
     skill: (variant?.skillEntry || tpl.skillEntry || "").split("/")[1] || "patent-disclosure",
-    outline: fields.map((f) => f.label).join("、"),
     /** 产出契约写进上下文：agent 按它决定最后落哪几个文件 */
     outputs: variant?.outputs ?? tpl.outputs,
     /** 类型备注（"结构类方案，产出件号表与结构图"）——让 agent 知道这类长什么样 */

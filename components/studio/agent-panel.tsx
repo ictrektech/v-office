@@ -204,7 +204,6 @@ export function AgentPanel({
   onClearSelection,
   capturingSelection,
   selectionHint,
-  initialPrompt,
   panelWidth,
   className,
 }: {
@@ -242,8 +241,6 @@ export function AgentPanel({
   capturingSelection?: boolean;
   /** 读了但文档里没有选区：给一句提示 */
   selectionHint?: boolean;
-  /** 起手话术（模板带进来的），只在输入框还空着时填入 */
-  initialPrompt?: string;
   /** 面板宽度（Tailwind 宽度类，如 `w-[32rem]`）；不传用默认 23rem */
   panelWidth?: string;
   className?: string;
@@ -302,12 +299,6 @@ export function AgentPanel({
       autoScrollRef.current = false;
     });
   };
-
-  // 起手话术只在输入框还空着时填入，绝不覆盖用户已经打的字
-  useEffect(() => {
-    if (!initialPrompt) return;
-    setDraft((current) => (current.trim() ? current : initialPrompt));
-  }, [initialPrompt]);
 
   const submit = () => {
     const text = draft.trim();

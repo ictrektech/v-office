@@ -140,8 +140,6 @@ export interface AiStudioTemplate {
   name: string;
   /** 技能包名（如 patent-disclosure / writing） */
   skill: string;
-  /** 成文结构（模板字段清单），用于给 agent 一句起手话术 */
-  outline: string;
   /** 产出契约（agent 最后要落哪几个文件） */
   outputs?: string[];
   /**
@@ -1404,7 +1402,6 @@ export function AiStudio({
           sessionReady={!!chat.sessionId && !injecting}
           modelLabel={modelLabel}
           lastSaved={chat.lastSaved}
-          initialPrompt={seedPromptFor(template)}
           onSend={(text, options) => void sendInstruction(text, options)}
           onStop={chat.stop}
           onUpload={chat.upload}
@@ -1445,7 +1442,6 @@ export function AiStudio({
             sessionReady={!!chat.sessionId && !injecting}
             modelLabel={modelLabel}
             lastSaved={chat.lastSaved}
-            initialPrompt={seedPromptFor(template)}
             onSend={(text, options) => void sendInstruction(text, options)}
             onStop={chat.stop}
             onUpload={chat.upload}
@@ -1578,17 +1574,4 @@ function NameDraftDialog({
       </form>
     </div>
   );
-}
-
-/**
- * 模板的起手话术：把「写什么、按什么结构、最后交哪几个文件」先说清楚，省一轮来回。
- * 交底书三种类型的字段清单不同，这句话跟着变体走（切换类型即换会话线）。
- */
-function seedPromptFor(template?: AiStudioTemplate | null): string {
-  if (!template) return "";
-  const parts = [`按「${template.name}」起草。成文结构：${template.outline}。`];
-  if (template.outputs?.length) parts.push(`最终产出：${template.outputs.join("、")}。`);
-  if (template.note) parts.push(`${template.note}。`);
-  parts.push("先告诉我需要哪些材料。");
-  return parts.join("");
 }
