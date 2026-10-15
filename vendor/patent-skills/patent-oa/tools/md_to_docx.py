@@ -674,22 +674,29 @@ def _add_rich_content_to_paragraph(
 
 
 def _mark_cjk_lang(rPr) -> None:
-    """把 run 的语言显式标成中文（w:lang w:eastAsia="zh-CN"）。
+    """分派 run 的语言标记：东亚按中文（w:eastAsia="zh-CN"）、拉丁按英文（w:val="en-US"）。
 
-    不标的后果很隐蔽：python-docx 默认模板把 docDefaults 的语言留成 en-US，
+    w:lang 的三个属性各管一摊字符集，LibreOffice 按字符所属 script 取对应属性：
+    w:val（拉丁/西文）、w:eastAsia（东亚）、w:bidi（阿拉伯/希伯来）。中文取
+    eastAsia、英文取 val，互不干扰。
+
+    eastAsia 必须标 zh-CN：python-docx 默认模板把 docDefaults 的语言留成 en-US，
     LibreOffice/Collabora 打开后就认为这些 run 是**英文**。于是 fontconfig 里
     "lang 含 zh 才追加 Noto Sans SC 兜底"那条规则对全文不生效，只剩
     宋体→Noto Serif SC / 黑体→Noto Sans SC 两条显式别名在撑；这两套字体覆盖
-    不到的字（生僻字、全角符号等）直接渲染成豆腐块 □。
+    不到的字（生僻字、全角符号等）直接渲染成豆腐块 □。手打的字没这个问题——
+    编辑器按实际输入语言打标记，兜底自然生效。所以症状就是"AI 生成的文档一片
+    方框，手动输入却正常"。
 
-    手打的字没这个问题——编辑器按实际输入语言打标记，兜底自然生效。所以症状
-    就是"AI 生成的文档一片方框，手动输入却正常"。
+    val 保持 en-US（**不要**跟着标 zh-CN）：val 管拉丁字符，标成 zh-CN 会把英文
+    误报为中文，污染拼写检查/断字/排序——渲染上看不出来，但文档语义是错的。
+    各归各位即可，中文兜底照旧生效。
     """
     lang = rPr.find(qn("w:lang"))
     if lang is None:
         lang = OxmlElement("w:lang")
         rPr.append(lang)
-    lang.set(qn("w:val"), "zh-CN")
+    lang.set(qn("w:val"), "en-US")
     lang.set(qn("w:eastAsia"), "zh-CN")
 
 
