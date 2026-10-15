@@ -51,6 +51,7 @@ from pydantic import BaseModel
 
 from extract_text import extract_text
 from docx_revise import apply_revisions as revise_docx
+from docx_revise import apply_scoped_style
 
 # ── 装配点（由 main.py 注入）───────────────────────────────────────────────
 
@@ -700,10 +701,16 @@ def _strip_leading_duplicate_heading(text: str, heading: str) -> str:
 
 
 def draft_to_markdown(draft: dict) -> str:
-    _ = draft  # 下面照旧拼装；剥离在 markdown_to_blocks 与本函数出口各做一次
+    """草稿 → Markdown，**只输出正文**，不含文档标题那一行。
+
+    为什么标题不进正文（产品口径）：文档名只体现在「我的文档」的文件名和 Word
+    标题栏里，正文从第一段实际内容开始。以前这里先写 `# {title}`，于是标题必然
+    出现在正文里——用户明确要求这个标题名称「不许出现在正文」。
+
+    空草稿返回空串，调用方据此判断「还没有内容」，不再造一份只有标题的文件。
+    """
     blocks = draft.get("blocks") or []
-    title = (draft.get("title") or "").strip()
-    parts = [f"# {title}"] if title else []
+    parts: list[str] = []
     for block in blocks:
         heading = (block.get("heading") or "").strip()
         if heading:
@@ -717,13 +724,13 @@ def draft_to_markdown(draft: dict) -> str:
 def _drop_leading_title_lines(lines: list[str], title: str) -> list[str]:
     """剥掉开头连续的、与文档标题同名的标题行。
 
-    一级标题（`# 标题`）是**文档标题本身**：draft_to_markdown 导出时会自己写这一行
-    （`parts = [f"# {title}"]`）。它若再被 markdown_to_blocks 当成一个正文块存进
-    blocks，导出时就成了「# 标题」紧跟着「## 标题」——标题在文档里连着出现两次。
+    一级标题（`# 标题`）是**文档标题本身**，产品口径上它不写进正文
+    （draft_to_markdown 只输出 blocks）。但它仍会从别处溜进正文：从编辑器回读
+    （docx_to_md → markdown_to_blocks）时首行标题会变成一个块，用户在编辑器里
+    自己敲的同名大标题也一样。
 
-    而且它会**累积**：从编辑器回读（docx_to_md → markdown_to_blocks）时，首行标题
-    又变成一个块；下一次导出多出一行标题，再回读又多一个（实测：每回读一轮多一
-    个，标题能堆成一串）。
+    而且它会**累积**：回读一轮多存一个同名块，下一轮导出就多一行标题，再回读又多
+    一个（实测：标题能堆成一串）。这里按「同名」剥，才能一次剥干净。
 
     为什么按「同名」而不是「一律剥掉」：文档标题只出现在最前面，且只有与
     draft.title 相同的那几行才是重复产物。title 未知（空）时一律保留，别把内容
@@ -833,17 +840,23 @@ ATTR_RE = re.compile(r"(\w+)\s*=\s*\"([^\"]*)\"")
 
 
 def _parse_doc_style(text: str) -> dict:
-    """解析 <doc-style …/>：整篇样式（字体 / 字号 / 行距）。
+    """解析 <doc-style …/>：样式（字体 / 字号 / 行距）+ 可选的作用域。
 
     字段走白名单 + 范围校验：这些值会**直接写进 docx**，字号传成 0 或 9999，
     用户拿到的就是一份打不开或没法看的文档——宁可不认。
+
+    `anchor="段落编号"` 表示**只改那一段**（用户在编辑器里选中了某处说「字体变大」）。
+    没有 anchor 就是整篇统一——历史上只有整篇这一个口径，于是用户明明选中了
+    一段，模型照样输出不带 anchor 的 <doc-style/>，全篇被一起放大。
     """
     style: dict = {}
+    scope = ""
     for attrs in _DOC_STYLE_RE.findall(text or ""):
         meta = {
             k.lower().replace("_", "-"): v
             for k, v in _DOC_STYLE_ATTR_RE.findall(attrs or "")
         }
+        scope = scope or (meta.get("anchor") or "").strip()
         for key, field in (
             ("body-font", "font"),
             ("body-size", "size_pt"),
@@ -867,6 +880,8 @@ def _parse_doc_style(text: str) -> dict:
                 style[field] = value
             else:
                 style[field] = raw[:64]
+    if scope:
+        style["_anchor"] = scope
     return style
 
 
@@ -882,11 +897,14 @@ _STYLE_FIELDS: tuple[tuple[str, str, str], ...] = (
 )
 
 
-def _style_summary(doc_style: dict) -> str:
+def _style_summary(doc_style: dict, *, whole: bool = True) -> str:
     """把 <doc-style/> 的落地结果说成一句人话。
 
     少了这句，用户只看到文档自己刷新了一下，不知道是 AI 改了样式，会当成
     「AI 说改好了却没生效」——这正是前端那条注释要防的事。
+
+    `whole=False` 用于**按段生效**的样式：说成「正文字号 16 磅」而不是「整篇…」，
+    否则用户会以为整篇都被放大了——他明明只选中了一段。
 
     `%g` 去掉浮点尾巴：14.0 说成「14 磅」而不是「14.0 磅」，1.15 保持原样。
     """
@@ -897,7 +915,10 @@ def _style_summary(doc_style: dict) -> str:
         value = doc_style[field]
         shown = f"{value:g}" if isinstance(value, (int, float)) else str(value)
         items.append(f"{label} {shown}{unit}")
-    return "整篇样式已更新：" + "、".join(items) if items else "整篇样式已更新"
+    if not items:
+        return "样式已更新" if not whole else "整篇样式已更新"
+    prefix = "整篇样式已更新：" if whole else ""
+    return prefix + "、".join(items)
 
 
 def parse_model_output(text: str) -> dict:
@@ -930,13 +951,17 @@ OUTPUT_CONTRACT = """# 改稿输出契约（严格遵守）
 - 只有需要重写整篇时才用 <final-doc>…</final-doc> 包裹完整全文
 - patch 之外可以写一两句说明你的改动理由；<patch> 里不要放代码块围栏
 
-整篇样式（字体 / 字号 / 行距）——**只在用户明确要求时写**：
+样式（字体 / 字号 / 行距）——**只在用户明确要求时写**：
 - <doc-style body-font="宋体" body-size="14" line-spacing="1.5"/>
 - 可用字段：body-font、body-size、heading-font、heading-size、line-spacing
 - 字号写磅值：五号=10.5、小四=12、四号=14、小三=15、三号=16、小二=18、二号=22
 - 行距写倍数：1.5 = 1.5 倍行距
 - 「调大一档」这类相对说法，先按常见字号换算成磅值再写进去（如 10.5 → 14）
-- 它管的是**整篇统一**的样式。要强调某几个字，用 Markdown 的 **粗体** 就够了
+- **作用域**：用户选中了某段（本节给了「本次要改的位置」）时必须写 anchor，只改那一段：
+  - <doc-style anchor="N" body-size="16"/> —— 只改第 N 段
+  - 用户明确要「整篇/全文」变时才写 anchor="all"：<doc-style anchor="all" body-size="16"/>
+  - 不确定用户要改哪段时，按他选中的范围写，**绝不**在选中场景下省略 anchor
+- 要强调某几个字，用 Markdown 的 **粗体** 就够了
 - 用户没提样式就**不要写**这个标签，也不要为了「看起来更整齐」自作主张改
 
 关于段落编号（最容易错，务必照做）：
@@ -1075,7 +1100,7 @@ def _guard_empty_overwrite(username: str, name: str, draft: dict) -> Optional[st
     的新会话把同名文档覆盖成 10 个字符（只剩标题）。
 
     注意判据是「草稿没有 blocks」而不是「正文为空」：新建会话的草稿只带标题，
-    `draft_to_markdown` 会返回 `# 标题`，非空但**没有任何实质内容**。
+    而标题不进正文，`draft_to_markdown` 返回空串——没有任何实质内容。
     """
     if draft.get("blocks"):
         return None  # 有实质内容：正常覆盖（AI 重写整篇就是要覆盖）
@@ -1134,6 +1159,53 @@ async def _save_draft_docx(username: str, sid: str, draft: dict) -> Optional[str
         return saved
     except Exception as exc:  # noqa: BLE001 落盘失败不该吞掉这一轮结果
         LOG.warning("ai: save to my-docs failed user=%s sid=%s: %s", username, sid, exc)
+        return None
+
+
+async def _apply_scoped_docx_style(
+    username: str, sid: str, draft: dict, anchor: str, style: dict
+) -> Optional[str]:
+    """把**按段**的样式改动直接写进「我的文档」里那份 docx，返回文件名。
+
+    走的是「读 base docx → 只改那一段的 run 格式 → 写回」这条路，与修订链路
+    （`_save_draft_docx_revised`）共用同一个 base：用户选中的那段就活在编辑器
+    开着的那份 docx 里，改它才对。base 不存在（还没导出过）或定位不到段落时
+    返回 None——宁可不动，也不能把格式抹到错的段落上。
+    """
+    if _save_document is None or _read_document is None or not style:
+        return None
+    title = (draft.get("title") or "未命名稿件").strip() or "未命名稿件"
+    try:
+        base_name = _safe_name(f"{title}.docx")
+    except HTTPException:
+        base_name = "未命名稿件.docx"
+    try:
+        base = _read_document(username, base_name)
+    except Exception:  # noqa: BLE001 还没导出过就当没有
+        return None
+    if not base:
+        return None
+    index = int(anchor) if str(anchor).isdigit() else 0
+    blocks = draft.get("blocks") or []
+    before = blocks[index - 1].get("text") or "" if 1 <= index <= len(blocks) else ""
+    try:
+        data, applied = apply_scoped_style(base, style, before=before, index=index)
+    except Exception as exc:  # noqa: BLE001 格式改动失败不影响其余链路
+        LOG.warning("ai: scoped style crashed user=%s sid=%s: %s", username, sid, exc)
+        return None
+    if applied <= 0:
+        LOG.warning(
+            "ai: scoped style missed user=%s sid=%s anchor=%s（base 里没找到该段）",
+            username, sid, anchor,
+        )
+        return None
+    try:
+        saved = _save_document(username, base_name, data)
+        LOG.info("ai: saved scoped style user=%s sid=%s name=%s anchor=%s style=%s",
+                 username, sid, saved, anchor, style)
+        return saved
+    except Exception as exc:  # noqa: BLE001
+        LOG.warning("ai: save scoped style failed user=%s sid=%s: %s", username, sid, exc)
         return None
 
 
@@ -1754,6 +1826,40 @@ async def _land_turn(
     # 一堆文字变更，所以在这里单独落地，不参与下面的「待确认变更」流程。
     style_changed = False
     doc_style = parsed.get("doc_style") or {}
+    # 作用域样式（<doc-style anchor="N"/>）：只改那一段，**不进 styles**。
+    # styles 是整篇口径（md→docx 时统一套用），用户选了一段说「字体变大」却
+    # 全篇被放大，根因就是模型输出了不带 anchor 的整篇指令。
+    #
+    # 作用域判定（按优先级）：
+    # - 模型明确写了 anchor="all" → 整篇（用户确实要全文统一，尊重它）；
+    # - 其余情况一律以**用户的选区段落**为准：模型写了 N 或漏写了 anchor，
+    #   都收敛到用户选中处——落点按用户的意图纠偏，与下面的 patch 校正同理。
+    style_scope = str(doc_style.pop("_anchor", "") or "").strip()
+    if style_scope.lower() in ("all", "doc", "whole", "document"):
+        style_scope = ""
+    elif anchor and anchor.isdigit():
+        style_scope = anchor
+    if style_scope:
+        saved_name = (
+            await _apply_scoped_docx_style(username, sid, draft, style_scope, doc_style)
+            if autosave
+            else None
+        )
+        events.append({
+            "type": "style",
+            "scope": "selection",
+            "anchor": style_scope,
+            "styles": doc_style,
+            "message": f"第 {style_scope} 段：{_style_summary(doc_style, whole=False)}",
+            "draft": public_draft(draft),
+        })
+        if saved_name:
+            events.append({"type": "saved", "name": saved_name})
+        LOG.info(
+            "ai: scoped doc style sid=%s anchor=%s style=%s saved=%s",
+            sid, style_scope, doc_style, bool(saved_name),
+        )
+        doc_style = {}  # 已经按段落地，不再当整篇指令处理
     if doc_style:
         merged_style = {**(draft.get("styles") or {}), **doc_style}
         if merged_style != (draft.get("styles") or {}):
@@ -2440,11 +2546,20 @@ async def _convert_docx(
 
 
 @router.post("/sessions/{sid}/docx")
-async def export_docx(request: Request, sid: str) -> JSONResponse:
+async def export_docx(request: Request, sid: str, blank: int = 0) -> JSONResponse:
     """草稿 → .docx 写进「我的文档」，返回文件名（前端据此用 Collabora 打开）。
 
     刻意不做在每轮保存里：转换要起 Python 子进程，塞进每轮对话会拖慢出字；
     这里按需触发，只在用户真的要打开编辑器时转一次。
+
+    `blank=1` 是**撰写室打开编辑器的载体请求**，与「出稿」分开：
+
+    - 默认（用户主动出稿/保存）：空稿回 400「还没有内容」。正文里没有内容时
+      产出一份 docx 没有意义，历史上正是「空稿兜底造标题」把同名文档写成了
+      10 个字符，把用户写了半天的正文整份覆盖掉。
+    - `blank=1`（撰写室一进来就是 Collabora，用户得先有个文档才能写）：空稿给
+      一份**完全空白**的 docx 作载体。Collabora 只认 docx，没文件就没法起内核，
+      这里没有选择；但它**不含任何标题**——标题不进正文是硬口径，载体也不能破。
     """
     username = await _user(request)
     root = session_dir(username, sid)
@@ -2452,14 +2567,15 @@ async def export_docx(request: Request, sid: str) -> JSONResponse:
         raise HTTPException(status_code=503, detail="存储服务不可用")
     draft = load_draft(username, sid)
     markdown = draft_to_markdown(draft)
-    if not markdown:
-        # 空稿也要能开编辑器：撰写室一进来就是 Collabora，用户可以先在文档里
-        # 自己写，或一边写一边让 AI 改。给一份只有标题的空文档即可。
-        title_only = (draft.get("title") or "").strip() or "未命名稿件"
-        markdown = f"# {title_only}\n"
+    empty = not markdown.strip()
+    if empty and not blank:
+        raise HTTPException(status_code=400, detail="还没有内容")
+    # 空稿载体：空文档转换需要一个非空的字节流，用一个空段落喂转换器，产出的是
+    # 真正的空白 docx（正文里没有任何一个字）
+    src = (markdown if not empty else "\n").encode("utf-8")
 
     data = await _convert_docx(
-        tool="md_to_docx.py", src=markdown.encode("utf-8"),
+        tool="md_to_docx.py", src=src,
         src_suffix=".md", out_suffix=".docx", root=root,
         prefer=_session_skill(username, sid),
     )
@@ -2472,7 +2588,8 @@ async def export_docx(request: Request, sid: str) -> JSONResponse:
     if kept:
         return JSONResponse({"saved": kept, "draft": public_draft(draft)})
     saved = _save_document(username, name, data)
-    LOG.info("ai: exported docx user=%s sid=%s name=%s bytes=%d", username, sid, saved, len(data))
+    LOG.info("ai: exported docx user=%s sid=%s name=%s blank=%s bytes=%d",
+             username, sid, saved, bool(empty), len(data))
     return JSONResponse({"saved": saved, "draft": public_draft(draft)})
 
 
@@ -2490,10 +2607,9 @@ async def draft_html(request: Request, sid: str) -> JSONResponse:
     root = session_dir(username, sid)
     draft = load_draft(username, sid)
     markdown = draft_to_markdown(draft)
-    if not markdown:
-        # 与 /docx 同口径：空稿给一份只有标题的文档
-        title_only = (draft.get("title") or "").strip() or "未命名稿件"
-        markdown = f"# {title_only}\n"
+    if not markdown.strip():
+        # 与 /docx 同口径：空稿没有正文，不注入任何内容（更不能注入一个标题）
+        return JSONResponse({"html": "", "draft": public_draft(draft)})
 
     data = await _convert_docx(
         tool="md_to_docx.py", src=markdown.encode("utf-8"),

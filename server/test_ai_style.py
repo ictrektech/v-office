@@ -259,5 +259,107 @@ class StyleLandTurnTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([e for e in events if e.get("type") == "style"], [])
 
 
+class ScopedStyleTest(unittest.IsolatedAsyncioTestCase):
+    """**按段**样式（<doc-style anchor="N"/>）：
+
+    用户在编辑器里选中一段说「字体变大」，结果**整篇**被一起放大——根因是
+    样式只有整篇一个口径，模型输出的 <doc-style/> 不带作用域，落地时统一套到
+    全文。这组测试锁住新口径：带 anchor 只改那一段、用户选区优先、真 docx 上
+    只有选中段的 run 变样。
+    """
+
+    def setUp(self):
+        if ai._skill_tool("md_to_docx.py", "") is None:
+            self.skipTest("技能包未就绪（md_to_docx.py 不在 SKILLS_DIR），跳过转换测试")
+
+    async def _base_docx(self) -> bytes:
+        md = "## 一\n\n第一段正文。\n\n## 二\n\n第二段正文。\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            data = await ai._convert_docx(
+                tool="md_to_docx.py", src=md.encode("utf-8"),
+                src_suffix=".md", out_suffix=".docx", root=Path(tmp), prefer="",
+            )
+        return data
+
+    def test_parse_anchor_scope(self):
+        out = ai.parse_model_output('<doc-style anchor="2" body-size="16"/>')
+        self.assertEqual(
+            out["doc_style"], {"size_pt": 16.0, "_anchor": "2"},
+            "anchor 是作用域，不是样式字段，但必须被解析出来",
+        )
+
+    async def test_scoped_land_turn_never_touches_whole_doc_styles(self):
+        """按段样式**不进**草稿 styles：styles 是整篇口径，混进去下次整篇导出
+        会把选区字号铺到全文——等于换一种方式复发原 bug。"""
+        uid, sid = "tester", "scoped-style-land"
+        ai.save_draft(uid, sid, {
+            "title": "测试稿",
+            "blocks": [{"heading": "一", "text": "第一段"}, {"heading": "二", "text": "第二段"}],
+        })
+        parsed = ai.parse_model_output('<doc-style anchor="2" body-size="18"/>')
+        events = await ai._land_turn(
+            uid, sid, parsed, save=True, autosave=False, anchor="2"
+        )
+        styles = [e for e in events if e.get("type") == "style"]
+        self.assertEqual(len(styles), 1)
+        self.assertEqual(styles[0].get("scope"), "selection")
+        self.assertEqual(styles[0].get("anchor"), "2")
+        self.assertNotIn("整篇", styles[0]["message"])
+        # 草稿 styles 必须纹丝不动
+        self.assertEqual(ai.load_draft(uid, sid).get("styles") or {}, {})
+
+    async def test_selection_anchor_beats_model_anchor(self):
+        """模型把段号猜错时，以用户的选区为准（与 patch 锚点校正同一口径）。"""
+        uid, sid = "tester", "scoped-style-anchor-fix"
+        ai.save_draft(uid, sid, {
+            "title": "测试稿",
+            "blocks": [{"heading": "一", "text": "第一段"}, {"heading": "二", "text": "第二段"}],
+        })
+        parsed = ai.parse_model_output('<doc-style anchor="1" body-size="18"/>')
+        events = await ai._land_turn(
+            uid, sid, parsed, save=True, autosave=False, anchor="2"
+        )
+        styles = [e for e in events if e.get("type") == "style"]
+        self.assertEqual(len(styles), 1)
+        self.assertEqual(styles[0].get("anchor"), "2")
+
+    async def test_only_target_paragraph_grows(self):
+        """真 docx 上验证：只有选中段变大，其余段一字不动。"""
+        from docx import Document
+        import io
+
+        base = await self._base_docx()
+        data, applied = __import__("docx_revise").apply_scoped_style(
+            base, {"size_pt": 18.0}, before="第二段正文。", index=0
+        )
+        self.assertEqual(applied, 1)
+        before = Document(io.BytesIO(base))
+        after = Document(io.BytesIO(data))
+        def sizes(doc):
+            return {
+                p.text: [r.font.size.pt for r in p.runs if r.font.size]
+                for p in doc.paragraphs
+            }
+        target = [k for k in sizes(after) if "第二段" in k]
+        other = [k for k in sizes(after) if "第一段" in k]
+        self.assertTrue(target and other, f"段落结构变了：{list(sizes(after))}")
+        self.assertEqual(
+            sizes(after)[target[0]], [18.0], "选中的段落没变大"
+        )
+        self.assertEqual(
+            sizes(before)[other[0]], sizes(after)[other[0]],
+            "没选中的段落也被改了——这就是用户报的全篇变大",
+        )
+
+    async def test_miss_leaves_doc_untouched(self):
+        """定位不到段落就返回原文：改错段落比不改更糟。"""
+        base = await self._base_docx()
+        data, applied = __import__("docx_revise").apply_scoped_style(
+            base, {"size_pt": 18.0}, before="不存在的段落", index=99
+        )
+        self.assertEqual(applied, 0)
+        self.assertEqual(data, base)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -387,11 +387,18 @@ export async function getDocChars(sid: string, name: string): Promise<number> {
  *
  * 这是打开编辑器内核（Collabora）的前置步骤：内核只认 docx/odt，而草稿是
  * Markdown。转换用技能包里的确定性脚本做（服务端起子进程），所以结果稳定。
+ *
+ * `blank`：**打开编辑器的载体请求**。撰写室一进来就是 Collabora，空稿也得有个
+ * 文件才能起内核，这时传 true，服务端给一份完全空白（不含标题）的 docx；
+ * 用户主动「出稿」时不传——空稿会被服务端回「还没有内容」，不产出只有标题的
+ * 文件（那会把同名文档覆盖成十几字节，把用户写好的正文弄丢）。
  */
 export async function exportAiDocx(
   sid: string,
+  opts: { blank?: boolean } = {},
 ): Promise<{ saved: string; draft: AiDraft }> {
-  const resp = await aiFetch(`/sessions/${encodeURIComponent(sid)}/docx`, {
+  const query = opts.blank ? "?blank=1" : "";
+  const resp = await aiFetch(`/sessions/${encodeURIComponent(sid)}/docx${query}`, {
     method: "POST",
   });
   return jsonOrThrow<{ saved: string; draft: AiDraft }>(resp);

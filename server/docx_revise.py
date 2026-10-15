@@ -139,7 +139,106 @@ def _delete_tracked(paragraph, rev: _Revisions) -> None:
     _mark_paragraph_mark("del", paragraph, rev)
 
 
-def apply_revisions(docx_bytes: bytes, patches: list[dict]) -> bytes:
+def _runs_of(paragraph) -> list:
+    """段落里所有 run（含被 w:ins/w:del 包着的）。"""
+    runs = list(paragraph.iter(_q("w:r")))
+    # 只要有文字 run 才值得改格式；纯空段（书签、分隔符）跳过
+    return [r for r in runs if r.find(_q("w:t")) is not None]
+
+
+def _ensure_rPr(run):
+    """取 run 的 <w:rPr>，没有就建（必须是 run 的第一个子元素）。"""
+    rPr = run.find(_q("w:rPr"))
+    if rPr is None:
+        rPr = run.makeelement(_q("w:rPr"), {})
+        run.insert(0, rPr)
+    return rPr
+
+
+def _set_child(parent, tag: str, attrs: dict):
+    """在 rPr/pPr 里设一个子元素，已存在就改属性。"""
+    el = parent.find(_q(tag))
+    if el is None:
+        el = parent.makeelement(_q(tag), {})
+        parent.append(el)
+    for k, v in attrs.items():
+        el.set(_q(f"w:{k}"), v)
+    return el
+
+
+def _style_scope_paragraph(doc, *, before: str = "", index: int = 0):
+    """定位「用户选中的那一段」。
+
+    先按草稿里那段的原文匹配（最稳，用户改过字也能对上），匹配不上再按段落序号
+    取第 N 段并要求它非空——宁可改不到，也不能改错段落：改错比不改更糟。
+    """
+    p = _find_paragraph(doc, before) if before else None
+    if p is not None:
+        return p
+    if index > 0:
+        paras = [x for x in doc.element.body.iter(_q("w:p")) if _paragraph_text(x).strip()]
+        if index <= len(paras):
+            return paras[index - 1]
+    return None
+
+
+def apply_scoped_style(
+    docx_bytes: bytes, style: dict, *, before: str = "", index: int = 0
+) -> tuple[bytes, int]:
+    """**只**给某一段套字号/字体/行距（用户在编辑器里选中了一段）。
+
+    为什么必须直改 docx 而不能走 md→docx：那条路是整篇重建，样式参数
+    （`--body-size` 之类）作用于**全文**，用户选了一段说「字体变大」，结果整篇
+    被一起放大——实测里就是这么全篇变大的。局部格式只能以直接格式（run 级
+    rPr / 段落级 pPr）写在现有 docx 上。
+
+    不打 w:rPrChange：格式修订在 Collabora/Word 里的显示与接受行为都不够稳，
+    这里的取舍是「字号立刻生效且可手工改回来」，不做逐条审阅。
+    返回 (新字节, 命中段数)；定位不到返回 (原字节, 0)。
+    """
+    if not style:
+        return docx_bytes, 0
+    doc = Document(io.BytesIO(docx_bytes))
+    paragraph = _style_scope_paragraph(doc, before=before, index=index)
+    if paragraph is None:
+        return docx_bytes, 0
+
+    runs = _runs_of(paragraph)
+    size_pt = style.get("size_pt")
+    font = style.get("font")
+    if not runs or not (size_pt or font):
+        return docx_bytes, 0
+
+    for run in runs:
+        rPr = _ensure_rPr(run)
+        if size_pt:
+            # w:sz 的单位是**半磅**（14 磅 → 28）
+            half = str(int(round(float(size_pt) * 2)))
+            _set_child(rPr, "w:sz", {"val": half})
+            _set_child(rPr, "w:szCs", {"val": half})
+        if font:
+            _set_child(
+                rPr, "w:rFonts",
+                {"ascii": str(font), "hAnsi": str(font), "eastAsia": str(font),
+                 "cs": str(font)},
+            )
+
+    spacing = style.get("line_spacing")
+    if spacing:
+        pPr = paragraph.find(_q("w:pPr"))
+        if pPr is None:
+            pPr = paragraph.makeelement(_q("w:pPr"), {})
+            paragraph.insert(0, pPr)
+        # w:line 单位是 1/240 行（1.5 倍 → 360），auto 规则 = 多倍行距
+        _set_child(pPr, "w:spacing", {"line": str(int(round(float(spacing) * 240))),
+                                      "lineRule": "auto"})
+
+    out = io.BytesIO()
+    doc.save(out)
+    return out.getvalue(), 1
+
+
+def apply_revisions(docx_bytes: bytes, patches: list[dict]) -> tuple[bytes, int]:
     """在 docx 上应用 AI 改动，产出带修订标记的新 docx 字节。
 
     patches 每一项：

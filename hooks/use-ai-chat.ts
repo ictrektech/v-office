@@ -154,8 +154,22 @@ export interface UseAiChat {
   removeArtifact: (key: string) => Promise<void>;
   saveNow: () => Promise<void>;
   importDraft: (markdown: string, title?: string) => Promise<void>;
-  /** 草稿 → docx 落「我的文档」，返回文件名（打开编辑器内核用） */
-  exportDocx: () => Promise<string>;
+  /**
+   * **按段**样式已落地的信号（递增计数）。
+   *
+   * `<doc-style anchor="N"/>` 直接改 docx、不动草稿，草稿的 updated_at 不变，
+   * 「选区回合结束后按 updated_at 判断要不要重载」的现有机制会漏掉它。这里
+   * 给编辑器一个独立的信号：变了就说明盘上那份 docx 刚被改过（只有那一段），
+   * 该换版本重载。
+   */
+  scopedStyleSeq: number;
+  /**
+   * 草稿 → docx 落「我的文档」，返回文件名（打开编辑器内核用）。
+   *
+   * `blank=true` 只给打开编辑器用：空稿也产出一份**空白** docx 当载体，否则
+   * Collabora 没文件可开。默认 false，空稿会被服务端拒绝（「还没有内容」）。
+   */
+  exportDocx: (blank?: boolean) => Promise<string>;
   /**
    * 取草稿的 HTML（服务端「md→docx→mammoth」单一管线渲染）。
    *
@@ -256,6 +270,8 @@ export function useAiChat(options: {
   const [streaming, setStreaming] = useState(false);
   const [health, setHealth] = useState<AiHealth | null>(null);
   const [lastSaved, setLastSaved] = useState<string | null>(null);
+  /** 按段样式已落地的信号（见接口注释）：style 事件带 scope="selection" 时递增 */
+  const [scopedStyleSeq, setScopedStyleSeq] = useState(0);
   const [blocked, setBlocked] = useState<string | null>(null);
   /** 最近一次「保存到我的文档」的结果：成功给文件名，失败给原因 */
   const [lastSave, setLastSave] = useState<{
@@ -533,6 +549,11 @@ export function useAiChat(options: {
                   const st = (event.draft as AiDraft)?.title;
                   if (st) setDraftTitle(st);
                 }
+                if (event.scope === "selection") {
+                  // 按段样式：docx 已被直接改（只有那一段），草稿的 updated_at
+                  // 没动，得单独发信号让编辑器换版本重载，否则用户看到的还是旧版
+                  setScopedStyleSeq((n) => n + 1);
+                }
                 addNote(String(event.message ?? "已更新整篇样式"));
                 break;
               }
@@ -738,10 +759,16 @@ export function useAiChat(options: {
     [draftTitle, ensureSession],
   );
 
-  /** 出稿：草稿 → docx。失败往上抛，由栏目页决定怎么提示（这里不吞） */
-  const exportDocx = useCallback(async (): Promise<string> => {
+  /**
+   * 出稿：草稿 → docx。失败往上抛，由栏目页决定怎么提示（这里不吞）。
+   *
+   * `blank=true` 是打开编辑器的载体请求：空稿也给一份空白 docx，否则 Collabora
+   * 没有文件可开，撰写室一进来就是死的。默认为 false —— 主动出稿时空稿该被
+   * 明确拒绝（服务端回「还没有内容」），不该顺手产出一份只有标题的文件。
+   */
+  const exportDocx = useCallback(async (blank = false): Promise<string> => {
     const sid = await ensureSession();
-    const res = await exportAiDocx(sid);
+    const res = await exportAiDocx(sid, { blank });
     setDraft(res.draft);
     if (res.draft?.title) setDraftTitle(res.draft.title);
     setLastSaved(res.saved);
@@ -876,6 +903,7 @@ export function useAiChat(options: {
     health,
     lastSaved,
     lastSave,
+    scopedStyleSeq,
     blocked,
     pendingChanges,
     send,

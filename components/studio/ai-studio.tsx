@@ -295,6 +295,8 @@ export function AiStudio({
    * 有没有落改动——没落就不重载，免得白闪一下。
    */
   const scopedTurnRef = useRef<number | null>(null);
+  /** 上次已处理过的按段样式信号（与 chat.scopedStyleSeq 比对，变了才重载） */
+  const scopedStyleSeenRef = useRef(0);
   const [editorUrl, setEditorUrl] = useState<string | null>(null);
   /** 编辑器里打开的那份 docx（回读/重载都按它） */
   const [editorDoc, setEditorDoc] = useState<string | null>(null);
@@ -481,9 +483,14 @@ export function AiStudio({
       try {
         // reexport=false：docx 已由后端写好（可能带 AI 修订），只换会话重新读盘，
         // 千万不能重新导出——那会把未审完的修订覆盖成干净稿。
+        //
+        // blank=true：这里是**载体的活**（撰写室一进来就是 Collabora），空稿也得
+        // 有个文件才能起内核，所以向服务端要一份空白 docx；有内容时它与普通导出
+        // 完全等价。用户在 UI 上主动「出稿」走的是另一条路（不传 blank），空稿
+        // 会被明确拒绝——那份只有标题的 docx 就是从那条兜底里来的。
         let name = editorDoc ?? "";
         if (reexport || !name) {
-          name = await chat.exportDocx();
+          name = await chat.exportDocx(true);
         }
         let state = await fetchCollaboraStatus().catch(() => "unknown" as const);
         if (state === "warming_up") {
@@ -513,7 +520,7 @@ export function AiStudio({
         );
         if (!session && !reexport) {
           // 本地还没有这份 docx（比如刚换过标题）：补一次导出再开
-          name = await chat.exportDocx();
+          name = await chat.exportDocx(true);
           versionRef.current += 1;
           session = await fetchCollaboraSession(
             name,
@@ -790,14 +797,22 @@ export function AiStudio({
     if (scopedTurnRef.current === null || chat.streaming) return;
     const sentAt = scopedTurnRef.current;
     scopedTurnRef.current = null;
-    const changed = (chat.draft?.updated_at ?? 0) !== sentAt;
+    // 两条触发线：
+    // - 草稿变了（updated_at ≠ 发送时）→ patch 落了，带修订的 docx 已写盘；
+    // - scopedStyleSeq 变了 → 按段样式（<doc-style anchor="N"/>）直接改了 docx。
+    //   样式不动草稿，updated_at 不变，只靠上一条会漏——「选中一段说字体变大」
+    //   恰好就是这条线，漏了的话文档重载不出来，用户以为没生效。
+    const changed =
+      (chat.draft?.updated_at ?? 0) !== sentAt ||
+      scopedStyleSeenRef.current !== chat.scopedStyleSeq;
+    scopedStyleSeenRef.current = chat.scopedStyleSeq;
     if (changed && view === "editor" && editorDoc) {
       // 标记这一版已经「送回去」：不标记的话，重载完成后注入 effect 会发现
       // 这一版没注入过，把整篇再粘一遍——刚载入的修订视图立刻被冲掉。
       injectedDraftAtRef.current = chat.draft?.updated_at ?? null;
       void openEditor(false);
     }
-  }, [chat.streaming, chat.draft?.updated_at, view, editorDoc, openEditor]);
+  }, [chat.streaming, chat.draft?.updated_at, chat.scopedStyleSeq, view, editorDoc, openEditor]);
 
   /** 用户显式撤过的作用域文本（点 X）：记住它，轮询才不会把 chip 请回来 */
   const dismissedSelectionRef = useRef<string | null>(null);
@@ -953,6 +968,9 @@ export function AiStudio({
       }
       // 选区作用域：记下发送时的稿子版本，回合结束后据此判断要不要重载
       scopedTurnRef.current = editorSelection ? (chat.draft?.updated_at ?? 0) : null;
+      // 同步按段样式信号的基线：只认**这一轮**新落地的样式，别把上一轮没处理的
+      // 旧信号也算进来（否则会凭空多一次重载）
+      scopedStyleSeenRef.current = chat.scopedStyleSeq;
       await chat.send(text, {
         ...options,
         anchor: options?.anchor ?? editorSelection?.anchor ?? selectedAnchor,
