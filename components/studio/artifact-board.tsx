@@ -118,13 +118,13 @@ export function ArtifactBoard({
                   <Check className="h-3 w-3" />
                   {t({
                     id: "Artifact ready",
-                    message: "ready",
+                    message: "已完成",
                   })}
                 </span>
               ) : null}
               {isActive ? (
                 <span className="rounded-full bg-[#D4542F]/10 px-2 py-0.5 text-[12px] font-semibold text-[#D4542F]">
-                  {t({ id: "Editing", message: "Editing" })}
+                  {t({ id: "Editing", message: "编辑中" })}
                 </span>
               ) : null}
             </h3>
@@ -137,13 +137,13 @@ export function ArtifactBoard({
               {found
                 ? t({
                     id: "Artifact stats",
-                    message: "{chars} chars · updated {at}",
+                    message: "{chars} 字 · {at} 更新",
                     values: {
                       chars: String(found.chars ?? 0),
                       at: new Date((found.updated_at ?? 0) * 1000).toLocaleString(),
                     },
                   })
-                : t({ id: "Not drafted yet", message: "Not drafted yet" })}
+                : t({ id: "Not drafted yet", message: "还没起草" })}
             </p>
           </div>
         </div>
@@ -161,8 +161,8 @@ export function ArtifactBoard({
               <Sparkles className="h-4 w-4" />
             )}
             {found
-              ? t({ id: "Redraft", message: "Redraft" })
-              : t({ id: "Draft it", message: "Draft it" })}
+              ? t({ id: "Redraft", message: "重新起草" })
+              : t({ id: "Draft it", message: "起草这份" })}
           </button>
           {found ? (
             <>
@@ -173,7 +173,7 @@ export function ArtifactBoard({
                 className="inline-flex items-center gap-1.5 rounded-full bg-white px-3.5 py-2 text-[14px] font-medium text-[#1C1C1E] ring-1 ring-black/[0.07] transition hover:bg-[#F2F2F7] active:scale-[0.98] disabled:opacity-40 dark:bg-white/10 dark:text-white"
               >
                 <FileText className="h-4 w-4" />
-                {t({ id: "Preview", message: "Preview" })}
+                {t({ id: "Preview", message: "预览" })}
               </button>
               <button
                 type="button"
@@ -181,7 +181,7 @@ export function ArtifactBoard({
                 disabled={!!busyKey}
                 className="inline-flex items-center gap-1.5 rounded-full bg-white px-3.5 py-2 text-[14px] font-medium text-[#1C1C1E] ring-1 ring-black/[0.07] transition hover:bg-[#F2F2F7] active:scale-[0.98] disabled:opacity-40 dark:bg-white/10 dark:text-white"
               >
-                {t({ id: "Save to my documents", message: "Save to My Documents" })}
+                {t({ id: "Save to my documents", message: "保存到我的文档" })}
               </button>
             </>
           ) : null}
@@ -233,7 +233,7 @@ export function ArtifactBoard({
           <p className="mb-4 rounded-2xl bg-[#FEF2F2] px-4 py-3 text-[14px] text-[#DC2626]">{error}</p>
         ) : null}
 
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-4">
           {main.map(card)}
         </div>
 
@@ -242,7 +242,7 @@ export function ArtifactBoard({
             <h3 className="mb-3 mt-8 text-[17px] font-semibold text-[#0F172A] dark:text-white">
               {extraTitle ?? t({ id: "Open questions", message: "Open questions" })}
             </h3>
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">{extra.map(card)}</div>
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-4">{extra.map(card)}</div>
           </>
         ) : null}
       </div>
