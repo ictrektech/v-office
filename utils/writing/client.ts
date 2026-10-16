@@ -137,7 +137,7 @@ export async function uploadSourceFile(file: File): Promise<UploadedSource> {
     uploadId: meta.id,
     name: parsed.name,
     size: parsed.size,
-    chars: parsed.chars,
+    chars: parsed.chars ?? 0,
     ...(parsed.parseError ? { parseError: parsed.parseError } : {}),
   };
 }

@@ -28,6 +28,14 @@ COPY requirements.txt ./
 ARG PIP_INDEX_URL=https://pypi.org/simple
 RUN pip install --no-cache-dir -i "${PIP_INDEX_URL}" -r requirements.txt
 
+# 技能包脚本自己要用、但不属于服务端运行时的依赖。构建时一次装好，
+# agent 的 bash 才能直接跑 tools/*.py：
+#   - pymupdf：解析 PDF（材料原件、审查意见通知书）
+#   - chromium：mermaid_render.py / browser.py 要驱动真浏览器（画框图、查国知局）。
+#     playwright 这个包本身在 requirements.txt 里，这里补的是它要驱动的那台"浏览器"。
+RUN pip install --no-cache-dir -i "${PIP_INDEX_URL}" pymupdf \
+ && python -m playwright install --with-deps chromium
+
 # apt 源。国内构建必配：官方 deb.debian.org 实测 1500s 还在爬 Packages 索引
 # （libreoffice-writer 是这一步的大头，几百 MB），换清华源同样的 update 只要 3s。
 # 置空 APT_MIRROR="" 即回退官方源（境外构建机或镜像已就位时用）。

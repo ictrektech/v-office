@@ -230,7 +230,7 @@ export function AiSettingsSection() {
                   {t({
                     id: "Allow local commands hint",
                     message:
-                      "Off by default: the agent can only read materials and write drafts. Turn it on only if you need the skill's scripts to run — it also grants shell access (the agent runs as a non-root user, with network/install commands forbidden by policy).",
+                      "On by default: the skill packages do most of their work in tools/*.py (format conversion, material gates, claim audits, Word export), so the agent needs shell to run them. It runs as a non-root user inside its own session directory, with network/install commands forbidden by policy.",
                   })}
                 </span>
               </span>

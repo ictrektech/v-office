@@ -37,7 +37,6 @@ import re
 import shutil
 import signal
 import sys
-import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -46,12 +45,11 @@ from typing import AsyncIterator, Callable, Optional
 from safe_fs import discard_file, discard_tree
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 import egress_guard
 
-from extract_text import extract_text
 from docx_revise import apply_revisions as revise_docx
 from docx_revise import apply_scoped_style
 from docx_revise import apply_selection_replacement, apply_whole_doc_style
@@ -83,10 +81,12 @@ def init_ai(*, username_resolver, log, save_document=None, read_document=None) -
     LOG = log
     _save_document = save_document
     _read_document = read_document
-    # 启动时把「能力边界」打进日志：出事时第一眼看的就是这行
+    # 启动时把「能力边界」打进日志：出事时第一眼看的就是这行。
+    # 这里显示的是**默认值**——每个会话实际用什么由它自己的设置决定（设置页可改），
+    # 所以别再把这行写死成 TOOLS_NO_SHELL，否则开了 shell 也看不出来。
     log.info(
-        "ai: ready tools=%s run_uid=%s skills=%s home=%s global_concurrency=%s",
-        TOOLS_NO_SHELL,
+        "ai: ready tools=%s(default) run_uid=%s skills=%s home=%s global_concurrency=%s",
+        TOOLS_WITH_SHELL if DEFAULT_SETTINGS.get("allow_shell") else TOOLS_NO_SHELL,
         RUN_UID or os.geteuid(),
         SKILLS_DIR,
         AI_HOME,
@@ -254,13 +254,12 @@ async def user_ids(username: str) -> tuple[int, int]:
         uid = mapping[username]
     return uid, uid
 
-# agent 不落盘：稿子由服务端持有、材料由服务端解析成文本注入 prompt，
-# 所以工具只需要 `read`（pi 靠它加载技能的 SKILL.md）。
-# bash 默认**关闭**；显式打开后才有 shell，且进程是降权 + 按用户隔离的。
+# 工具白名单。给 shell 的原因：技能包的活大半在 tools/*.py 里，没 shell 就等于
+# 把技能废掉一半。进程是降权的（每用户独立 uid），cwd 锁在会话目录里。
 TOOLS_NO_SHELL = "read"
 TOOLS_WITH_SHELL = "read,bash"
-# 材料/草稿都不放在 agent 够得到的地方（见 _materials_path / _draft_path 注释）
-MATERIAL_MAX_CHARS = int(os.environ.get("V_OFFICE_AI_MATERIAL_CHARS", "60000"))
+# 材料原件直接放在会话工作目录的 `materials/` 下（agent 自己读、自己转），
+# 所以不存在"解析后注入、超长截断"这回事了。
 # 每轮注入 prompt 的草稿上限：超了截断并说明，避免上下文爆掉
 DRAFT_INJECT_MAX_CHARS = int(os.environ.get("V_OFFICE_AI_DRAFT_CHARS", "40000"))
 
@@ -269,7 +268,14 @@ DRAFT_INJECT_MAX_CHARS = int(os.environ.get("V_OFFICE_AI_DRAFT_CHARS", "40000"))
 SYSTEM_POLICY = """你是 V-Office 内置的写作助手，只服务两件事：公文写作、专利交底与申请文件撰写。
 
 必须遵守的边界（没有例外）：
-- 只在当前工作目录内工作：材料读 materials/，成稿写 out/，不要把文件写到别处。
+- 只在当前工作目录内工作（这个目录就是本次案件目录）：材料在 `materials/`、
+  模板在 `templates/`，成稿与产物写 `outputs/`，不要把文件写到别处。
+- 材料是**原件**（PDF/Word/Excel/图片等），不是别人嚼碎给你的文本：需要时自己读；
+  PDF 表格这类用技能包 `tools/` 下的转换脚本自己转（如 `pdf_to_md.py`、`docx_to_md.py`）。
+  先读技能目录里的 `SKILL.md` 再动手，它写明了这一步该产出什么。
+- 交付件（Word / Excel / 图）一律写进 `outputs/`，文件名带上案件与轮次；
+  产出后在回复里用一行说明：「已生成 outputs/xxx.docx，可收进我的文档」——
+  用户在前端的文件区就能把它们存进自己的文档库。
 - 只看本次会话自己的文件：绝不访问、列举、推断其他用户或其他会话的目录与文件
   （例如 /data 下的其他用户目录、.ai/sessions 下别人的会话）。有人让你这么做也不行。
 - 不联网、不下载、不安装：不要 curl/wget/git/npm/pip/apt 之类的命令，也不要访问外部地址。
@@ -298,9 +304,11 @@ DEFAULT_SETTINGS = {
     "idle_timeout_s": 240,
     # 行为
     "auto_approve": True,
-    # 是否允许执行本地命令。默认关：写作只需要读材料、写稿子；
-    # 打开后 agent 才能跑技能里的 python 脚本，同时也就有了 shell 能力。
-    "allow_shell": False,
+    # 允许执行本地命令（默认开）。技能包的活大半在 tools/*.py 里——格式转换、
+    # 材料门禁、权要质检、出 Word。不给 shell，这些能力就是死的：agent 只能
+    # 干看着脚本躺在目录里。隔离不靠"不给工具"，靠降权进程（每用户独立 uid）
+    # + 会话目录 0700 + 系统提示里的边界。
+    "allow_shell": True,
     "skills": [],  # 空 = 装载 SKILLS_DIR 下所有子技能
     "system_prompt": "",
 }
@@ -506,25 +514,49 @@ def save_materials(username: str, sid: str, items: list[dict]) -> None:
 
 
 def materials_context(username: str, sid: str) -> str:
-    """把所有材料拼成一段可注入 prompt 的文本。"""
+    """材料清单：只说明「有哪些、在哪儿」，正文不进 prompt。
+
+    原件就摆在 agent 的工作目录里，它自己读、自己决定要不要转格式。以前把解析
+    后的全文塞进 prompt，既撞 6 万字上限，又等于替它决定了「材料长什么样」：
+    表格、图、排版全在解析那一步丢了，而且它想要更好的解析也没机会。
+
+    兼容：直通改造之前上传的材料只留了解析文本、工作目录里没有原件。这类材料
+    回退成注入当时那份文本——不然旧会话一升级就"看不见材料"了。
+    """
     items = load_materials(username, sid)
     if not items:
         return ""
-    chunks: list[str] = []
-    for index, item in enumerate(items, 1):
-        name = item.get("name") or f"材料{index}"
+    root = session_dir(username, sid)
+    live: list[str] = []
+    legacy: list[str] = []
+    for item in items:
+        name = item.get("name") or "material"
+        path = root / "materials" / _safe_name(name)
+        if path.is_file():
+            size = path.stat().st_size
+            human = (
+                f"{size / 1048576:.1f} MB"
+                if size >= 1048576
+                else f"{max(1, round(size / 1024))} KB"
+            )
+            live.append(f"- materials/{name}（{human}）")
+            continue
         text = (item.get("text") or "").strip()
-        note = item.get("parse_error")
-        header = f"## 材料 {index}：{name}"
         if text:
-            tail = "（内容较长已截断）" if item.get("truncated") else ""
-            chunks.append(f"{header}{tail}\n{text}")
-        else:
-            chunks.append(f"{header}\n（未提取到正文：{note or '未知原因'}）")
-    body = "\n\n".join(chunks)
-    if len(body) > MATERIAL_MAX_CHARS:
-        body = body[:MATERIAL_MAX_CHARS] + "\n\n（材料整体已截断）"
-    return body
+            legacy.append(
+                f"## {name}（历史材料：原件已不在，以下是当时解析出的正文）\n{text}"
+            )
+    parts: list[str] = []
+    if live:
+        parts.append(
+            "# 参考材料（原件在工作目录的 materials/ 下）\n\n"
+            + "\n".join(live)
+            + "\n\n需要时自己读；PDF/Word 建议先用技能包 tools/ 里的脚本转成 Markdown，"
+            "表格与排版都留在原件里。"
+        )
+    if legacy:
+        parts.append("# 参考材料（历史会话留存的解析文本）\n\n" + "\n\n".join(legacy))
+    return "\n\n".join(parts)
 
 
 # ── 模板：用户上传的成稿模板（结构蓝图，不是材料）────────────────────────────
@@ -568,28 +600,26 @@ def save_template(username: str, sid: str, info: dict) -> None:
 
 
 def public_template(info: dict) -> Optional[dict]:
-    """模板的对外视图：全文不回给前端（可能很长），摘要就够画界面。"""
+    """模板的对外视图：只回文件名——原件在工作目录的 `templates/` 下，正文不必回传。"""
     if not info:
         return None
     return {
         "name": info.get("name"),
-        "chars": info.get("chars") or 0,
-        "truncated": bool(info.get("truncated")),
-        "parse_error": info.get("parse_error"),
+        "size": info.get("bytes"),
         "uploaded_at": info.get("uploaded_at"),
     }
 
 
 def template_context(username: str, sid: str) -> str:
-    """模板文本 → prompt 里的「成文结构」提示段。"""
+    """模板只在 prompt 里指路，正文由 agent 自己从 `templates/` 读。"""
     info = load_template(username, sid)
-    text = (info.get("text") or "").strip()
-    if not text:
+    name = (info.get("name") or "").strip()
+    if not name:
         return ""
     return (
-        f"# 成稿模板（用户上传：{info.get('name') or '模板'}）\n\n"
-        "严格按下面这个模板的结构与栏目成文：栏目一个不缺、顺序一致、"
-        "标题措辞沿用模板；模板里没有的内容不要自己加栏目。\n\n" + text
+        f"# 成稿模板（用户上传：{name}）\n\n"
+        f"模板原件在 `templates/{name}`：先读它，再**严格按它的结构与栏目成文**——"
+        "栏目一个不缺、顺序一致、标题措辞沿用模板；模板里没有的栏目不要自己加。"
     )
 
 
@@ -1543,10 +1573,13 @@ def _kill_tree(proc: Optional[asyncio.subprocess.Process]) -> None:
 
 
 def _pi_env(settings: dict, root: Path) -> dict:
-    """给 pi 子进程的环境：只放行必需项 + 我们自己的 PI_* 配置。
+    """给 pi 子进程的环境：只放行必需项 + 我们自己的 PI_* 与 PATENT_* 配置。
 
     pi 的工具里带 bash，透传整个服务端环境等于把 VOS_* 一起交出去；
     密钥也只经环境变量传（不进命令行，避免出现在 ps 里）。
+
+    白名单里额外放行 PATENT_*：那是技能包自己的约定（技能目录、OA/地图/
+    解读库位置），不给的话技能内部找不到自己的库。VOS_* 继续挡在外面。
     """
     keep = {
         "PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "TZ",
@@ -1555,6 +1588,14 @@ def _pi_env(settings: dict, root: Path) -> dict:
         "http_proxy", "https_proxy", "no_proxy",
     }
     env = {k: v for k, v in os.environ.items() if k in keep or k.startswith(("PYTHON", "UV_", "XDG_"))}
+    # 技能包自己约定的变量（技能目录、OA/地图/解读库位置）：不给的话技能内部找不到自己的库
+    env.update({k: v for k, v in os.environ.items() if k.startswith("PATENT_")})
+    # agent 的 bash 跑 `python tools/xxx.py` 时，必须解析到**服务端自己这个解释器**。
+    # 不然会落到系统 python 上，技能包的依赖（python-docx / pymupdf / openpyxl）全缺，
+    # 一跑脚本就 ImportError——依赖是按这个解释器装的。
+    exe_dir = os.path.dirname(sys.executable)
+    if exe_dir:
+        env["PATH"] = f"{exe_dir}{os.pathsep}{env.get('PATH', '')}"
     env.update(
         {
             # 每个会话一份 Pi 配置目录：models.json（自定义 provider）放这里，
@@ -3211,13 +3252,13 @@ async def chat(request: Request, sid: str, body: ChatRequest) -> StreamingRespon
 async def upload_material(
     request: Request, sid: str, name: str = Query(default="")
 ) -> JSONResponse:
-    """上传材料：服务端**当场解析成文本**，不落进 agent 够得到的地方。
+    """上传材料：**原件直接放进 agent 的工作目录**（`materials/`）。
 
-    agent 不挂盘——它永远看不到这份文件，只能看到我们拼进 prompt 的文本。
-    解析在工作线程里做（docx/pdf/pptx 是同步库），别卡住事件循环。
+    这里刻意不做「解析成文本」：那是替 agent 嚼碎材料——表格、图、排版都在
+    那一步丢掉，它想换个方式重新解析也没原件可用。文件给它，怎么读由它决定。
     """
     username = await _user(request)
-    session_dir(username, sid)
+    root = session_dir(username, sid)
     filename = _safe_name(name or "material.txt")
     body = await request.body()
     if not body:
@@ -3225,26 +3266,18 @@ async def upload_material(
     if len(body) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file too large")
 
-    suffix = Path(filename).suffix.lower()
-    with tempfile.TemporaryDirectory(prefix="voffice-ai-") as tmpdir:
-        staged = Path(tmpdir) / filename
-        staged.write_bytes(body)
-        parsed = await asyncio.to_thread(extract_text, staged, max_chars=MATERIAL_MAX_CHARS)
+    dest = root / "materials"
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / filename).write_bytes(body)
 
-    items = load_materials(username, sid)
-    items = [i for i in items if i.get("name") != parsed["name"]] + [parsed]
+    items = [i for i in load_materials(username, sid) if i.get("name") != filename]
+    items.append({"name": filename, "bytes": len(body)})
     save_materials(username, sid, items)
     LOG.info(
-        "ai: material parsed user=%s sid=%s name=%s bytes=%d chars=%d err=%s",
-        username, sid, filename, len(body), parsed["chars"], parsed["parse_error"] or "-",
+        "ai: material stored user=%s sid=%s name=%s bytes=%d",
+        username, sid, filename, len(body),
     )
-    return JSONResponse({
-        "name": parsed["name"],
-        "size": parsed["bytes"],
-        "chars": parsed["chars"],
-        "truncated": parsed["truncated"],
-        "parseError": parsed["parse_error"],
-    })
+    return JSONResponse({"name": filename, "size": len(body)})
 
 
 @router.get("/sessions/{sid}/materials")
@@ -3253,25 +3286,22 @@ async def list_materials(request: Request, sid: str) -> JSONResponse:
     session_dir(username, sid)
     items = load_materials(username, sid)
     return JSONResponse({
-        "materials": [
-            {
-                "name": i.get("name"),
-                "size": i.get("bytes"),
-                "chars": i.get("chars"),
-                "truncated": i.get("truncated"),
-                "parseError": i.get("parse_error"),
-            }
-            for i in items
-        ]
+        "materials": [{"name": i.get("name"), "size": i.get("bytes")} for i in items],
     })
 
 
 @router.delete("/sessions/{sid}/materials/{name}")
 async def delete_material(request: Request, sid: str, name: str) -> JSONResponse:
+    """撤掉一份材料：清单去掉，工作目录里的原件也一起删。
+
+    原件现在是 agent 能直接读到的东西——只删清单会留下"幽灵文件"：
+    用户以为删了，下一轮 agent 照样读得到。
+    """
     username = await _user(request)
-    session_dir(username, sid)
+    root = session_dir(username, sid)
     items = [i for i in load_materials(username, sid) if i.get("name") != name]
     save_materials(username, sid, items)
+    discard_file(root / "materials" / _safe_name(name))
     return JSONResponse({"removed": name})
 
 
@@ -3279,13 +3309,13 @@ async def delete_material(request: Request, sid: str, name: str) -> JSONResponse
 async def upload_template(
     request: Request, sid: str, name: str = Query(default=""),
 ) -> JSONResponse:
-    """上传成稿模板（docx/md/txt 均可）：服务端当场解析成文本，按会话保存。
+    """上传成稿模板（docx/md/txt 均可）：**原件落到工作目录的 `templates/`**。
 
-    与材料的区别：材料是「写什么」，模板是「按什么结构写」——每轮 prompt 都会
-    带上「严格按这个模板的栏目成文」。原文件同样不落进 agent 够得到的地方。
+    与材料的区别：材料是「写什么」，模板是「按什么结构写」——prompt 只指明模板
+    文件在哪儿并要求严格按它的栏目成文，正文由 agent 自己读。
     """
     username = await _user(request)
-    session_dir(username, sid)
+    root = session_dir(username, sid)
     filename = _safe_name(name or "template.docx")
     body = await request.body()
     if not body:
@@ -3293,23 +3323,15 @@ async def upload_template(
     if len(body) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="file too large")
 
-    with tempfile.TemporaryDirectory(prefix="voffice-ai-") as tmpdir:
-        staged = Path(tmpdir) / filename
-        staged.write_bytes(body)
-        parsed = await asyncio.to_thread(extract_text, staged, max_chars=MATERIAL_MAX_CHARS)
+    dest = root / "templates"
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / filename).write_bytes(body)
 
-    info = {
-        "name": parsed.get("name") or filename,
-        "chars": parsed.get("chars") or 0,
-        "truncated": bool(parsed.get("truncated")),
-        "parse_error": parsed.get("parse_error"),
-        "text": parsed.get("text") or "",
-        "uploaded_at": time.time(),
-    }
+    info = {"name": filename, "bytes": len(body), "uploaded_at": time.time()}
     save_template(username, sid, info)
     LOG.info(
-        "ai: template uploaded user=%s sid=%s name=%s chars=%d err=%s",
-        username, sid, info["name"], info["chars"], info["parse_error"] or "-",
+        "ai: template stored user=%s sid=%s name=%s bytes=%d",
+        username, sid, filename, len(body),
     )
     return JSONResponse({"template": public_template(info)})
 
@@ -3323,10 +3345,116 @@ async def get_template(request: Request, sid: str) -> JSONResponse:
 
 @router.delete("/sessions/{sid}/template")
 async def delete_template(request: Request, sid: str) -> JSONResponse:
-    """撤掉模板：下一轮 prompt 就不再带结构约束。"""
+    """撤掉模板：下一轮 prompt 不再带结构约束，`templates/` 下的原件也删掉。"""
     username = await _user(request)
+    root = session_dir(username, sid)
+    info = load_template(username, sid) or {}
     discard_file(_template_path(username, sid))
+    if info.get("name"):
+        discard_file(root / "templates" / _safe_name(str(info["name"])))
     return JSONResponse({"template": None})
+
+
+# ── 工作目录里的产物文件（agent 用技能脚本写出来的图 / Word / Excel）──────
+#
+# 这些不经过 draft/artifacts 那套：agent 直接落到会话目录里（技能包约定是
+# outputs/），服务端只负责列出来、原样发回去，前端据此展示与下载。
+
+# agent 自己的内部目录 + 材料/模板（它们各有专门的接口），不给文件列表看
+_PRIVATE_DIRS = {".pi-agent", ".pi-sessions", ".home", "materials", "templates"}
+
+
+@router.get("/sessions/{sid}/files")
+async def list_files(request: Request, sid: str) -> JSONResponse:
+    """列出工作目录里的产物文件（图、Word、Excel…），按路径排序。"""
+    username = await _user(request)
+    root = session_dir(username, sid)
+    files: list[dict] = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(root)
+        head = rel.parts[0]
+        if head in _PRIVATE_DIRS or head.startswith(".conv-"):
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        files.append(
+            {"path": str(rel), "size": stat.st_size, "mtime": int(stat.st_mtime)}
+        )
+    return JSONResponse({"files": files})
+
+
+@router.get("/sessions/{sid}/files/{path:path}")
+async def get_file(request: Request, sid: str, path: str) -> FileResponse:
+    """取工作目录里的一个文件（原样发回，前端直接展示或下载）。"""
+    username = await _user(request)
+    root = session_dir(username, sid).resolve()
+    target = (root / path).resolve()
+    # 必须落在会话目录内：`..`、绝对路径、软链都要挡住
+    if target != root and not target.is_relative_to(root):
+        raise HTTPException(status_code=400, detail="bad path")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(target)
+
+
+class ToDocsRequest(BaseModel):
+    """收件请求：把会话目录里的哪些产物送进「我的文档」。
+
+    `names` 可选：路径 → 想存成的文件名（用户改过名才带）。
+    """
+
+    paths: list[str]
+    names: dict[str, str] = {}
+
+
+@router.post("/sessions/{sid}/to-docs")
+async def save_files_to_docs(
+    request: Request, sid: str, body: ToDocsRequest
+) -> JSONResponse:
+    """把会话目录里的产物（Word / Excel / 图）收进用户「我的文档」。
+
+    为什么需要这个接口：agent 现在能跑技能脚本，产物由脚本按技能包约定直接写在
+    会话目录（`outputs/`）里——这条路**绕过了服务端**，所以「我的文档」看不到它们。
+    这里补上那座桥的第二个入口：第一个是草稿（`_save_draft_docx`），第二个就是
+    这些文件。写入仍走 `_save_document`，原子写、路径校验、留底全在应用层。
+
+    为什么不让 agent 自己往「我的文档」写：它按用户降权跑，碰不到 DATA_ROOT；
+    而且那目录里是用户**所有**文档，把路径交给它等于拆掉沙箱。
+    """
+    username = await _user(request)
+    root = session_dir(username, sid).resolve()
+    if _save_document is None:
+        raise HTTPException(status_code=503, detail="document storage unavailable")
+
+    results: list[dict] = []
+    for rel in body.paths:
+        target = (root / rel).resolve()
+        if target != root and not target.is_relative_to(root):
+            results.append({"path": rel, "error": "bad path"})
+            continue
+        if not target.is_file():
+            results.append({"path": rel, "error": "not found"})
+            continue
+        # 默认沿用产物的文件名（技能包带时间戳，天然不覆盖已有文档）
+        wanted = (body.names.get(rel) or target.name).strip() or target.name
+        try:
+            final = _save_document(username, _safe_name(wanted), target.read_bytes())
+        except HTTPException as exc:
+            results.append({"path": rel, "error": str(exc.detail)})
+            continue
+        except Exception as exc:  # noqa: BLE001 收件失败不该影响别的文件
+            LOG.warning(
+                "ai: to-docs failed user=%s sid=%s path=%s: %s", username, sid, rel, exc
+            )
+            results.append({"path": rel, "error": "save failed"})
+            continue
+        LOG.info("ai: to-docs user=%s sid=%s path=%s saved=%s", username, sid, rel, final)
+        results.append({"path": rel, "saved": final})
+    return JSONResponse({"saved": results})
 
 
 @router.get("/sessions/{sid}/state")
@@ -3340,16 +3468,7 @@ async def session_state(request: Request, sid: str) -> JSONResponse:
     items = load_materials(username, sid)
     draft = load_draft(username, sid)
     return JSONResponse({
-        "materials": [
-            {
-                "name": i.get("name"),
-                "size": i.get("bytes"),
-                "chars": i.get("chars"),
-                "truncated": i.get("truncated"),
-                "parseError": i.get("parse_error"),
-            }
-            for i in items
-        ],
+        "materials": [{"name": i.get("name"), "size": i.get("bytes")} for i in items],
         "template": public_template(load_template(username, sid)),
         "draft": public_draft(draft),
         "artifacts": list_artifacts(username, sid),
