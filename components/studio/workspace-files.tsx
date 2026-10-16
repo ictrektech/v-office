@@ -133,6 +133,25 @@ export function WorkspaceFiles({
     }
   };
 
+  // 没有产物时只留一行小字：整块空卡片占地方，看着像坏掉的控件
+  if (!files.length && !notice && !error) {
+    return (
+      <p
+        className={cn(
+          "flex items-center gap-1.5 px-1 text-[12px] text-[#9A9AA0] dark:text-slate-500",
+          className,
+        )}
+      >
+        <FileText className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
+        {t({
+          id: "Workspace files idle",
+          message: "交付件：助手跑完技能脚本后，Word / Excel / 图会出现在这里",
+        })}
+        {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+      </p>
+    );
+  }
+
   return (
     <section className={cn(
       "rounded-xl border border-black/[0.06] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] dark:border-white/10 dark:bg-[#171719]", "flex flex-col overflow-hidden", className)}>
