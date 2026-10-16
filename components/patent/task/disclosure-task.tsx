@@ -186,6 +186,9 @@ export function DisclosureTask() {
     title: caseTitle,
     paused: !caseTitle && !resumeFrom,
     resumeFrom,
+    // 刷新/重开接着上一条线（草稿 + 对话记录都还在）；点「新建案件」（?new=1）才开新的
+    persistKey: "ai:patent-disclosure",
+    fresh: searchParams.get("new") === "1",
   });
 
   const kindLabels = useMemo<Record<PatentKind, string>>(

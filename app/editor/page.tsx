@@ -191,6 +191,8 @@ export default function Page() {
     skill: aiSkill || "writing",
     title: docName,
     paused: !aiMode || !docName,
+    // 按文档记忆：同一份文档的微调对话留在自己那条线上，刷新后还在
+    persistKey: docName ? `ai:editor:${docName}` : undefined,
   });
 
   /**
@@ -1038,21 +1040,21 @@ export default function Page() {
    */
   const actions = collaboraUrl
     ? {
-        // 微调模式下右栏占了 22rem，按钮组整体再左移一档，别压在面板上
-        group: aiMode ? "right-[37rem] top-1 gap-1.5" : "right-60 top-1 gap-1.5",
+        // 微调模式下右栏占了 26rem，按钮组整体再左移一档，别压在面板上
+        group: aiMode ? "right-[41rem] top-1 gap-1.5" : "right-60 top-1 gap-1.5",
         button:
           "flex h-7 items-center gap-1 rounded-lg bg-background/90 px-2.5 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted disabled:opacity-60",
         icon: "h-3.5 w-3.5",
         text: "text-xs font-medium",
-        close: aiMode ? "right-[33rem] top-1 h-7 w-7" : "right-44 top-1 h-7 w-7",
+        close: aiMode ? "right-[37rem] top-1 h-7 w-7" : "right-44 top-1 h-7 w-7",
       }
     : {
-        group: aiMode ? "right-[35rem] top-3 gap-2" : "right-52 top-3 gap-2",
+        group: aiMode ? "right-[39rem] top-3 gap-2" : "right-52 top-3 gap-2",
         button:
           "flex h-9 items-center gap-1.5 rounded-lg bg-background/90 px-3 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted disabled:opacity-60",
         icon: "h-4 w-4",
         text: "text-sm font-medium",
-        close: aiMode ? "right-[32rem] top-3 h-9 w-9" : "right-40 top-3 h-9 w-9",
+        close: aiMode ? "right-[36rem] top-3 h-9 w-9" : "right-40 top-3 h-9 w-9",
       };
 
   return (
@@ -1216,7 +1218,7 @@ export default function Page() {
         src={collaboraUrl}
         className={
           aiMode
-            ? "fixed inset-y-0 left-0 right-[22rem] h-screen border-0"
+            ? "fixed inset-y-0 left-0 right-[26rem] h-screen border-0"
             : "fixed inset-0 h-screen w-screen border-0"
         }
         allow="clipboard-read; clipboard-write; fullscreen"
@@ -1244,7 +1246,7 @@ export default function Page() {
       免得拿着旧稿去改、把用户的手改覆盖掉。
     */}
     {aiMode ? (
-      <aside className="fixed inset-y-0 right-0 z-40 flex w-[22rem] flex-col border-l border-black/[0.08] bg-white dark:border-white/10 dark:bg-[#0F0F10]">
+      <aside className="fixed inset-y-0 right-0 z-40 flex w-[26rem] flex-col border-l border-black/[0.08] bg-white dark:border-white/10 dark:bg-[#0F0F10]">
         <header className="flex shrink-0 items-center gap-2 border-b border-black/[0.06] px-3 py-2.5 dark:border-white/10">
           <Sparkles className="h-4 w-4 shrink-0 text-[#E2562B]" strokeWidth={2} />
           <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-[#1A1A1A] dark:text-white">

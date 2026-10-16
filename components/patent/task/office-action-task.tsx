@@ -129,6 +129,9 @@ export function OfficeActionTask() {
     title: caseTitle,
     paused: !caseTitle && !resumeFrom,
     resumeFrom,
+    // 刷新/重开接着上一条线：分条结果与逐条答复都还在
+    persistKey: "ai:patent-oa",
+    fresh: searchParams.get("new") === "1",
   });
 
   /** 分条结果：助手解析出来的 + 人工补的 */

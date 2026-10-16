@@ -81,6 +81,8 @@ export function FiguresTask() {
     title: caseTitle,
     paused: !caseTitle && !resumeFrom,
     resumeFrom,
+    // 刷新/重开接着上一条线：图与画布内容都还在
+    persistKey: "ai:patent-figures",
   });
 
   const active = FIGURES.find((f) => f.key === activeKey) ?? FIGURES[0];

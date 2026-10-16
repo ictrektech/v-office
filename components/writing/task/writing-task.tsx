@@ -85,6 +85,8 @@ export function WritingTask() {
     title: caseTitle,
     // 标题没定之前不建会话：建错标题就得把已经导出的 docx 改名
     paused: !caseTitle,
+    // 刷新/重开接着上一条线：成稿与对话记录都还在
+    persistKey: "ai:writing",
   });
 
   const fields = tpl?.fields ?? [];

@@ -100,7 +100,9 @@ export function TaskWorkbench({
           onRejectChange={chat.rejectChange}
           onAcceptAll={() => void chat.acceptAll()}
           onSave={() => void chat.saveNow()}
-          className="border-none"
+          // h-full 不能省：面板根节点是 shrink-0，不撑满的话输入区不贴底、
+          // 空态被压成一条、下面空一大片（父容器是固定高的，空间得给到面板）
+          className="h-full min-h-0 border-none"
         />
       </div>
 

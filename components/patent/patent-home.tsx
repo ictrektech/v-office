@@ -214,7 +214,7 @@ export function PatentHome() {
             </div>
           </div>
           <Link
-            href="/patent/studio"
+            href="/patent/studio?new=1"
             className="inline-flex items-center gap-1.5 rounded-lg px-4 py-2.5 text-[13.5px] font-medium text-white shadow-[0_6px_14px_-8px_rgba(226,86,43,0.9)] transition hover:brightness-[0.94] active:scale-[0.98]"
             style={{ backgroundColor: ORANGE }}
           >
@@ -226,7 +226,7 @@ export function PatentHome() {
         {/* 上传技术资料 + 助手卡 */}
         <div className="mb-7 grid gap-4 lg:grid-cols-[1.08fr_1fr]">
           <Link
-            href="/patent/studio"
+            href="/patent/studio?new=1"
             className="flex min-h-[142px] flex-col items-center justify-center rounded-xl px-6 py-5 text-center transition hover:brightness-[0.985]"
             style={{ backgroundColor: ORANGE_SOFT }}
           >

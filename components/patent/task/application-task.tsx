@@ -75,6 +75,8 @@ export function ApplicationTask() {
     title: "Application Four-Piece Set",
     paused: !files.length && !resumeFrom,
     resumeFrom,
+    // 刷新/重开接着上一条线：四件套产物与对话记录都还在
+    persistKey: "ai:patent-application",
   });
 
   const has = (key: string) => chat.artifacts.some((a) => a.key === key);

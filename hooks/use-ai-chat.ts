@@ -267,8 +267,22 @@ export function useAiChat(options: {
    * 会话已被清理时静默退回新建（与 persistKey 分支同一套兜底）。
    */
   resumeFrom?: string;
+  /**
+   * 强制开一条新会话（首页「新建案件」用）。
+   *
+   * 不带它时：靠 `persistKey` 认领上次那条线，刷新/重开接着用同一份稿子和同一段
+   * 对话。带它时：先把那条线清掉再建——否则用户点「新建」，进来看到的还是旧案子。
+   */
+  fresh?: boolean;
 }): UseAiChat {
-  const { skill, title = "", persistKey, paused = false, resumeFrom = "" } = options;
+  const {
+    skill,
+    title = "",
+    persistKey,
+    paused = false,
+    resumeFrom = "",
+    fresh,
+  } = options;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState<AiDraft | null>(null);
   const [materials, setMaterials] = useState<AiMaterial[]>([]);
@@ -345,6 +359,24 @@ export function useAiChat(options: {
       // 会话的草稿是空的。于是出现最费解的一幕——编辑器里明明开着整篇稿子（那是
       // 「我的文档」里那份 docx），点「保存到我的文档」却回你一句「草稿是空的」；
       // 顺带 AI 也看不见上一轮写了什么。
+      // 「新建案件」进来：先忘掉上次那条线，否则新建完又认领回旧案子。
+      // `fresh` 没显式给时直接看地址栏的 `?new=1`——省得每个页面都接一遍。
+      const wantFresh =
+        fresh ?? new URLSearchParams(window.location.search).get("new") === "1";
+      if (wantFresh && persistKey) clearPersistedSession(persistKey);
+      if (wantFresh) {
+        // `?new=1` 是一次性的：用完就从地址栏抹掉，否则刷新页面又被当成新建，
+        // 刚建好的会话会被下一次 fresh 清掉。
+        try {
+          const url = new URL(window.location.href);
+          if (url.searchParams.get("new") === "1") {
+            url.searchParams.delete("new");
+            window.history.replaceState(null, "", url);
+          }
+        } catch {
+          /* 无痕模式等：忽略，不影响会话逻辑 */
+        }
+      }
       const remembered = readPersistedSession(persistKey);
       if (remembered) {
         try {
@@ -379,7 +411,7 @@ export function useAiChat(options: {
     } finally {
       ensureInFlight.current = null;
     }
-  }, [draftTitle, persistKey, resumeFrom, skill]);
+  }, [draftTitle, fresh, persistKey, resumeFrom, skill]);
 
   const refresh = useCallback(async () => {
     const sid = sessionRef.current;
