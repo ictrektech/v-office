@@ -62,6 +62,7 @@ import {
   type StoredFile,
 } from "@/utils/vos/storage";
 import { isVOSMode } from "@/utils/vos/fastpath";
+import { exportAiDocx, importAiDraft } from "@/utils/ai/client";
 import {
   listDocumentKnowledgeBases,
   listKnowledgeBaseFiles,
@@ -951,13 +952,17 @@ const handleRevise = useCallback(
       if (!content || !config) {
         return { ok: false, message: "还没有成稿，先生成后（或微调后）再保存" };
       }
+      const sid = name ? sessionsRef.current[name]?.sessionId : undefined;
+      if (!sid) {
+        return { ok: false, message: "会话未就绪，请稍后重试" };
+      }
       try {
-        // 成稿是 Markdown：直接写进应用私有存储（我的文档），
-        // 需要 Word 版式时用页面上的导出按钮走编辑器链路
-        const safe = (config.title || config.docType || "公文").replace(/[\\/:*?"<>|]/g, "_");
-        const fileName = `${safe}.md`;
-        await saveStoredFile(fileName, new TextEncoder().encode(content));
-        return { ok: true, message: `已保存到我的文档：${fileName}` };
+        // 存进「我的文档」的是 **Word**：成稿先同步成服务端草稿，再由服务端用技能包的
+        // md_to_docx 转换。页面自己不做 docx——两套渲染器必然各画各的排版，口径以
+        // 服务端那份为准（用户在编辑器里打开的也是它）。
+        await importAiDraft(sid, content, config.title || config.docType || "");
+        const { saved } = await exportAiDocx(sid);
+        return { ok: true, message: `已保存到我的文档：${saved}` };
       } catch (err) {
         return { ok: false, message: err instanceof Error ? err.message : "保存失败" };
       }

@@ -25,6 +25,8 @@ import { X2tConverter } from "@/utils/editor/x2t";
 import { AvsFileType } from "@/utils/editor/types";
 import { API_BASE, authHeaders } from "@/utils/writing/client";
 import { isVOSMode } from "@/utils/vos/fastpath";
+import { exportAiDocx, importAiDraft } from "@/utils/ai/client";
+import { openStoredFile } from "@/utils/vos/storage";
 
 export type StreamKind =
   | "parse"
@@ -236,8 +238,16 @@ export function GenerateView({
                 </span>
               </div>
               <div className="mt-5 flex flex-wrap items-center gap-3">
-                <ExportWord file={result.files.find((f) => f.kind === "docx")} />
-                <ExportPdf file={result.files.find((f) => f.kind === "docx")} />
+                <ExportWord
+                  sessionId={historySessionId}
+                  title={result.title}
+                  content={result.content}
+                />
+                <ExportPdf
+                  sessionId={historySessionId}
+                  title={result.title}
+                  content={result.content}
+                />
                 <ExportExcel file={result.files.find((f) => f.kind === "xlsx")} />
                 <SaveToMyDocsButton onSave={onSaveToMyDocs} />
                 <button
@@ -814,22 +824,43 @@ function SaveToMyDocsButton({
   );
 }
 
-function ExportWord({ file }: { file?: ResultFile }) {
+/**
+ * 下载 Word。
+ *
+ * 前端**不自己拼 docx**（两套渲染器必然各画各的，排版口径以服务端那份为准）：
+ * 成稿先同步成服务端草稿，由服务端用**技能包自带的 `md_to_docx.py`** 转成 docx
+ * 落进「我的文档」，再把那份读回来下载——用户拿到的和编辑器里打开的是同一份。
+ */
+function ExportWord({
+  sessionId,
+  title,
+  content,
+}: {
+  /** 写作会话 id：成稿同步与导出都走它 */
+  sessionId?: string;
+  title?: string;
+  content?: string;
+}) {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  const ready = Boolean(sessionId && content && content.trim());
   const onClick = useCallback(async () => {
-    if (!file || busy) return;
+    if (!ready || busy) return;
     setBusy(true);
     setFailed(false);
     try {
-      await authedDownload(file);
+      const sid = sessionId as string;
+      await importAiDraft(sid, content as string, title ?? "");
+      const { saved } = await exportAiDocx(sid);
+      const { file } = await openStoredFile(saved);
+      downloadBlob(file, file.name);
     } catch {
       setFailed(true);
     } finally {
       setBusy(false);
     }
-  }, [file, busy]);
-  if (!file) {
+  }, [ready, busy, sessionId, content, title]);
+  if (!ready) {
     return (
       <button
         disabled
@@ -910,18 +941,35 @@ function ExportExcel({ file }: { file?: ResultFile }) {
   );
 }
 
-function ExportPdf({ file }: { file?: ResultFile }) {
+/**
+ * 下载 PDF。
+ *
+ * 和「下载 Word」同一条链路：先把成稿同步成服务端草稿、由服务端转出 docx，
+ * 再用 x2t 把 docx 转成 PDF（转换器只认 docx/odt，不认 markdown）。
+ */
+function ExportPdf({
+  sessionId,
+  title,
+  content,
+}: {
+  sessionId?: string;
+  title?: string;
+  content?: string;
+}) {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  const ready = Boolean(sessionId && content && content.trim());
 
   const onClick = useCallback(async () => {
-    if (!file || busy) return;
+    if (!ready || busy) return;
     setBusy(true);
     setFailed(false);
     try {
-      const resp = await fetch(file.url, { headers: await authHeaders() });
-      if (!resp.ok) throw new Error(`获取文档失败（${resp.status}）`);
-      const buf = await resp.arrayBuffer();
+      const sid = sessionId as string;
+      await importAiDraft(sid, content as string, title ?? "");
+      const { saved } = await exportAiDocx(sid);
+      const { file: docx } = await openStoredFile(saved);
+      const buf = await docx.arrayBuffer();
       const converter = new X2tConverter();
       const result = await converter.convert({
         data: buf,
@@ -935,7 +983,7 @@ function ExportPdf({ file }: { file?: ResultFile }) {
         new Blob([result.output as BlobPart], {
           type: "application/pdf",
         }),
-        file.name.replace(/\.docx$/, ".pdf"),
+        docx.name.replace(/\.docx$/, ".pdf"),
       );
     } catch (err) {
       console.error("[writing] pdf export failed:", err);
@@ -943,9 +991,9 @@ function ExportPdf({ file }: { file?: ResultFile }) {
     } finally {
       setBusy(false);
     }
-  }, [file, busy]);
+  }, [ready, busy, sessionId, content, title]);
 
-  if (!file) {
+  if (!ready) {
     return (
       <button
         disabled

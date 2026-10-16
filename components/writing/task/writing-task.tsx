@@ -128,7 +128,7 @@ export function WritingTask() {
   const specs: ArtifactSpec[] = [
     {
       key: "deliverable",
-      title: t({ id: "Artifact deliverable", message: "Document" }),
+      title: t({ id: "Artifact deliverable", message: "正稿" }),
       hint: t({
         id: "Artifact deliverable hint",
         message: "The finished text, ready for Word",
@@ -165,7 +165,7 @@ export function WritingTask() {
   const planned = [
     {
       icon: FileText,
-      title: t({ id: "Artifact deliverable", message: "Document" }),
+      title: t({ id: "Artifact deliverable", message: "正稿" }),
       desc: t({
         id: "Planned deliverable desc",
         message: "Full text in the structure this document type requires",

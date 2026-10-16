@@ -24,10 +24,14 @@ import {
   chatStream,
   createAiSession,
   deleteAiSession,
+  getAiState,
+  getAiTranscript,
   listAiSessions,
+  putAiTranscript,
   stopAiSession,
   uploadAiMaterial,
   type AiEvent,
+  type AiTranscriptMessage,
 } from "@/utils/ai/client";
 
 /** 兼容旧引用：现在指向本应用 AI 服务，不再是 agentic-search。 */
@@ -240,6 +244,13 @@ export class WritingClient {
     });
 
     const content = extractFinalDoc(text);
+    // agent 的输出要留底：写作这条线不走 useAiChat，没人替它写对话记录（服务端
+    // 只认前端的 PUT），于是「最近使用」点进去只剩成稿、过程全丢。这里每轮追加一次。
+    if (text.trim()) {
+      void appendTranscript(sessionId, prompt, text).catch(() => {
+        // 存不上不打扰用户：成稿仍可用
+      });
+    }
     this.emit({
       _event: "writing_done",
       title: cfg.title || cfg.docType,
@@ -332,21 +343,107 @@ export interface RestoredWriting {
   items?: unknown[];
 }
 
-/** 恢复现场：本版没有阶段流水线留底，交给上层按「重新开始」处理 */
+/**
+ * 把这一轮的「用户要求 + agent 输出」追加进会话的对话记录。
+ *
+ * 写作不走 `useAiChat`，所以没人替它写 transcript——不写的话「最近使用」点进去
+ * 过程全丢，只剩成稿。
+ */
+async function appendTranscript(
+  sid: string,
+  userText: string,
+  agentText: string,
+): Promise<void> {
+  const at = new Date().toISOString();
+  let existing: AiTranscriptMessage[] = [];
+  try {
+    existing = (await getAiTranscript(sid)).messages ?? [];
+  } catch {
+    /* 第一次存：当作没有 */
+  }
+  await putAiTranscript(sid, [
+    ...existing,
+    { role: "user", text: userText, at },
+    { role: "agent", text: agentText, at },
+  ]);
+}
+
+/** 草稿 blocks → Markdown（成稿正文；段落之间空一行） */
+function draftToMarkdown(blocks: { heading?: string; text?: string }[]): string {
+  return blocks
+    .map((b) => `${b.heading ? `${b.heading}\n\n` : ""}${b.text ?? ""}`.trim())
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/**
+ * 恢复现场（点「最近使用」/ 刷新页面回到某条会话）。
+ *
+ * 成稿就在服务端那条会话的草稿里（写作自管保存，草稿即最新一版），所以这里按
+ * 会话 id 直接读回来。**必须真的恢复**：以前这里恒返回「没恢复」，于是用户从
+ * 「最近使用」点进来是一片空白——之前做的全白费。
+ *
+ * 阶段流水线（那几张过程卡）没有落库，恢复后直接看成稿；要重跑某一阶段再发指令。
+ */
 export async function restoreWriting(
-  _session?: string,
-  _config?: WritingConfig,
+  session?: string,
+  config?: WritingConfig,
 ): Promise<RestoredWriting> {
-  return { restored: false };
+  if (!session) return { restored: false };
+  try {
+    const state = await getAiState(session);
+    const draft = state?.draft;
+    const content = draft?.blocks?.length ? draftToMarkdown(draft.blocks) : "";
+    if (!content.trim()) return { restored: false };
+    // 过程也恢复：agent 的输出都追加在对话记录里（每次落文时写一次），按轮次还原成
+    // 过程卡片，用户的要求也一并放回去——这样点开还能看到当时是怎么写出来的。
+    let items: unknown[] = [];
+    try {
+      const transcript = await getAiTranscript(session);
+      items = (transcript.messages ?? [])
+        .filter((m) => (m.text || "").trim())
+        .map((m, index) => ({
+          key: `restored-${index}`,
+          kind: m.role === "user" ? "parse" : "draft",
+          title: m.role === "user" ? "你的要求" : "写手起草",
+          status: "done",
+          text: m.text,
+          thinking: m.thinking ?? "",
+          tools: [],
+        }));
+    } catch {
+      /* 旧会话没存过对话记录：只有成稿能回来 */
+    }
+    return {
+      restored: true,
+      title: draft?.title || config?.title || config?.docType,
+      content,
+      // 文件导出由页面自己的链路负责（服务端按需转换），这里不回传文件
+      files: [],
+      revisions: 0,
+      items,
+    };
+  } catch {
+    // 会话已被清理：上层按「重新开始」处理
+    return { restored: false };
+  }
 }
 
 export async function listMyWritingSessions(): Promise<MyWritingDoc[]> {
   const sessions = await listAiSessions();
-  return sessions.map((s) => ({
-    sessionId: s.id,
-    name: s.title || "未命名稿件",
-    updatedAt: new Date((s.updated_at ?? Date.now() / 1000) * 1000).toISOString(),
-  }));
+  return sessions
+    // 只看写作这条线：专利那几个技能包的会话归「AI 专利工作台」的最近案件，
+    // 混进来两边的列表都会变乱（而且点开也恢复不到对的现场）。
+    .filter((s) => !(s.skill ?? "").startsWith("patent"))
+    .map((s) => ({
+      sessionId: s.id,
+      name: s.title || "未命名稿件",
+      updatedAt: new Date((s.updated_at ?? Date.now() / 1000) * 1000).toISOString(),
+      // 写作配置没有随会话落库，这里给一份最小的（只有文种与标题是必填）：
+      // 上层「打开最近使用」要求 sessionId **和 config 都在**才肯恢复，缺 config
+      // 就永远不恢复——老文档点进去一片空白，根子就是这个条件不成立。
+      config: { docType: s.title || "公文", title: s.title || "" },
+    }));
 }
 
 export async function deleteMyWritingSession(sessionId: string): Promise<void> {
