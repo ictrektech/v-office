@@ -168,12 +168,22 @@ export default function Page() {
     [],
   );
 
-  /** 微调模式开关：URL 带 `?ai=<skill>` 就是「左编辑器 + 右 PI」 */
+  /** 微调模式开关：右栏 PI 展开着（URL 带 `?ai=` 进来，或点右上角「AI 微调」） */
   const aiMode = aiSkill !== "";
+
+  /**
+   * 微调用的技能包：URL 的 `ai=<skill>` 优先（从工作台跳过来会带对的那个），
+   * 否则按写作走——编辑器右上角那个「AI 微调」是通用改稿入口，不该逼用户先选技能。
+   */
+  const [aiDefaultSkill, setAiDefaultSkill] = useState("writing");
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    setAiSkill(params.get("ai") || "");
+    const ai = params.get("ai") || "";
+    if (ai) {
+      setAiDefaultSkill(ai);
+      setAiSkill(ai);
+    }
   }, []);
 
   /** 微调会话：标题取文档名——会话标题就是落盘 docx 的名字，回灌才接得上 */
@@ -226,6 +236,31 @@ export default function Page() {
       setSyncing(false);
     }
   }, []);
+
+  /**
+   * PI 改完一轮就自动把左侧刷成最新：用户在右侧说完话，左边直接变成带修订的新版
+   * （Word 原生修订，逐条接受/拒绝）。
+   *
+   * 刻意不做「有没有未同步改动」这类状态判断——发送前必回灌 + 改完自动重载，
+   * 两句话说得清，用户也不用记自己该点哪个按钮。
+   */
+  const wasStreamingRef = useRef(false);
+  useEffect(() => {
+    const now = chat.streaming;
+    if (wasStreamingRef.current && !now && aiMode && docName) {
+      void syncEditor();
+    }
+    wasStreamingRef.current = now;
+  }, [chat.streaming, aiMode, docName, syncEditor]);
+
+  /** 刚进微调（或换了文档）时先回灌一次，免得 PI 拿着空草稿就开始改 */
+  const hydratedForRef = useRef("");
+  useEffect(() => {
+    if (!aiMode || !docName || !chat.sessionId) return;
+    if (hydratedForRef.current === docName) return;
+    hydratedForRef.current = docName;
+    void pullFromEditor();
+  }, [aiMode, docName, chat.sessionId, pullFromEditor]);
 
   const finishNameRequest = useCallback((name: string | null) => {
     const resolve = nameResolverRef.current;
@@ -1118,6 +1153,41 @@ export default function Page() {
             {language.toLowerCase().startsWith("zh")
               ? "上传到知识库"
               : "Upload to KB"}
+          </span>
+        </button>
+      )}
+      {/*
+        AI 微调：就地展开右栏，不跳页——左侧文档原地不动，用户不会有"换了地方"的
+        感觉；再点一次收起。同步做法见文件头那段说明（PI 改稿 → 自动重载看 Word 修订）。
+      */}
+      {collaboraUrl && (
+        <button
+          type="button"
+          onClick={() => {
+            // 还没保存/命名的新文档：PI 没有可改的基准，给一句话而不是静默无反应
+            if (!aiMode && !docName) {
+              toast.info(
+                language.toLowerCase().startsWith("zh")
+                  ? "先保存这份文档（起个名），PI 才能基于它改稿"
+                  : "Save the document first (give it a name) so PI has something to revise",
+              );
+              return;
+            }
+            setAiSkill((prev) => (prev ? "" : aiDefaultSkill));
+          }}
+          aria-label={
+            language.toLowerCase().startsWith("zh") ? "AI 微调" : "AI touch-up"
+          }
+          title={
+            language.toLowerCase().startsWith("zh")
+              ? "让 PI 在右侧改这份文档：改动以 Word 修订标出，你在左侧接受或拒绝"
+              : "Let PI revise this document on the right — edits come back as Word revisions for you to accept or reject"
+          }
+          className={`${actions.button} ${aiMode ? "text-[#E2562B]" : ""}`}
+        >
+          <Sparkles className={actions.icon} />
+          <span className={actions.text}>
+            {language.toLowerCase().startsWith("zh") ? "AI 微调" : "AI touch-up"}
           </span>
         </button>
       )}
