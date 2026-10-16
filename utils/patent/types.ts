@@ -10,8 +10,8 @@
 /** 专利类型：发明 / 实用新型 / 外观设计（与 skill 的三个子目录一一对应） */
 export type PatentType = "invention" | "utility" | "design";
 
-/** 工作对象：交底书 / 申请文件四件套 / 审查意见 */
-export type WorkKind = "disclosure" | "application" | "office-action";
+/** 工作对象：交底书 / 申请文件四件套 */
+export type WorkKind = "disclosure" | "application";
 
 /** 交底书的字段化录入（模板即这份字段清单 + 输出契约） */
 export interface DisclosureField {

@@ -404,41 +404,6 @@ export function announceHostReady(iframe: HTMLIFrameElement): void {
   postToCollabora(iframe, { MessageId: "Host_PostmessageReady", SendTime: Date.now() });
 }
 
-/**
- * 等文档加载完成（`App_LoadingStatus` → `Document_Loaded`）。
- *
- * 没就绪就发注入指令会被 COOL 丢弃；超时返回 false，调用方应停在
- * 「打开时加载的内容」上（那份内容本来就是最新导出的稿子，不会错）。
- */
-export function waitForCollaboraDocumentLoaded(timeoutMs = 30_000): Promise<boolean> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (ok: boolean) => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timer);
-      window.removeEventListener("message", onMessage);
-      resolve(ok);
-    };
-    const onMessage = (ev: MessageEvent) => {
-      let data: { MessageId?: string; Values?: { Status?: string } } | null = null;
-      try {
-        data =
-          typeof ev.data === "string"
-            ? JSON.parse(ev.data)
-            : (ev.data as { MessageId?: string; Values?: { Status?: string } });
-      } catch {
-        return;
-      }
-      if (data?.MessageId === "App_LoadingStatus" && data.Values?.Status === "Document_Loaded") {
-        finish(true);
-      }
-    };
-    const timer = window.setTimeout(() => finish(false), timeoutMs);
-    window.addEventListener("message", onMessage);
-  });
-}
-
 /** 发一条 UNO 命令（命令名带 `.uno:` 前缀，如 `.uno:SelectAll`）。 */
 export function sendUnoCommand(iframe: HTMLIFrameElement, command: string): void {
   postToCollabora(iframe, {
@@ -446,17 +411,6 @@ export function sendUnoCommand(iframe: HTMLIFrameElement, command: string): void
     SendTime: Date.now(),
     Values: { Command: command },
   });
-}
-
-/**
- * 把视口带到文档末尾——「AI 正在写的地方」。
- *
- * 用的 `.uno:GoToEndOfDoc` 会把光标一起移到文末，所以**只在 AI 出字时调用**
- * （那时用户在看）；用户自己手改时不要抢他的光标。AI 一轮能触发几十次，
- * 调用方必须节流。
- */
-export function followCollaboraEnd(iframe: HTMLIFrameElement): void {
-  sendUnoCommand(iframe, ".uno:GoToEndOfDoc");
 }
 
 /**
@@ -648,132 +602,8 @@ export async function replaceDocumentWithHtml(
   return chunks.length;
 }
 
-/**
- * 嵌入瘦身：藏掉菜单栏、标尺、状态栏、右侧样式面板。
- *
- * 这几个都是**无参数**消息（对照 bundle.js：`Hide_Menubar` → `uiManager.hideMenubar()`）。
- * 三栏布局里中栏只有 ~800px 宽，菜单栏+标尺+样式面板白白吃掉三四十像素，藏掉后
- * 正文宽度几乎翻倍，看起来也更像「你们的编辑器」而不是套了个网页壳。
- *
- * **必须早发**（实测踩过）：`hideMenubar()` 的实现是
- * `if (_menubarShouldBeHidden = true, isMenubarHidden() || shouldUseNotebookbarMode()) return;`
- * —— 它只设置标志位，真正隐藏发生在这之后 UI 重建时。文档就绪后再发，标志位
- * 置上了但菜单栏已经建好，不会再隐藏。所以调用方要在 iframe 挂上时立刻发（可重复
- * 几次，幂等）。侧边栏是就绪后才建的，反而适合就绪后再发。
- *
- * 要恢复就发对应的 `Show_*`（桥没暴露，需要时再加）。
- */
-export function hideCollaboraChrome(iframe: HTMLIFrameElement): void {
-  for (const id of ["Hide_Menubar", "Hide_Ruler", "Hide_StatusBar"]) {
-    postToCollabora(iframe, { MessageId: id, SendTime: Date.now() });
-  }
-}
-
-/** 藏掉右侧样式/图库面板（它在文档就绪之后才建，得等就绪再发）。 */
-export function hideCollaboraSidebar(iframe: HTMLIFrameElement): void {
-  postToCollabora(iframe, { MessageId: "Hide_Sidebar", SendTime: Date.now() });
-}
-
-/** 让 Collabora 走一次保存（WOPI PutFile 写回存储）。 */
 export function saveCollabora(iframe: HTMLIFrameElement): void {
   postToCollabora(iframe, { MessageId: "Action_Save", SendTime: Date.now() });
-}
-
-/**
- * 读一回**用户在编辑器里选中的文字**（没有选区返回空串）。
- *
- * 协议（对照 bundle.js 的 PostMessageManager）：发 `Action_Copy` 带上
- * Mimetype，coolwsd 做一次 `gettextselection`，再把内容以
- * `Action_Copy_Resp`（Values.content）回给宿主。这条路**不碰浏览器剪贴板**——
- * `isActionCopy` 为真时组件直接转发给我们，不会走 navigator.clipboard。
- *
- * 用途：「只改这里」——用户在 Word 里选中一段，右侧 AI 面板因此能把改动范围
- * 收窄到那一处（而不是整篇重写）。选区是**读时**快照：用户之后又在文档里
- * 点掉选区不影响已收窄的范围（改动照样落在那一段上）。
- *
- * 超时/无选区/跨源一律返回空串，由调用方决定怎么提示。
- */
-export function readCollaboraSelection(
-  iframe: HTMLIFrameElement,
-  timeoutMs = 3000,
-): Promise<string> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (text: string) => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timer);
-      window.removeEventListener("message", onMessage);
-      resolve(text);
-    };
-    const onMessage = (ev: MessageEvent) => {
-      let data: { MessageId?: string; Values?: { content?: string } } | null = null;
-      try {
-        data =
-          typeof ev.data === "string"
-            ? JSON.parse(ev.data)
-            : (ev.data as { MessageId?: string; Values?: { content?: string } });
-      } catch {
-        return;
-      }
-      if (data?.MessageId === "Action_Copy_Resp") {
-        finish(String(data.Values?.content ?? ""));
-      }
-    };
-    const timer = window.setTimeout(() => finish(""), timeoutMs);
-    window.addEventListener("message", onMessage);
-    postToCollabora(iframe, {
-      MessageId: "Action_Copy",
-      SendTime: Date.now(),
-      // 纯文本就够定位与展示；HTML 版本对「改哪段」没有额外信息
-      Values: { Mimetype: "text/plain;charset=utf-8" },
-    });
-  });
-}
-
-/**
- * 盯着活文档里的选区：文本变了就回调（没有选区 = 空串）。
- *
- * 为什么是轮询：鼠标事件发生在 iframe **内部**（本地是跨源的 :9980，生产是
- * 网关同源 `/cool/` 前缀），父页面既监听不到 `mouseup`，COOL 也没有向宿主
- * 推送「选区变化」的消息（翻遍 PostMessageManager 只有 `Doc_PartChanged` /
- * `App_LoadingStatus` 这类）。轮询 `Action_Copy` 是唯一跨源/同源通吃的手段，
- * 也是这里刻意选择的形态：一套代码、两种部署行为一致。
- *
- * 实现要点：
- * - 同一时刻只允许一次读取在飞（`busy`）：读取超时（3s）比轮询间隔（默认
- *   800ms）长，不拦的话响应会错配到上一轮的 listener 上
- * - 启动即刻读一次，不等第一个间隔：从草稿视图切回编辑器时 iframe 里的
- *   选区还活着，应当立刻亮出作用域而不是等 800ms
- * - 读取失败/超时按空串处理：调用方（ai-studio）会把它当成「选区没了」，
- *   一次慢读最多让 chip 闪一下，下一轮读取就会恢复
- *
- * 返回 stop 函数；iframe 卸载后调用方必须调用（effect 的 cleanup 就是干这个的）。
- */
-export function watchCollaboraSelection(
-  iframe: HTMLIFrameElement,
-  onChange: (text: string) => void,
-  { intervalMs = 800, timeoutMs = 3000 }: { intervalMs?: number; timeoutMs?: number } = {},
-): () => void {
-  let alive = true;
-  let busy = false;
-  const tick = async () => {
-    if (!alive || busy || !iframe.isConnected) return;
-    busy = true;
-    try {
-      const text = (await readCollaboraSelection(iframe, timeoutMs)).trim();
-      if (!alive) return;
-      onChange(text);
-    } finally {
-      busy = false;
-    }
-  };
-  void tick();
-  const timer = window.setInterval(() => void tick(), intervalMs);
-  return () => {
-    alive = false;
-    window.clearInterval(timer);
-  };
 }
 
 /**
@@ -839,37 +669,3 @@ export function waitForCollaboraQuiet(
   });
 }
 
-/**
- * 保存并等待落盘（COOL 存完会把 `Doc_ModifiedStatus` 翻回 `{Modified:false}`）。
- *
- * 用途：AI 动手前先把用户没保存的改动冲进存储——不回读这些改动，下一轮
- * AI 拿旧稿改，用户刚敲的内容就被覆盖了（协作者的基本规矩）。等不到信号
- * 也按时返回，不把对话卡死。
- */
-export function flushCollabora(iframe: HTMLIFrameElement, timeoutMs = 2500): Promise<void> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timer);
-      window.removeEventListener("message", onMessage);
-      resolve();
-    };
-    const onMessage = (ev: MessageEvent) => {
-      let data: { MessageId?: string; Values?: { Modified?: boolean } } | null = null;
-      try {
-        data =
-          typeof ev.data === "string"
-            ? JSON.parse(ev.data)
-            : (ev.data as { MessageId?: string; Values?: { Modified?: boolean } });
-      } catch {
-        return;
-      }
-      if (data?.MessageId === "Doc_ModifiedStatus" && data.Values?.Modified === false) finish();
-    };
-    const timer = window.setTimeout(finish, timeoutMs);
-    window.addEventListener("message", onMessage);
-    saveCollabora(iframe);
-  });
-}
