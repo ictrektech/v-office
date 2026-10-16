@@ -29,7 +29,6 @@ import {
   saveFilesToDocs,
   type AiFile,
 } from "@/utils/ai/client";
-import { pt } from "./theme";
 
 /** 批量收件的占用标记（和单个文件路径区分开） */
 const ALL = "__all__";
@@ -135,8 +134,9 @@ export function WorkspaceFiles({
   };
 
   return (
-    <section className={cn(pt.card, "flex flex-col overflow-hidden", className)}>
-      <h2 className={pt.cardHead}>
+    <section className={cn(
+      "rounded-xl border border-black/[0.06] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] dark:border-white/10 dark:bg-[#171719]", "flex flex-col overflow-hidden", className)}>
+      <h2 className={"flex items-center gap-2 border-b border-black/[0.05] px-4 py-3 text-[14px] font-semibold text-[#1A1A1A] dark:border-white/5 dark:text-white"}>
         <FileText className="h-4 w-4 text-[#E2562B]" strokeWidth={2} />
         {t({ id: "Workspace files", message: "交付件" })}
         <span className="ml-auto flex items-center gap-2 text-[11.5px] font-normal text-[#9A9AA0]">

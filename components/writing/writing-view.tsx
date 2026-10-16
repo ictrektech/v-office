@@ -63,6 +63,7 @@ import {
 } from "@/utils/vos/storage";
 import { isVOSMode } from "@/utils/vos/fastpath";
 import { exportAiDocx, importAiDraft } from "@/utils/ai/client";
+import { WorkspaceFiles } from "@/components/studio/workspace-files";
 import {
   listDocumentKnowledgeBases,
   listKnowledgeBaseFiles,
@@ -1561,6 +1562,14 @@ const handleRevise = useCallback(
                 onReset={() => handleReset(activeName)}
               />
             )}
+          </div>
+
+          {/*
+            交付件：pi 用技能包产出的文件（Word / Excel / PPT / 图）落在会话目录里，
+            这里自动列出来，能下载、能收进「我的文档」——前端不需要认识任何格式。
+          */}
+          <div className="mt-6">
+            <WorkspaceFiles sessionId={active?.sessionId ?? null} />
           </div>
         </main>
       </div>

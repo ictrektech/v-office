@@ -27,7 +27,7 @@ import { usePageTitle } from "@/hooks/use-page-title";
 import { AgentPanel } from "@/components/studio/agent-panel";
 import { cn } from "@/lib/utils";
 import { pt } from "../theme";
-import { WorkspaceFiles } from "../workspace-files";
+import { WorkspaceFiles } from "@/components/studio/workspace-files";
 
 /** 四件套的 tab（设计稿：说明书 / 权利要求书 / 摘要 / 附图） */
 const TABS = [

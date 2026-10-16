@@ -37,7 +37,7 @@ import { AgentPanel } from "@/components/studio/agent-panel";
 import { ArtifactBoard, type ArtifactSpec } from "@/components/studio/artifact-board";
 import { cn } from "@/lib/utils";
 import { pt } from "../theme";
-import { WorkspaceFiles } from "../workspace-files";
+import { WorkspaceFiles } from "@/components/studio/workspace-files";
 
 /** 专利类型：与技能包 `prompts/{invention,utility_model,design}` 三个分支一一对应 */
 type PatentKind = "invention" | "utility_model" | "design";

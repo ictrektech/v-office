@@ -22,7 +22,7 @@ import { usePageTitle } from "@/hooks/use-page-title";
 import { AgentPanel } from "@/components/studio/agent-panel";
 import { cn } from "@/lib/utils";
 import { pt } from "../theme";
-import { WorkspaceFiles } from "../workspace-files";
+import { WorkspaceFiles } from "@/components/studio/workspace-files";
 import { FigureCanvas } from "../figures/figure-canvas";
 
 /**
