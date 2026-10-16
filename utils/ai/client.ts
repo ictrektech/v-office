@@ -151,8 +151,12 @@ export async function stopAiSession(sid: string): Promise<boolean> {
 export interface AiMaterial {
   name: string;
   size: number;
-  chars: number;
-  truncated?: boolean;
+  /**
+   * 兼容字段：材料现在以「原件」直接送进 agent 工作目录，服务端不再解析，
+   * 因此不再返回这两项。写作模块（utils/writing）仍在读，保留为可选——
+   * 缺省就等于「没有解析信息」。
+   */
+  chars?: number;
   parseError?: string | null;
 }
 
@@ -215,9 +219,7 @@ export async function deleteAiMaterial(sid: string, name: string): Promise<void>
 /** 成稿模板的摘要（全文在服务端，这里只够画界面）。 */
 export interface AiTemplate {
   name: string;
-  chars: number;
-  truncated?: boolean;
-  parseError?: string | null;
+  size?: number;
   uploaded_at?: number;
 }
 
@@ -294,6 +296,71 @@ export async function deleteAiArtifact(sid: string, key: string): Promise<void> 
   await aiFetch(`/sessions/${encodeURIComponent(sid)}/artifacts/${encodeURIComponent(key)}`, {
     method: "DELETE",
   });
+}
+
+// ── 工作目录里的产物文件（图 / Word / Excel）────────────────────────────────
+//
+// agent 用技能脚本直接写进案件目录（技能包约定 outputs/），这批文件不走
+// artifacts 那套。前端列出来、取回来展示或下载。
+
+export interface AiFile {
+  /** 相对案件目录的路径，例如 `outputs/figs/图1.svg` */
+  path: string;
+  size: number;
+  mtime: number;
+}
+
+export async function listAiFiles(sid: string): Promise<AiFile[]> {
+  const resp = await aiFetch(`/sessions/${encodeURIComponent(sid)}/files`, {
+    cache: "no-store",
+  });
+  return (await jsonOrThrow<{ files: AiFile[] }>(resp)).files;
+}
+
+/** 取一个产物文件（鉴权走 aiFetch，所以不能直接塞进 <img src>） */
+export async function fetchAiFile(sid: string, path: string): Promise<Blob> {
+  const encoded = path.split("/").map(encodeURIComponent).join("/");
+  const resp = await aiFetch(
+    `/sessions/${encodeURIComponent(sid)}/files/${encoded}`,
+    { cache: "no-store" },
+  );
+  if (!resp.ok) throw new Error(`ai file ${resp.status}`);
+  return resp.blob();
+}
+
+/** 取回来转成可直接放进 <img src> / <a download> 的地址（用完记得 revoke） */
+export async function aiFileObjectUrl(
+  sid: string,
+  path: string,
+): Promise<string> {
+  return URL.createObjectURL(await fetchAiFile(sid, path));
+}
+
+export interface ToDocsResult {
+  /** 案件目录里的相对路径 */
+  path: string;
+  /** 存进「我的文档」后的文件名（失败时没有这一项） */
+  saved?: string;
+  error?: string;
+}
+
+/**
+ * 把案件目录里的产物收进「我的文档」。
+ *
+ * 产物是 agent 用技能脚本直接写进案件目录的（技能包约定 outputs/），这条路绕过了
+ * 服务端，所以原先「我的文档」看不到它们。写入仍由服务端做：它才知道存储位置，
+ * agent 是按用户降权的、碰不到那块目录。
+ */
+export async function saveFilesToDocs(
+  sid: string,
+  paths: string[],
+): Promise<ToDocsResult[]> {
+  const resp = await aiFetch(`/sessions/${encodeURIComponent(sid)}/to-docs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paths }),
+  });
+  return (await jsonOrThrow<{ saved: ToDocsResult[] }>(resp)).saved;
 }
 
 export interface AiPatch {

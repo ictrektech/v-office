@@ -38,7 +38,7 @@ export function visibleText(raw: string): string {
 
 const OP_CLS: Record<string, string> = {
   insert: "bg-[#ECFDF3] text-[#16A34A]",
-  replace: "bg-[#EAF4FF] text-[#007AFF]",
+  replace: "bg-[#FDF1EC] text-[#D4542F]",
   delete: "bg-[#FEF2F2] text-[#DC2626]",
 };
 
@@ -109,7 +109,7 @@ function ActivityLine({ activity }: { activity: NonNullable<ChatMessage["activit
   const base = activity.target.split(/[\\/]/).filter(Boolean).pop() || "";
   return (
     <div className="flex items-center gap-1.5 pl-1 text-[13px] text-[#94A3B8]">
-      <Loader2 className="h-3 w-3 shrink-0 animate-spin text-[#007AFF]" />
+      <Loader2 className="h-3 w-3 shrink-0 animate-spin text-[#D4542F]" />
       <span className="truncate">
         <ToolVerb name={activity.name} /> {base || activity.name}
         <span className="ml-1.5 text-[#B4BDC9]">
@@ -157,7 +157,7 @@ function ThinkingBlock({ text, live }: { text: string; live: boolean }) {
         onClick={toggle}
         className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[13px] text-[#8B96A8] transition hover:bg-[#F7F9FC] dark:hover:bg-white/5"
       >
-        <Brain className="h-3.5 w-3.5 shrink-0 text-[#007AFF]" />
+        <Brain className="h-3.5 w-3.5 shrink-0 text-[#D4542F]" />
         <span className="font-medium">
           {live
             ? t({ id: "Thinking…", message: "Thinking…" })
@@ -177,6 +177,15 @@ function ThinkingBlock({ text, live }: { text: string; live: boolean }) {
       ) : null}
     </div>
   );
+}
+
+/** 文件大小：材料/模板现在只报原件大小（不再有「解析出多少字」这回事） */
+function humanSize(bytes?: number): string {
+  const n = Number(bytes) || 0;
+  if (!n) return "";
+  return n >= 1048576
+    ? `${(n / 1048576).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(n / 1024))} KB`;
 }
 
 /**
@@ -234,8 +243,8 @@ export function AgentPanel({
   /**
    * 「只改这里」：用户在编辑器里选中、等 AI 动手的那一处（null = 不收窄）。
    *
-   * 由宿主（ai-studio）经 Collabora 桥读选区后给出；带上 anchor（草稿段落
-   * 编号）时服务端的 patch 落点以它为准。改动送回后宿主会清掉它。
+   * 由宿主给出（曾经经 Collabora 桥读选区）；带上 anchor（草稿段落编号）时
+   * 服务端的 patch 落点以它为准。改动送回后宿主会清掉它。
    */
   selection?: { text: string; anchor: string; preview: string } | null;
   /** 点「改这里」：让宿主去读编辑器选区（宿主持有 iframe 桥） */
@@ -325,18 +334,15 @@ export function AgentPanel({
       if (kind === "template") {
         if (!onUploadTemplate) return;
         const uploaded = await onUploadTemplate(file);
-        setNotice(
-          uploaded.parseError
-            ? uploaded.parseError
-            : `模板已生效：之后每轮都按《${uploaded.name}》的栏目成文`,
-        );
+        setNotice(`模板已生效：之后每轮都按《${uploaded.name}》的栏目成文`);
       } else {
         if (!onUpload) return;
         const parsed = await onUpload(file);
         setNotice(
-          parsed.parseError
-            ? `${parsed.name}：${parsed.parseError}`
-            : `${t({ id: "Material parsed", message: "Material parsed" })}：${parsed.name} · ${parsed.chars} ${t({ id: "chars", message: "chars" })}`,
+          `${parsed.name}：${t({
+            id: "In workspace",
+            message: "原件已送入助手工作目录",
+          })}${parsed.size ? ` · ${humanSize(parsed.size)}` : ""}`,
         );
       }
     } catch (err) {
@@ -355,23 +361,24 @@ export function AgentPanel({
         className,
       )}
     >
-      <div className="flex items-center gap-2 border-b border-[#E7EAF0] px-3 py-2.5 dark:border-white/10">
-        <div className={cn(vp.segGroup, "flex-1 justify-center bg-transparent dark:bg-transparent")}>
+      <div className="flex items-center gap-2 border-b border-[#E7EAF0] px-3 py-2 dark:border-white/10">
+        {/* 分段控件按内容宽度，不撑满——面板塞进三列时会很宽，撑满会变成两条大胶囊 */}
+        <div className={cn(vp.segGroup, "bg-transparent dark:bg-transparent")}>
           <button
             type="button"
             onClick={() => setTab("agent")}
-            className={cn("flex-1 text-center", tab === "agent" ? vp.segOn : vp.segOff)}
+            className={cn("px-3.5 py-1.5 text-[12.5px]", tab === "agent" ? vp.segOn : vp.segOff)}
           >
-            <span className={tab === "agent" ? "text-[#007AFF]" : undefined}>
+            <span className={tab === "agent" ? "text-[#E2562B]" : undefined}>
               {t({ id: "Agent", message: "Agent" })}
             </span>
           </button>
           <button
             type="button"
             onClick={() => setTab("analysis")}
-            className={cn("flex-1 text-center", tab === "analysis" ? vp.segOn : vp.segOff)}
+            className={cn("px-3.5 py-1.5 text-[12.5px]", tab === "analysis" ? vp.segOn : vp.segOff)}
           >
-            <span className={tab === "analysis" ? "text-[#007AFF]" : undefined}>
+            <span className={tab === "analysis" ? "text-[#E2562B]" : undefined}>
               {t({ id: "Analysis", message: "Analysis" })}
             </span>
           </button>
@@ -397,6 +404,25 @@ export function AgentPanel({
               onScroll={onListScroll}
               className="relative flex-1 space-y-4 overflow-y-auto px-4 py-4 custom-scrollbar"
             >
+            {/* 空态：消息区是 flex-1，不给东西就是一整块死白——面板越高越难看 */}
+            {messages.length === 0 ? (
+              // 用绝对定位铺满滚动区：h-full 在 overflow 容器里解析不到高度，会贴在顶部
+              <div className="absolute inset-0 flex flex-col items-center justify-center px-6 text-center">
+                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#FDF1EC] dark:bg-[#2A1A14]">
+                  <Sparkles className="h-5 w-5 text-[#E2562B]" />
+                </span>
+                <p className="mt-3 text-[13.5px] font-medium text-[#0F172A] dark:text-white">
+                  {t({ id: "Assistant idle title", message: "还没有对话" })}
+                </p>
+                <p className="mt-1 max-w-[260px] text-[12px] leading-relaxed text-[#9A9AA0]">
+                  {t({
+                    id: "Assistant idle hint",
+                    message:
+                      "在下面输入框描述需求，助手会按技能包逐条执行，产物会写回这里。",
+                  })}
+                </p>
+              </div>
+            ) : null}
             {messages.map((m) =>
               m.role === "user" ? (
                 <div key={m.id} className="flex flex-col items-end gap-1">
@@ -405,7 +431,7 @@ export function AgentPanel({
                       {t({ id: "Clause", message: "Clause" })} {m.anchor}
                     </span>
                   ) : null}
-                  <div className="max-w-[85%] rounded-2xl rounded-br-md bg-[#007AFF] px-3.5 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap text-white">
+                  <div className="max-w-[85%] rounded-2xl rounded-br-md bg-[#D4542F] px-3.5 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap text-white">
                     {m.text}
                     <span className="mt-1 block text-right text-[12px] text-white/70">{m.at}</span>
                   </div>
@@ -413,14 +439,14 @@ export function AgentPanel({
               ) : (
                 <div key={m.id} className="space-y-2.5">
                   <div className="flex items-center gap-2">
-                    <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-[#EAF4FF]">
-                      <Sparkles className="h-3.5 w-3.5 text-[#007AFF]" />
+                    <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-[#FDF1EC]">
+                      <Sparkles className="h-3.5 w-3.5 text-[#D4542F]" />
                     </span>
                     <span className="text-[14px] font-medium text-[#0F172A] dark:text-white">
                       {t({ id: "Patent Agent", message: "Patent Agent" })}
                     </span>
                     {m.streaming ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-[#007AFF]" />
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-[#D4542F]" />
                     ) : null}
                     {m.error ? (
                       <span className="rounded-full bg-[#FEF2F2] px-1.5 py-0.5 text-[12px] font-medium text-[#DC2626]">
@@ -536,7 +562,7 @@ export function AgentPanel({
                                 <button
                                   type="button"
                                   onClick={() => onAcceptChange(key)}
-                                  className="inline-flex items-center gap-1 rounded-lg bg-[#007AFF] px-2.5 py-1.5 text-[13.5px] font-medium text-white transition hover:bg-[#0062CC] active:scale-[0.98]"
+                                  className="inline-flex items-center gap-1 rounded-lg bg-[#D4542F] px-2.5 py-1.5 text-[13.5px] font-medium text-white transition hover:bg-[#B8441F] active:scale-[0.98]"
                                 >
                                   <Check className="h-3 w-3" />
                                   {t({ id: "Accept", message: "Accept" })}
@@ -608,13 +634,13 @@ export function AgentPanel({
             {/* 「只改这里」：选中区域的作用域条。有它 = 这一轮 AI 只动这一处，
                 改完以 Word 修订送回（其他地方原样保留）；X 撤掉就回到整篇。 */}
             {selection ? (
-              <div className="mb-2 flex items-start gap-2 rounded-xl border border-[#007AFF]/25 bg-[#007AFF]/8 px-3 py-2">
-                <Target className="mt-0.5 h-4 w-4 shrink-0 text-[#007AFF]" />
+              <div className="mb-2 flex items-start gap-2 rounded-xl border border-[#D4542F]/25 bg-[#D4542F]/8 px-3 py-2">
+                <Target className="mt-0.5 h-4 w-4 shrink-0 text-[#D4542F]" />
                 <div className="min-w-0 flex-1">
-                  <p className="text-[13px] font-semibold text-[#007AFF]">
+                  <p className="text-[13px] font-semibold text-[#D4542F]">
                     {t({ id: "Edit here only", message: "Editing here only" })}
                     {selection.anchor ? (
-                      <span className="ml-1.5 font-normal text-[#007AFF]/80">
+                      <span className="ml-1.5 font-normal text-[#D4542F]/80">
                         {t({ id: "Clause", message: "Clause" })} {selection.anchor}
                       </span>
                     ) : null}
@@ -626,7 +652,7 @@ export function AgentPanel({
                 <button
                   type="button"
                   onClick={onClearSelection}
-                  className="-mr-1 -mt-0.5 shrink-0 rounded-lg p-1 text-[#007AFF]/60 transition hover:bg-[#007AFF]/10 hover:text-[#007AFF]"
+                  className="-mr-1 -mt-0.5 shrink-0 rounded-lg p-1 text-[#D4542F]/60 transition hover:bg-[#D4542F]/10 hover:text-[#D4542F]"
                   aria-label={t({ id: "Clear scope", message: "Clear scope" })}
                 >
                   <X className="h-3.5 w-3.5" />
@@ -684,8 +710,8 @@ export function AgentPanel({
                         className={cn(
                           "inline-flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-[14px] font-medium transition active:scale-[0.98]",
                           refsOpen
-                            ? "border-[#007AFF]/30 bg-[#007AFF]/10 text-[#007AFF]"
-                            : "border-black/[0.07] bg-white text-[#475569] hover:border-[#CFE3FF] hover:text-[#007AFF]",
+                            ? "border-[#D4542F]/30 bg-[#D4542F]/10 text-[#D4542F]"
+                            : "border-black/[0.07] bg-white text-[#475569] hover:border-[#F3C3AC] hover:text-[#E2562B] dark:border-white/10 dark:bg-white/5 dark:text-slate-300 dark:hover:text-[#E2562B]",
                         )}
                       >
                         {uploading ? (
@@ -698,7 +724,7 @@ export function AgentPanel({
                           : t({ id: "References", message: "References" })}
                         {/* 有多少东西就直接写在按钮上，不用点开才知道 */}
                         {template || materials.length ? (
-                          <span className="rounded-full bg-[#007AFF]/12 px-1.5 text-[12px] font-semibold text-[#007AFF]">
+                          <span className="rounded-full bg-[#D4542F]/12 px-1.5 text-[12px] font-semibold text-[#D4542F]">
                             {(template ? 1 : 0) + materials.length}
                           </span>
                         ) : null}
@@ -715,7 +741,7 @@ export function AgentPanel({
                       className={cn(
                         vp.btnText,
                         "gap-1",
-                        selection && "text-[#007AFF]",
+                        selection && "text-[#D4542F]",
                         (capturingSelection || !sessionReady) && "opacity-50",
                       )}
                       title={t({
@@ -757,8 +783,8 @@ export function AgentPanel({
                   className={cn(
                     "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white transition",
                     draft.trim() && sessionReady
-                      ? "bg-[#007AFF] hover:bg-[#0062CC] active:scale-[0.97]"
-                      : "bg-[#CBD5E1]",
+                      ? "bg-[#E2562B] hover:bg-[#C64A1E] active:scale-[0.97]"
+                      : "bg-[#CBD5E1] dark:bg-white/10",
                   )}
                   title={t({ id: "Send", message: "Send" })}
                 >
@@ -826,7 +852,7 @@ function ReferenceSheet({
       className="flex min-w-0 flex-col rounded-2xl border border-black/[0.05] bg-[#F7F7FA] p-3.5 dark:border-white/10 dark:bg-white/[0.04]"
     >
       <div className="mb-3 flex items-center gap-2">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white text-[#007AFF] shadow-[0_1px_2px_rgba(0,0,0,0.06)] dark:bg-white/10">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white text-[#D4542F] shadow-[0_1px_2px_rgba(0,0,0,0.06)] dark:bg-white/10">
           {icon}
         </span>
         <div className="min-w-0">
@@ -882,15 +908,13 @@ function ReferenceSheet({
                   </p>
                   <div className="mt-0.5 flex items-center justify-between gap-2">
                     <p className="truncate text-[12.5px] text-[#94A3B8]">
-                      {template.parseError
-                        ? template.parseError
-                        : `${template.chars} ${t({ id: "chars", message: "chars" })}${template.truncated ? " · 已截断" : ""}`}
+                      {t({ id: "In workspace", message: "原件已送入工作目录" })}
                     </p>
                     {onRemoveTemplate ? (
                       <button
                         type="button"
                         onClick={() => onRemoveTemplate()}
-                        className="shrink-0 text-[12.5px] font-medium text-[#007AFF]"
+                        className="shrink-0 text-[12.5px] font-medium text-[#D4542F]"
                       >
                         {t({ id: "Remove", message: "Remove" })}
                       </button>
@@ -902,7 +926,7 @@ function ReferenceSheet({
                 type="button"
                 onClick={() => onPick("template")}
                 disabled={!canUpload || !!uploading}
-                className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-black/[0.07] bg-white px-3 py-2.5 text-[14px] font-medium text-[#007AFF] transition hover:bg-[#007AFF]/5 active:scale-[0.98] disabled:opacity-50 dark:border-white/10 dark:bg-white/5"
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-black/[0.07] bg-white px-3 py-2.5 text-[14px] font-medium text-[#D4542F] transition hover:bg-[#D4542F]/5 active:scale-[0.98] disabled:opacity-50 dark:border-white/10 dark:bg-white/5"
               >
                 {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                 {t({ id: "Upload template", message: "Upload template" })}
@@ -931,16 +955,15 @@ function ReferenceSheet({
                           {m.name}
                         </p>
                         <p className="truncate text-[12px] text-[#94A3B8]">
-                          {m.parseError
-                            ? m.parseError
-                            : `${m.chars} ${t({ id: "chars", message: "chars" })}${m.truncated ? " · 已截断" : ""}`}
+                          {t({ id: "In workspace", message: "原件已送入工作目录" })}
+                          {m.size ? ` · ${humanSize(m.size)}` : ""}
                         </p>
                       </div>
                       {canRemoveMaterial && onRemoveMaterial ? (
                         <button
                           type="button"
                           onClick={() => onRemoveMaterial(m.name)}
-                          className="shrink-0 text-[12.5px] font-medium text-[#007AFF]"
+                          className="shrink-0 text-[12.5px] font-medium text-[#D4542F]"
                         >
                           {t({ id: "Remove", message: "Remove" })}
                         </button>
@@ -953,7 +976,7 @@ function ReferenceSheet({
                 type="button"
                 onClick={() => onPick("material")}
                 disabled={!canUpload || !!uploading}
-                className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-black/[0.07] bg-white px-3 py-2.5 text-[14px] font-medium text-[#007AFF] transition hover:bg-[#007AFF]/5 active:scale-[0.98] disabled:opacity-50 dark:border-white/10 dark:bg-white/5"
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-black/[0.07] bg-white px-3 py-2.5 text-[14px] font-medium text-[#D4542F] transition hover:bg-[#D4542F]/5 active:scale-[0.98] disabled:opacity-50 dark:border-white/10 dark:bg-white/5"
               >
                 {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                 {t({ id: "Upload material", message: "Upload material" })}
@@ -1013,9 +1036,8 @@ function AnalysisTab({
             <div className="min-w-0 flex-1">
               <p className="truncate text-[13.5px] font-medium text-[#15803D]">{template.name}</p>
               <p className="text-[12.5px] text-[#94A3B8]">
-                {template.parseError
-                  ? template.parseError
-                  : `${t({ id: "Draft template", message: "Draft template" })} · ${template.chars} ${t({ id: "chars", message: "chars" })}${template.truncated ? " · 已截断" : ""}`}
+                {t({ id: "Draft template", message: "Draft template" })} ·{" "}
+                {t({ id: "In workspace", message: "原件已送入工作目录" })}
               </p>
             </div>
             {onRemoveTemplate ? (
@@ -1036,9 +1058,8 @@ function AnalysisTab({
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[13.5px] text-[#475569] dark:text-slate-300">{m.name}</p>
                   <p className="text-[12.5px] text-[#94A3B8]">
-                    {m.parseError
-                      ? m.parseError
-                      : `${m.chars} ${t({ id: "chars", message: "chars" })}${m.truncated ? " · 已截断" : ""}`}
+                    {t({ id: "In workspace", message: "原件已送入工作目录" })}
+                    {m.size ? ` · ${humanSize(m.size)}` : ""}
                   </p>
                 </div>
                 {onRemoveMaterial ? (

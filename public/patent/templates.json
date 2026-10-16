@@ -291,41 +291,5 @@
     ],
     "nameEn": "Application Four-Piece Set",
     "descriptionEn": "From a settled disclosure: description, claims, abstract and figures."
-  },
-  {
-    "id": "office-action",
-    "name": "审查意见答复",
-    "description": "对照审查意见逐条答复，草稿确认后出陈述正文 Word。",
-    "kind": "office-action",
-    "skillEntry": "skills/patent-oa",
-    "outputs": [
-      "答复草稿.md",
-      "意见陈述.docx"
-    ],
-    "fields": [
-      {
-        "key": "notice",
-        "label": "审查意见通知",
-        "required": true
-      },
-      {
-        "key": "claims",
-        "label": "当前权要",
-        "required": true
-      },
-      {
-        "key": "amendments",
-        "label": "修改方案",
-        "hint": "修改后的权要与修改依据",
-        "required": true
-      },
-      {
-        "key": "arguments",
-        "label": "创造性说理",
-        "hint": "区别特征 + 技术效果"
-      }
-    ],
-    "nameEn": "Office Action Reply",
-    "descriptionEn": "Reply to each examiner objection, then export the statement as a Word file."
   }
 ]
