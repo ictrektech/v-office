@@ -1975,14 +1975,6 @@ function ConfigStep(p: ConfigStepProps) {
             );
           })}
         </div>
-        {/* 选完文种直接进工作台：编辑器里边写边改，不用等流式生成 */}
-        <button
-          onClick={() => p.onOpenStudio(p.docType)}
-          className="mt-3 inline-flex items-center gap-1.5 text-[13px] font-medium text-[#FF5722] hover:underline"
-        >
-          <FileText className="w-4 h-4" strokeWidth={1.75} />
-          用「{p.docType}」在 Word 里起草
-        </button>
       </section>
 
       {/* 写作要求 */}
@@ -2079,18 +2071,8 @@ function ConfigStep(p: ConfigStepProps) {
         </div>
       </section>
 
-      {/* 开始生成 / 直接进工作台 */}
+      {/* 开始生成 */}
       <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
-        <button
-          onClick={() => p.onOpenStudio(p.docType)}
-          className={
-            "inline-flex items-center gap-2 rounded-full border border-[#FF7A45] px-7 py-3.5 text-[15px] font-semibold text-[#FF5722] transition-all active:scale-[0.98] " +
-            "hover:bg-[#FFF4EE]"
-          }
-        >
-          <FileText className="w-5 h-5" strokeWidth={1.75} />
-          在 Word 里起草
-        </button>
         <button
           onClick={p.onStart}
           disabled={!p.canStart}
