@@ -64,7 +64,7 @@ const FIGURES = [
 
 export function FiguresTask() {
   const t = useExtracted();
-  usePageTitle(t({ id: "Figures task title", message: "Figures & Line Drawings" }));
+  usePageTitle(t({ id: "Figures task title", message: "附图 / 线稿" }));
 
   const searchParams = useSearchParams();
   const resumeFrom = searchParams.get("case") || "";
@@ -149,10 +149,10 @@ export function FiguresTask() {
       <section className={pt.card}>
         <h2 className="mb-3 flex items-center gap-2 text-[14.5px] font-semibold text-[#1A1A1A] dark:text-white">
           <FileText className="h-4 w-4 text-[#D4542F]" strokeWidth={2} />
-          {t({ id: "Section case basics", message: "The case" })}
+          {t({ id: "Section case basics", message: "案件" })}
         </h2>
         <label className="mb-1.5 block text-[13px] font-medium text-[#5C5C60] dark:text-slate-300">
-          {t({ id: "Field case name", message: "Case name" })}
+          {t({ id: "Field case name", message: "案件名" })}
         </label>
         <input
           className={pt.input}
@@ -160,7 +160,7 @@ export function FiguresTask() {
           maxLength={120}
           placeholder={t({
             id: "Placeholder case name",
-            message: "e.g. A method and system for batch job scheduling",
+            message: "例如：一种批量作业调度方法与系统",
           })}
           onChange={(e) => setCaseTitle(e.target.value)}
         />
@@ -175,7 +175,7 @@ export function FiguresTask() {
       <section className={cn(pt.card, "overflow-hidden")}>
         <h2 className="flex items-center gap-2 border-b border-black/[0.05] px-4 py-3 text-[14.5px] font-semibold text-[#1A1A1A] dark:border-white/5 dark:text-white">
           <Sparkles className="h-4 w-4 text-[#D4542F]" strokeWidth={2} />
-          {t({ id: "Figure list", message: "Figures" })}
+          {t({ id: "Figure list", message: "附图" })}
         </h2>
         <ul>
           {FIGURES.map((f) => {
@@ -224,15 +224,15 @@ export function FiguresTask() {
                       <Sparkles className="h-3.5 w-3.5" />
                     )}
                     {done
-                      ? t({ id: "Redraw", message: "Redraw" })
-                      : t({ id: "Draft it", message: "Draw it" })}
+                      ? t({ id: "Redraw", message: "重画" })
+                      : t({ id: "Draw this figure", message: "画这张" })}
                   </button>
                   {done ? (
                     <button
                       type="button"
                       onClick={() => void chat.removeArtifact(f.key)}
                       className="ml-auto rounded-lg p-1.5 text-[#9A9AA0] transition hover:bg-black/[0.05] hover:text-[#DC2626] dark:hover:bg-white/10"
-                      title={t({ id: "Remove", message: "Remove" })}
+                      title={t({ id: "Remove", message: "移除" })}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
@@ -254,10 +254,10 @@ export function FiguresTask() {
           className="inline-flex items-center gap-1.5 text-[13.5px] text-[#5C5C60] transition hover:text-[#1A1A1A] dark:text-slate-300"
         >
           <ArrowLeft className="h-4 w-4" />
-          {t({ id: "Back", message: "Back" })}
+          {t({ id: "Back", message: "返回" })}
         </a>
         <span className="ml-auto text-[13px] text-[#9A9AA0]">
-          {t({ id: "AI assistant", message: "AI assistant" })}
+          {t({ id: "AI assistant", message: "PI 助手" })}
         </span>
       </header>
 
@@ -270,7 +270,7 @@ export function FiguresTask() {
               </span>
               <div>
                 <h1 className="text-[20px] font-bold leading-tight tracking-[-0.02em] text-[#1A1A1A] dark:text-white">
-                  {t({ id: "Figures task title", message: "Figures & Line Drawings" })}
+                  {t({ id: "Figures task title", message: "附图 / 线稿" })}
                 </h1>
                 <p className={cn(pt.meta, "mt-0.5")}>
                   {t({
@@ -329,22 +329,54 @@ export function FiguresTask() {
                   <FigureCanvas markdown={bodies[active.key]} title={active.name} />
                 ) : (
                   <div className="flex h-full min-h-[420px] flex-col items-center justify-center gap-2 px-6 text-center">
-                    <Sparkles className="h-7 w-7 text-[#D4542F]" strokeWidth={1.7} />
+                    <Sparkles className="h-7 w-7 text-[#E2562B]" strokeWidth={1.7} />
                     <p className="text-[14px] font-medium text-[#5C5C60] dark:text-slate-300">
-                      {t({ id: "Figure empty", message: "Not drawn yet" })}
+                      {t({ id: "Figure empty", message: "这张图还没画" })}
                     </p>
-                    <p className="max-w-sm text-[12.5px] leading-relaxed text-[#9A9AA0]">
-                      {chat.sessionId
-                        ? t({
-                            id: "Figure empty hint",
-                            message:
-                              "点左边的「画一版」，或先在右边把方案说清楚——助手按正文里的件号出图。",
-                          })
-                        : t({
-                            id: "Figure need name",
-                            message: "先在上面填个案件名，助手才有料可画。",
-                          })}
-                    </p>
+                    {chat.sessionId ? (
+                      <>
+                        {/* 三步写清楚 + 就地一个按钮：原来只有一句抽象提示，用户不知道从哪下手 */}
+                        <ol className="mt-1 space-y-1 text-left text-[11.5px] leading-relaxed text-[#9A9AA0]">
+                          {[
+                            t({
+                              id: "Fig step 1",
+                              message:
+                                "① 先在右边跟 PI 说清楚这张图画什么（模块 / 步骤 / 部件）",
+                            }),
+                            t({
+                              id: "Fig step 2",
+                              message: "② 点下面按钮出图；哪里不对就说一句，它重画",
+                            }),
+                            t({
+                              id: "Fig step 3",
+                              message: "③ 图上的编号要和正文一致，底部可以校验",
+                            }),
+                          ].map((line) => (
+                            <li key={line}>{line}</li>
+                          ))}
+                        </ol>
+                        <button
+                          type="button"
+                          onClick={() => void generate(active.key)}
+                          disabled={busyKey !== null || chat.streaming}
+                          className={cn(pt.btnPrimary, "mt-3 disabled:opacity-40")}
+                        >
+                          {busyKey === active.key ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Sparkles className="h-3.5 w-3.5" />
+                          )}
+                          {t({ id: "Draw this figure", message: "画这张图" })}
+                        </button>
+                      </>
+                    ) : (
+                      <p className="max-w-sm text-[12.5px] leading-relaxed text-[#9A9AA0]">
+                        {t({
+                          id: "Figure need name",
+                          message: "先在上面填写案件名，助手才有依据画图。",
+                        })}
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
@@ -421,7 +453,7 @@ export function FiguresTask() {
                 onRejectChange={chat.rejectChange}
                 onAcceptAll={() => void chat.acceptAll()}
                 onSave={() => void chat.saveNow()}
-                className="border-none"
+                className="border-none h-full min-h-0"
               />
             </div>
           </div>

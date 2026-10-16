@@ -427,7 +427,7 @@ export function ApplicationTask() {
                   onRejectChange={chat.rejectChange}
                   onAcceptAll={() => void chat.acceptAll()}
                   onSave={() => void chat.saveNow()}
-                  className="border-none"
+                  className="border-none h-full min-h-0"
                 />
               </div>
             </section>

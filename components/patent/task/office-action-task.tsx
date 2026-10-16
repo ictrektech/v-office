@@ -119,6 +119,8 @@ export function OfficeActionTask() {
   const [active, setActive] = useState(0);
   const [bodies, setBodies] = useState<Record<string, string>>({});
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  /** 待上传的通知书：等案件名与会话都就绪再送上去（见下面那个 effect） */
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -163,7 +165,6 @@ export function OfficeActionTask() {
       alive = false;
     };
     // loadArtifact 每次渲染都是新函数，这里只关心产物有没有更新
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [noticeUpdated]);
 
   /** 上传通知书 → 自动分条；上传即开工 */
@@ -187,6 +188,24 @@ export function OfficeActionTask() {
       }
     })();
   }, [chat, caseTitle, t]);
+
+  /**
+   * 案件名与会话都就绪后，再把通知书送上去。
+   *
+   * 顺序是死的：填标题 → 标题有值 → `useAiChat` 才建会话 → 有会话才能 upload。
+   * 在上传回调里连做三步，中间任何一步没就绪都会静默失败（表现为"按钮点了没反应"）。
+   */
+  useEffect(() => {
+    if (!pendingFile || !caseTitle || !chat.sessionId) return;
+    const file = pendingFile;
+    setPendingFile(null);
+    setBusyKey("split");
+    void chat
+      .upload(file)
+      .catch((err) => setError(String(err instanceof Error ? err.message : err)))
+      .finally(() => setBusyKey(null));
+    // chat 每次渲染都是新对象，按它重跑没有意义；三个条件齐了就把文件送掉并清空
+  }, [pendingFile, caseTitle, chat]);
 
   /** 起草某一条的答复 */
   const draft = useCallback(
@@ -418,15 +437,40 @@ export function OfficeActionTask() {
           <div className="flex flex-1 flex-col items-center justify-center px-6 py-10 text-center">
             <FileText className="h-6 w-6 text-[#E2562B]" strokeWidth={1.7} />
             <p className="mt-2 text-[13px] font-medium text-[#3C3C40] dark:text-slate-300">
-              {t({ id: "Upload notice first", message: "先上传审查意见通知书" })}
+              {t({ id: "Upload notice first", message: "先把审查意见通知书传进来" })}
             </p>
-            <p className="mt-1 max-w-xs text-[11.5px] leading-relaxed text-[#9A9AA0]">
-              {t({
-                id: "Upload notice hint",
-                message:
-                  "原件直接交给助手，它抽正文、逐条拆意见；拆完可以人工增删，再逐条起草答复。",
-              })}
-            </p>
+            {/* 三步走写清楚：这一页原来是三块空面板，用户不知道该先点哪儿 */}
+            <ol className="mt-3 space-y-1.5 text-left text-[11.5px] leading-relaxed text-[#9A9AA0]">
+              {[
+                t({
+                  id: "OA step 1",
+                  message: "① 上传通知书 —— 助手逐条拆出审查员的意见",
+                }),
+                t({
+                  id: "OA step 2",
+                  message: "② 对照左边的清单核对（漏了可以手动加一条）",
+                }),
+                t({
+                  id: "OA step 3",
+                  message: "③ 点某一条 → 起草答复（怎么答由助手定，不满意让它改）",
+                }),
+                t({
+                  id: "OA step 4",
+                  message: "④ 都写完后，右上角导出意见陈述 Word",
+                }),
+              ].map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ol>
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              disabled={!!busyKey}
+              className={cn(pt.btnPrimary, "mt-4 disabled:opacity-40")}
+            >
+              <Upload className="h-3.5 w-3.5" />
+              {t({ id: "Upload notice", message: "上传通知书" })}
+            </button>
           </div>
         )}
       </div>
@@ -492,7 +536,7 @@ export function OfficeActionTask() {
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
-            disabled={!chat.sessionId || !!busyKey}
+            disabled={!!busyKey}
             className={cn(pt.btnGhost, "disabled:opacity-40")}
           >
             <Upload className="h-3.5 w-3.5" />
@@ -506,12 +550,10 @@ export function OfficeActionTask() {
               const f = e.target.files?.[0];
               e.target.value = "";
               if (!f) return;
+              // 先定案件名（会话要用它当标题），文件交给下面的 effect 上传：
+              // 「有标题才建会话、有会话才能上传」——不拆开就是死锁，首次使用永远开始不了
               if (!caseTitle) setCaseTitle(f.name.replace(/\.[^.]+$/, ""));
-              setBusyKey("split");
-              void chat
-                .upload(f)
-                .catch((err) => setError(String(err)))
-                .finally(() => setBusyKey(null));
+              setPendingFile(f);
             }}
           />
         </div>
