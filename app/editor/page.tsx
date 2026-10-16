@@ -7,7 +7,7 @@ import {
   useEffect,
   useState,
 } from "react";
-import { X, Upload, Layers, RotateCcw, Loader2 } from "lucide-react";
+import { X, Upload, Layers, RotateCcw, Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { useAppStore, useResolvedLanguage, useHasHydrated } from "@/store";
 import {
@@ -42,12 +42,19 @@ import {
   isHybragInstalled,
   uploadKnowledgeFile,
 } from "@/utils/hybrag/client";
-import { clientLog, listStoredFiles, renameStoredFile } from "@/utils/vos/storage";
+import {
+  clientLog,
+  listStoredFiles,
+  renameStoredFile,
+  type SharedTarget,
+} from "@/utils/vos/storage";
 import { useRouter } from "next/navigation";
 import {
   getVOSAccessToken,
   isVOSMode,
 } from "@/utils/vos/fastpath";
+import { useAiChat } from "@/hooks/use-ai-chat";
+import { AgentPanel } from "@/components/studio/agent-panel";
 
 const AUTO_SAVE_INTERVAL_MS = 10_000;
 
@@ -108,6 +115,26 @@ export default function Page() {
   const [editorPainted, setEditorPainted] = useState(false);
   /** Collabora iframe：用于摘掉首启浮层、监听首帧 */
   const collaboraFrameRef = useRef<HTMLIFrameElement | null>(null);
+  /**
+   * 微调模式：URL 带 `?ai=<skill>` 时右栏挂 PI 助手，文档留在左侧。
+   *
+   * 同步**不走注入**：PI 改的是「我的文档」里那份 docx（服务端以 **Word 修订**呈现），
+   * 左侧点「同步到编辑器」重新加载一次会话就能看到修订，用户用 Word 原生的
+   * 接受/拒绝逐条审阅——可审、可逆、无 postMessage 时序竞态。
+   */
+  const [aiSkill, setAiSkill] = useState("");
+  /** 当前打开的文档名（回灌草稿、重新加载会话都要用它） */
+  const [docName, setDocName] = useState("");
+  const [syncing, setSyncing] = useState(false);
+  /** 重新加载会话所需的入参：startEditor 里确定后存下来，供「同步」按钮复用 */
+  const collaboraArgsRef = useRef<{
+    name: string;
+    editing: boolean;
+    sharedTarget: SharedTarget | null;
+    lang: string;
+  } | null>(null);
+  /** 每次重新加载 +1：逼 coolwsd 丢开内存里的旧文档、重新读盘 */
+  const collaboraVersionRef = useRef(0);
   /** 引擎切换进行中（换会话/重挂编辑器），期间禁用切换按钮 */
   const [switchingEngine, setSwitchingEngine] = useState(false);
   /** 当前实际生效的内核，用于避免重复初始化与切换失败的回退判断 */
@@ -140,6 +167,65 @@ export default function Page() {
     },
     [],
   );
+
+  /** 微调模式开关：URL 带 `?ai=<skill>` 就是「左编辑器 + 右 PI」 */
+  const aiMode = aiSkill !== "";
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setAiSkill(params.get("ai") || "");
+  }, []);
+
+  /** 微调会话：标题取文档名——会话标题就是落盘 docx 的名字，回灌才接得上 */
+  const chat = useAiChat({
+    skill: aiSkill || "writing",
+    title: docName,
+    paused: !aiMode || !docName,
+  });
+
+  /**
+   * 把编辑器里的最新内容回灌成草稿。
+   *
+   * PI 每次动手前都要做一遍：用户在编辑器里手改过、又没回灌的话，PI 会拿着旧稿
+   * 去改，一落盘就把他的手改覆盖掉——这是这条链路最容易出事的地方。
+   */
+  const pullFromEditor = useCallback(async () => {
+    if (!docName) return;
+    try {
+      await chat.importDocx(docName);
+    } catch {
+      /* 文档还没导出过 / 编辑器还没保存：保持现有草稿，别把整条链路打断 */
+    }
+  }, [chat, docName]);
+
+  /**
+   * 重新加载左侧文档：换一个会话版本号，Collabora 就丢开内存里的旧文档重新读盘。
+   * 这是「看到 AI 修订」的唯一动作（做法见文件头那段同步说明）。
+   */
+  const syncEditor = useCallback(async () => {
+    const args = collaboraArgsRef.current;
+    if (!args?.name) return;
+    setSyncing(true);
+    try {
+      collaboraVersionRef.current += 1;
+      const session = await fetchCollaboraSession(
+        args.name,
+        args.editing,
+        args.sharedTarget,
+        args.lang,
+        true, // retry：401 时清一次鉴权缓存重试
+        collaboraVersionRef.current, // version > 0 → 换 docKey，Collabora 重新读盘
+      );
+      if (!session) {
+        toast.error("重新加载失败：拿不到协同会话");
+        return;
+      }
+      setEditorPainted(false);
+      setCollaboraUrl(alignCollaboraHost(session.editorUrl));
+    } finally {
+      setSyncing(false);
+    }
+  }, []);
 
   const finishNameRequest = useCallback((name: string | null) => {
     const resolve = nameResolverRef.current;
@@ -799,6 +885,14 @@ export default function Page() {
             editor = null;
             activeEngineRef.current = "collabora";
             setCollaboraUrl(alignCollaboraHost(session.editorUrl));
+            // 微调模式要用：文档名 + 重新加载会话所需的入参
+            setDocName(name);
+            collaboraArgsRef.current = {
+              name,
+              editing: editingRef.current,
+              sharedTarget: sharedTarget ?? null,
+              lang: collaboraLang,
+            };
             return;
           }
           if (forcedCollaborative) {
@@ -909,20 +1003,21 @@ export default function Page() {
    */
   const actions = collaboraUrl
     ? {
-        group: "right-60 top-1 gap-1.5",
+        // 微调模式下右栏占了 22rem，按钮组整体再左移一档，别压在面板上
+        group: aiMode ? "right-[37rem] top-1 gap-1.5" : "right-60 top-1 gap-1.5",
         button:
           "flex h-7 items-center gap-1 rounded-lg bg-background/90 px-2.5 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted disabled:opacity-60",
         icon: "h-3.5 w-3.5",
         text: "text-xs font-medium",
-        close: "right-44 top-1 h-7 w-7",
+        close: aiMode ? "right-[33rem] top-1 h-7 w-7" : "right-44 top-1 h-7 w-7",
       }
     : {
-        group: "right-52 top-3 gap-2",
+        group: aiMode ? "right-[35rem] top-3 gap-2" : "right-52 top-3 gap-2",
         button:
           "flex h-9 items-center gap-1.5 rounded-lg bg-background/90 px-3 text-foreground shadow-md ring-1 ring-border backdrop-blur hover:bg-muted disabled:opacity-60",
         icon: "h-4 w-4",
         text: "text-sm font-medium",
-        close: "right-40 top-3 h-9 w-9",
+        close: aiMode ? "right-[32rem] top-3 h-9 w-9" : "right-40 top-3 h-9 w-9",
       };
 
   return (
@@ -1049,7 +1144,11 @@ export default function Page() {
         ref={collaboraFrameRef}
         title="document"
         src={collaboraUrl}
-        className="fixed inset-0 h-screen w-screen border-0"
+        className={
+          aiMode
+            ? "fixed inset-y-0 left-0 right-[22rem] h-screen border-0"
+            : "fixed inset-0 h-screen w-screen border-0"
+        }
         allow="clipboard-read; clipboard-write; fullscreen"
         onLoad={() => {
           setEditorPainted(true);
@@ -1068,6 +1167,63 @@ export default function Page() {
         </div>
       </div>
     )}
+    {/*
+      微调模式右栏：PI 助手。
+      PI 改的是「我的文档」里那份 docx，改完点「同步到编辑器」重新加载左侧即可看到
+      修订（用 Word 原生接受/拒绝）。PI 每次发送前先把编辑器里的最新内容回灌成草稿，
+      免得拿着旧稿去改、把用户的手改覆盖掉。
+    */}
+    {aiMode ? (
+      <aside className="fixed inset-y-0 right-0 z-40 flex w-[22rem] flex-col border-l border-black/[0.08] bg-white dark:border-white/10 dark:bg-[#0F0F10]">
+        <header className="flex shrink-0 items-center gap-2 border-b border-black/[0.06] px-3 py-2.5 dark:border-white/10">
+          <Sparkles className="h-4 w-4 shrink-0 text-[#E2562B]" strokeWidth={2} />
+          <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-[#1A1A1A] dark:text-white">
+            {docName || "微调"}
+          </span>
+          <button
+            type="button"
+            onClick={() => void syncEditor()}
+            disabled={syncing || !docName}
+            className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[#F2BBA3] px-2 py-1 text-[11.5px] font-medium text-[#E2562B] transition hover:bg-[#FBF2EE] disabled:opacity-40 dark:hover:bg-[#2A1A14]"
+          >
+            {syncing ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <RotateCcw className="h-3 w-3" />
+            )}
+            同步到编辑器
+          </button>
+        </header>
+        <div className="min-h-0 flex-1">
+          <AgentPanel
+            messages={chat.messages}
+            materials={chat.materials}
+            template={chat.template}
+            streaming={chat.streaming}
+            blocked={chat.blocked}
+            sessionReady={!!chat.sessionId}
+            lastSaved={chat.lastSaved}
+            onSend={(text) => {
+              void (async () => {
+                await pullFromEditor();
+                await chat.send(text);
+              })();
+            }}
+            onStop={chat.stop}
+            onUpload={chat.upload}
+            onUploadTemplate={(file) => chat.uploadTemplate(file)}
+            onRemoveTemplate={() => void chat.removeTemplate()}
+            onRemoveMaterial={(name) => void chat.removeMaterial(name)}
+            onAcceptChange={(key) => void chat.acceptChange(key)}
+            onRejectChange={chat.rejectChange}
+            onAcceptAll={() => void chat.acceptAll()}
+            onSave={() => void chat.saveNow()}
+            panelWidth="w-full"
+            className="h-full min-h-0 border-none bg-transparent dark:bg-transparent"
+          />
+        </div>
+      </aside>
+    ) : null}
     {/*
       首帧骨架：从路由切进编辑器页到内核真正画出内容之间，避免白屏/黑屏闪一下。
       Collabora 用 iframe onLoad 收尾、OnlyOffice 用 onAppReady 收尾，另有一道
