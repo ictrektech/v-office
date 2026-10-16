@@ -12,10 +12,8 @@ import {
   Check,
   ChevronRight,
   HardDrive,
-  FileSpreadsheet,
   FileText,
   Loader2,
-  Presentation,
   ScrollText,
   Sparkles,
   Wrench,
@@ -248,18 +246,7 @@ export function GenerateView({
                   title={result.title}
                   content={result.content}
                 />
-                <ExportExcel file={result.files.find((f) => f.kind === "xlsx")} />
                 <SaveToMyDocsButton onSave={onSaveToMyDocs} />
-                <button
-                  disabled
-                  className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-4 py-2 text-[14px] font-medium text-gray-300 cursor-not-allowed"
-                  title="后续版本支持"
-                >
-                  <span className="flex w-6 h-6 rounded-lg bg-orange-100 items-center justify-center text-orange-500">
-                    <Presentation className="w-3.5 h-3.5" strokeWidth={2} />
-                  </span>
-                  下载 PPT
-                </button>
                 {historySessionId && (
                   <button
                     onClick={() => setHistoryOpen(true)}
@@ -758,15 +745,6 @@ function downloadBlob(blob: Blob, name: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-/**
- * 带鉴权下载：/writing/file 需要 Bearer JWT，普通 <a href> 带不了请求头
- * （浏览器直接 401），必须 fetch 成 blob 再触发保存。
- */
-async function authedDownload(file: ResultFile): Promise<void> {
-  const resp = await fetch(file.url, { headers: await authHeaders() });
-  if (!resp.ok) throw new Error(`下载失败（${resp.status}）`);
-  downloadBlob(new Blob([await resp.arrayBuffer()]), file.name);
-}
 
 /** 保存到我的文档：把当前成稿（生成/微调后最新版）导出并保存到 v-office 文档存储（仅 VOS 模式显示） */
 function SaveToMyDocsButton({
@@ -893,53 +871,6 @@ function ExportWord({
   );
 }
 
-function ExportExcel({ file }: { file?: ResultFile }) {
-  const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const onClick = useCallback(async () => {
-    if (!file || busy) return;
-    setBusy(true);
-    setFailed(false);
-    try {
-      await authedDownload(file);
-    } catch {
-      setFailed(true);
-    } finally {
-      setBusy(false);
-    }
-  }, [file, busy]);
-  if (!file) {
-    return (
-      <button
-        disabled
-        className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-4 py-2 text-[14px] font-medium text-gray-300 cursor-not-allowed"
-        title="定稿中未包含表格"
-      >
-        <span className="flex w-6 h-6 rounded-lg bg-green-100 items-center justify-center text-green-500">
-          <FileSpreadsheet className="w-3.5 h-3.5" strokeWidth={2} />
-        </span>
-        下载 Excel
-      </button>
-    );
-  }
-  return (
-    <button
-      onClick={onClick}
-      disabled={busy}
-      className={
-        "inline-flex items-center gap-2 rounded-full border px-4 py-2 text-[14px] font-medium transition active:scale-[0.98] " +
-        (failed
-          ? "border-[#FFD5CC] bg-[#FFF5F3] text-[#D93025]"
-          : "border-gray-200 bg-white text-green-600 hover:border-gray-300")
-      }
-    >
-      <span className="flex w-6 h-6 rounded-lg bg-green-100 items-center justify-center text-green-500">
-        <FileSpreadsheet className="w-3.5 h-3.5" strokeWidth={2} />
-      </span>
-      {busy ? "下载中…" : failed ? "下载失败，点击重试" : "下载 Excel"}
-    </button>
-  );
-}
 
 /**
  * 下载 PDF。
