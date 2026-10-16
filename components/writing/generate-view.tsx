@@ -95,7 +95,7 @@ interface GenerateViewProps {
   onStop: () => void;
   onBackToConfig: () => void;
   onRevise: (instruction: string) => void;
-  /** 在 Word 里微调：打开 Collabora 工作台（当前成稿带过去，右边就是对话框） */
+  /** 带进 AI 工作台：当前成稿交接过去，接着和 AI 对话 */
   onOpenStudio?: () => void;
   onUndo: () => void;
   /** 重置：从 0 开始（清空生成流与成稿，保留材料与配置） */
@@ -207,7 +207,9 @@ export function GenerateView({
       <div ref={streamRef} className="flex flex-col gap-4">
         {materialChars !== null && (
           <div className="text-[13px] text-gray-400 px-1">
-            📄 已解析参考材料，共 {materialChars} 字
+            {materialChars > 0
+              ? `📄 已解析参考材料，共 ${materialChars} 字`
+              : "📄 参考材料已送入助手工作目录"}
           </div>
         )}
         {items.map((item) => (
@@ -313,9 +315,9 @@ export function GenerateView({
                   className="mt-2.5 inline-flex items-center gap-1.5 rounded-xl border border-gray-200 px-3.5 py-2 text-[13px] font-medium text-[#1D1D1F] transition hover:border-primary hover:text-primary"
                 >
                   <FileText className="h-3.5 w-3.5" />
-                  在 Word 里微调
+                  在工作台里微调
                   <span className="text-[11.5px] text-gray-400">
-                    当前成稿带进 Collabora，右边直接和 AI 对话
+                    当前成稿带进 AI 工作台，接着和 AI 对话
                   </span>
                 </button>
               ) : null}

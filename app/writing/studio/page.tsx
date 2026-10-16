@@ -1,11 +1,11 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
-import { WritingStudio } from "@/components/writing/writing-studio";
+import { WritingTask } from "@/components/writing/task/writing-task";
 
 export const metadata: Metadata = {
-  title: "AI 写作工作台",
+  title: "公文写作",
   description:
-    "AI 写作工作台：Collabora 编辑器 + AI 对话，按文种模板五阶段协作（起草/审查/推稿/定稿），AI 改动直接落进打开着的文档。",
+    "公文写作：选文种、填要件、上传素材，AI 按五阶段协作成文并自查，产出 Markdown 与 Word。",
 };
 
 /**
@@ -13,18 +13,18 @@ export const metadata: Metadata = {
  * `useSearchParams` 需要一层 Suspense 边界（否则构建期直接报错）。
  * 预渲染出来的是这份骨架，客户端接管后立刻换成真实界面。
  */
-function StudioFallback() {
+function WritingFallback() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-white dark:bg-[#0e0e0e]">
-      <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#2563EB] border-t-transparent" />
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#1D1D1F] border-t-transparent" />
     </div>
   );
 }
 
 export default function WritingStudioPage() {
   return (
-    <Suspense fallback={<StudioFallback />}>
-      <WritingStudio />
+    <Suspense fallback={<WritingFallback />}>
+      <WritingTask />
     </Suspense>
   );
 }

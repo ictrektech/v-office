@@ -1825,7 +1825,8 @@ function MaterialStatusLine({
   if (material.parseError)
     return { text: material.parseError, tone: "warn" };
   return {
-    text: material.chars !== undefined ? `已解析 ${fmtChars(material.chars)}` : "已就绪",
+    // 材料原件现在是直接送进助手工作目录的，服务端不再做"解析成文本"这一步
+    text: material.chars ? `已解析 ${fmtChars(material.chars)}` : "已送入助手工作目录",
     tone: "muted",
   };
 }

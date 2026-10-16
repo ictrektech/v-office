@@ -257,8 +257,18 @@ export function useAiChat(options: {
    * 等于把已经导出的 docx 改名，多一步还容易和编辑器里开着的那份对不上。
    */
   paused?: boolean;
+  /**
+   * 直接恢复这条会话（而不是新建）。
+   *
+   * 谁用：栏目首页的「最近案件」。点一条案件就该回到那条会话——材料、草稿、
+   * 产物与对话记录全在原处；而 `persistKey` 只能恢复「本页面自己那条线」，
+   * 跨页面点开某一条历史案件它做不到。
+   *
+   * 会话已被清理时静默退回新建（与 persistKey 分支同一套兜底）。
+   */
+  resumeFrom?: string;
 }): UseAiChat {
-  const { skill, title = "", persistKey, paused = false } = options;
+  const { skill, title = "", persistKey, paused = false, resumeFrom = "" } = options;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState<AiDraft | null>(null);
   const [materials, setMaterials] = useState<AiMaterial[]>([]);
@@ -310,6 +320,26 @@ export function useAiChat(options: {
     // 在途去重：并发调用共用同一次创建（见 ensureInFlight 的注释）
     if (ensureInFlight.current) return ensureInFlight.current;
     const task = (async (): Promise<string> => {
+      // 调用方点名要恢复某条会话（「最近案件」点进来的）：先试它，失败再按
+      // persistKey / 新建走。会话没了就当它过期，不把死 id 往上传。
+      if (resumeFrom) {
+        try {
+          const state = await getAiState(resumeFrom);
+          sessionRef.current = resumeFrom;
+          setSessionId(resumeFrom);
+          if (persistKey) {
+            try {
+              localStorage.setItem(persistKey, resumeFrom);
+            } catch {
+              /* 无痕模式忽略 */
+            }
+          }
+          if (state.draft?.title) setDraftTitle(state.draft.title);
+          return resumeFrom;
+        } catch {
+          /* 已清理：往下走新建 */
+        }
+      }
       // 先认领上次那条会话线。`persistKey` 的用意就是「同一条稿子线，刷新/重开
       // 页面还接着用」，但这里以前**只写不读**：每次进页面都新建一个会话，而新
       // 会话的草稿是空的。于是出现最费解的一幕——编辑器里明明开着整篇稿子（那是
@@ -349,7 +379,7 @@ export function useAiChat(options: {
     } finally {
       ensureInFlight.current = null;
     }
-  }, [draftTitle, persistKey, skill]);
+  }, [draftTitle, persistKey, resumeFrom, skill]);
 
   const refresh = useCallback(async () => {
     const sid = sessionRef.current;

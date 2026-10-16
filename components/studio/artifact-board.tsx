@@ -45,6 +45,7 @@ export function ArtifactBoard({
   /** 预览中的产物正文（markdown）；null = 没在预览 */
   preview,
   onClosePreview,
+  extraTitle,
 }: {
   specs: ArtifactSpec[];
   artifacts: AiArtifact[];
@@ -60,6 +61,13 @@ export function ArtifactBoard({
   onSaveToDocs: (spec: ArtifactSpec) => void;
   preview: { key: string; title: string; markdown: string } | null;
   onClosePreview: () => void;
+  /**
+   * `kind: "extra"` 那批产物的分区标题。
+   *
+   * 「问题清单」是申请文件包的口径；交底包的过程稿（专利点清单 / 查新与区别定位）
+   * 塞在同一个标题下就成了错标签，所以标题由栏目侧传入。
+   */
+  extraTitle?: string;
 }) {
   const t = useExtracted();
   const [error, setError] = useState<string | null>(null);
@@ -85,7 +93,7 @@ export function ArtifactBoard({
         className={cn(
           "flex flex-col rounded-3xl bg-white p-5 ring-1 transition",
           isActive
-            ? "ring-2 ring-[#007AFF]/50 shadow-[0_2px_6px_rgba(0,0,0,0.05),0_20px_44px_-26px_rgba(0,122,255,0.45)]"
+            ? "ring-2 ring-[#D4542F]/50 shadow-[0_2px_6px_rgba(0,0,0,0.05),0_20px_44px_-26px_rgba(212,84,47,0.45)]"
             : "ring-black/[0.05] shadow-[0_1px_2px_rgba(0,0,0,0.04)]",
         )}
       >
@@ -93,7 +101,7 @@ export function ArtifactBoard({
           <span
             className={cn(
               "flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl",
-              isExtra ? "bg-[#FFF3E0] text-[#FF9500]" : "bg-[#EAF4FF] text-[#007AFF]",
+              isExtra ? "bg-[#FFF3E0] text-[#FF9500]" : "bg-[#FDF1EC] text-[#D4542F]",
             )}
           >
             {isExtra ? (
@@ -115,7 +123,7 @@ export function ArtifactBoard({
                 </span>
               ) : null}
               {isActive ? (
-                <span className="rounded-full bg-[#007AFF]/10 px-2 py-0.5 text-[12px] font-semibold text-[#007AFF]">
+                <span className="rounded-full bg-[#D4542F]/10 px-2 py-0.5 text-[12px] font-semibold text-[#D4542F]">
                   {t({ id: "Editing", message: "Editing" })}
                 </span>
               ) : null}
@@ -145,7 +153,7 @@ export function ArtifactBoard({
             type="button"
             onClick={() => onGenerate(spec)}
             disabled={streaming || !!busyKey}
-            className="inline-flex items-center gap-1.5 rounded-full bg-[#007AFF] px-3.5 py-2 text-[14px] font-semibold text-white transition hover:bg-[#0062CC] active:scale-[0.98] disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 rounded-full bg-[#D4542F] px-3.5 py-2 text-[14px] font-semibold text-white transition hover:bg-[#B8441F] active:scale-[0.98] disabled:opacity-40"
           >
             {busy ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -212,7 +220,7 @@ export function ArtifactBoard({
               })}
             </p>
           </div>
-          <span className={cn(vp.chip, "border-none bg-[#EAF4FF] px-3.5 py-2 text-[14px] font-semibold text-[#007AFF]")}>
+          <span className={cn(vp.chip, "border-none bg-[#FDF1EC] px-3.5 py-2 text-[14px] font-semibold text-[#D4542F]")}>
             {t({
               id: "N of M deliverables",
               message: "{done} / {total} drafted",
@@ -232,7 +240,7 @@ export function ArtifactBoard({
         {extra.length ? (
           <>
             <h3 className="mb-3 mt-8 text-[17px] font-semibold text-[#0F172A] dark:text-white">
-              {t({ id: "Open questions", message: "Open questions" })}
+              {extraTitle ?? t({ id: "Open questions", message: "Open questions" })}
             </h3>
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">{extra.map(card)}</div>
           </>
@@ -243,7 +251,7 @@ export function ArtifactBoard({
       {preview ? (
         <div className="absolute inset-0 z-40 flex flex-col bg-[#F2F2F7] dark:bg-[#0B0B0B]">
           <div className="flex shrink-0 items-center gap-3 border-b border-black/[0.06] bg-white/90 px-6 py-4 backdrop-blur-xl dark:border-white/10 dark:bg-[#141414]/90">
-            <FileText className="h-5 w-5 text-[#007AFF]" />
+            <FileText className="h-5 w-5 text-[#D4542F]" />
             <h3 className="text-[19px] font-semibold text-[#0F172A] dark:text-white">
               {preview.title}
             </h3>
