@@ -18,6 +18,7 @@ import { useExtracted } from "next-intl";
 import {
   ArrowRight,
   CloudUpload,
+  Copyright,
   Ellipsis,
   FilePen,
   FileText,
@@ -39,18 +40,20 @@ import {
 const ORANGE = "#E2562B";
 const ORANGE_SOFT = "#FBF2EE";
 
-/** 技能包 → 案件详情页；不在表里的会话不作为专利案件展示 */
+/** 技能包 → 案件详情页；不在表里的会话不作为「AI 专利」案件展示 */
 const SKILL_HOME: Record<string, string> = {
   "patent-disclosure": "/patent/studio",
   "patent-application": "/patent/application",
+  "software-copyright": "/patent/copyright",
 };
 
-/** 列表里的专利类型标签（会话只记技能包，这里按技能给展示口径） */
-type CaseKind = "invention" | "utility";
+/** 列表里的案件类型标签（会话只记技能包，这里按技能给展示口径） */
+type CaseKind = "invention" | "utility" | "copyright";
 
 const SKILL_CASE_KIND: Record<string, CaseKind> = {
   "patent-disclosure": "utility",
   "patent-application": "invention",
+  "software-copyright": "copyright",
 };
 
 interface CaseRow {
@@ -126,11 +129,13 @@ export function PatentHome() {
     ).padStart(2, "0")}`;
   };
 
-  /** 案件类型标签：发明专利 / 实用新型 */
+  /** 案件类型标签：发明专利 / 实用新型 / 软件著作权 */
   const caseKindLabel = (kind: CaseKind) =>
     kind === "invention"
       ? t({ id: "Invention patent", message: "发明专利" })
-      : t({ id: "Utility model", message: "实用新型" });
+      : kind === "copyright"
+        ? t({ id: "Software copyright", message: "软件著作权" })
+        : t({ id: "Utility model", message: "实用新型" });
 
   const removeCase = async (id: string) => {
     setCases((prev) => prev.filter((c) => c.id !== id));
@@ -142,8 +147,8 @@ export function PatentHome() {
   };
 
   /**
-   * 四个模块（其余流程步骤都在这四页里面，不再单列入口）：
-   * 交底书 → 申请文件四件套 → 审查答复 → 附图线稿。
+   * 五个模块（其余流程步骤都在各页里面，不再单列入口）：
+   * 交底书 → 申请文件四件套 → 审查答复 → 附图线稿 → 软件著作权。
    */
   const features = [
     {
@@ -188,6 +193,17 @@ export function PatentHome() {
       desc: t({
         id: "Feature figures desc",
         message: "系统框图、流程图与结构示意图",
+      }),
+    },
+    {
+      href: "/patent/copyright",
+      icon: Copyright,
+      bg: "bg-[#EAF1FD]",
+      color: "#2F6BD9",
+      title: t({ id: "Feature copyright", message: "软件著作权" }),
+      desc: t({
+        id: "Feature copyright desc",
+        message: "申请表、操作手册与前后 30 页代码",
       }),
     },
   ];
@@ -278,7 +294,7 @@ export function PatentHome() {
           <h2 className="mb-3 text-[15px] font-semibold tracking-[-0.01em] text-[#1A1A1A] dark:text-white">
             {t({ id: "Core features", message: "核心功能" })}
           </h2>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
             {features.map((f) => (
               <Link
                 key={f.title}

@@ -57,7 +57,30 @@ RUN set -eux; \
         poppler-utils \
         fonts-noto-cjk \
         iptables \
+        curl \
+        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# OfficeCLI：软著 skill 的 DOCX 后端（固定 1.0.151）。直接用官方 release 的
+# 预编译二进制 + SHA256 校验，**不用 install.sh**——那个脚本写 ~/.local 并依赖
+# 运行时联网，而 agent 是断网降权的独立 uid，装也装不上。
+# 软著的页数不走它的 --page-count（非 Windows 是估算），用下面的 LibreOffice。
+ARG OFFICECLI_VERSION=1.0.151
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+        amd64) asset="officecli-linux-x64" ;; \
+        arm64) asset="officecli-linux-arm64" ;; \
+        *) echo "unsupported arch for officecli: $arch" >&2; exit 1 ;; \
+    esac; \
+    base="https://github.com/iOfficeAI/OfficeCLI/releases/download/v${OFFICECLI_VERSION}"; \
+    curl -fsSL --retry 3 -o /usr/local/bin/officecli "${base}/${asset}"; \
+    curl -fsSL --retry 3 -o /tmp/SHA256SUMS "${base}/SHA256SUMS"; \
+    expected="$(awk -v a="$asset" '$2 == a || $2 == "*"a {print $1}' /tmp/SHA256SUMS)"; \
+    echo "${expected}  /usr/local/bin/officecli" | sha256sum -c -; \
+    chmod +x /usr/local/bin/officecli; \
+    rm -f /tmp/SHA256SUMS; \
+    OFFICECLI_SKIP_UPDATE=1 officecli --version
 
 # AI 运行时：node + pi bundle（见上面的 pi 阶段说明）
 COPY --from=pi /usr/local/bin/node /opt/pi-node/node
@@ -87,7 +110,14 @@ ENV V_OFFICE_AI_HOME=/data/.ai \
     V_OFFICE_AI_SKILLS=/opt/patent-skills \
     V_OFFICE_AI_PI_BIN=/usr/local/bin/pi \
     V_OFFICE_AI_CONCURRENCY=3 \
-    V_OFFICE_AI_UID_BASE=20000
+    V_OFFICE_AI_UID_BASE=20000 \
+    V_OFFICE_AI_MAX_ARCHIVE=209715200 \
+    V_OFFICE_AI_MAX_PROJECT_BYTES=1073741824 \
+    V_OFFICE_AI_MAX_PROJECT_FILES=20000
+
+# OfficeCLI 不许自更新、不许常驻：同一份材料必须每次生成出同样的结果
+ENV OFFICECLI_SKIP_UPDATE=1 \
+    OFFICECLI_NO_AUTO_RESIDENT=1
 
 EXPOSE 5000
 

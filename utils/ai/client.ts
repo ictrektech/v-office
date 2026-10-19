@@ -158,6 +158,21 @@ export interface AiMaterial {
    */
   chars?: number;
   parseError?: string | null;
+  /** 传的是源码 ZIP 时，服务端解包后回的项目概况 */
+  project?: AiProject | null;
+}
+
+/** 源码包解出来的项目概况（软著/专利的代码材料都从这里抽） */
+export interface AiProject {
+  root: string;
+  archive: string;
+  archive_bytes: number;
+  extracted_bytes: number;
+  files: number;
+  source_files: number;
+  source_lines: number;
+  languages: { name: string; files: number; lines: number }[];
+  top_dirs: { name: string; files: number }[];
 }
 
 export interface AiDraftBlock {
@@ -175,6 +190,8 @@ export interface AiDraft {
 
 export interface AiSessionState {
   materials: AiMaterial[];
+  /** 当前会话的项目概况（上传过源码 ZIP 才有） */
+  project?: AiProject | null;
   /** 当前会话的成稿模板（用户上传；没有就是 null） */
   template?: AiTemplate | null;
   draft: AiDraft;
@@ -193,9 +210,11 @@ export async function getAiState(sid: string): Promise<AiSessionState> {
 }
 
 /**
- * 上传材料：服务端**当场解析成文本**再入库。
- * agent 全程看不到这份文件——所以这里返回的是解析结果（字数/失败原因），
- * 前端据此提示「扫描件解析不出正文，请补文字说明」这类情况。
+ * 上传材料原件：文件直接落到会话目录 `materials/`，agent 自己读。
+ *
+ * 传 `.zip` 时服务端会顺手解成 `project/`，返回里带上项目概况（文件数、
+ * 源码行数、主要语言）。这里直接送 `File`（Blob body），不先 `arrayBuffer()`——
+ * 源码包可能几百 MB，整份读进内存只会让浏览器先崩。
  */
 export async function uploadAiMaterial(
   sid: string,
@@ -203,9 +222,24 @@ export async function uploadAiMaterial(
 ): Promise<AiMaterial> {
   const resp = await aiFetch(
     `/sessions/${encodeURIComponent(sid)}/materials?name=${encodeURIComponent(file.name)}`,
-    { method: "POST", body: await file.arrayBuffer() },
+    { method: "POST", body: file },
   );
   return jsonOrThrow<AiMaterial>(resp);
+}
+
+/** 当前会话的项目概况（没上传源码包就是 null）。 */
+export async function getAiProject(sid: string): Promise<AiProject | null> {
+  const resp = await aiFetch(`/sessions/${encodeURIComponent(sid)}/project`, {
+    cache: "no-store",
+  });
+  return (await jsonOrThrow<{ project: AiProject | null }>(resp)).project;
+}
+
+/** 丢掉已解开的项目目录（重新上传会整体替换，一般不用手动调）。 */
+export async function deleteAiProject(sid: string): Promise<void> {
+  await aiFetch(`/sessions/${encodeURIComponent(sid)}/project`, {
+    method: "DELETE",
+  });
 }
 
 /** 撤掉一份材料：下一轮起 agent 的参考里不再有它（原件由会话删除时一并清）。 */

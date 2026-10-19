@@ -44,6 +44,15 @@ from typing import AsyncIterator, Callable, Optional
 
 from safe_fs import discard_file, discard_tree
 
+# 源码 ZIP：服务端解压成会话目录里的 `project/`（见 project_zip 模块注释）
+from project_zip import (
+    ARCHIVE_MAX_BYTES,
+    ProjectZipError,
+    clear_project,
+    extract_project_zip,
+    read_project_summary,
+)
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -265,11 +274,13 @@ DRAFT_INJECT_MAX_CHARS = int(os.environ.get("V_OFFICE_AI_DRAFT_CHARS", "40000"))
 
 # 提示词级别的护栏（与逻辑限制双保险）。逻辑上做不到的（比如「别联网」在
 # 用户显式开了 shell 之后只能靠环境约束），这里至少把边界说清楚。
-SYSTEM_POLICY = """你是 V-Office 内置的写作助手，只服务两件事：公文写作、专利交底与申请文件撰写。
+SYSTEM_POLICY = """你是 V-Office 内置的写作助手，只服务三件事：公文写作、专利交底与申请文件撰写、软件著作权申请资料整理。
 
 必须遵守的边界（没有例外）：
 - 只在当前工作目录内工作（这个目录就是本次案件目录）：材料在 `materials/`、
   模板在 `templates/`，成稿与产物写 `outputs/`，不要把文件写到别处。
+- 如果用户上传了源码压缩包，服务端已经解到 `project/`（只读的项目根）。
+  代码材料只能从这个目录里的真实源码抽取，禁止编造或改写源码。
 - 材料是**原件**（PDF/Word/Excel/图片等），不是别人嚼碎给你的文本：需要时自己读；
   PDF 表格这类用技能包 `tools/` 下的转换脚本自己转（如 `pdf_to_md.py`、`docx_to_md.py`）。
   先读技能目录里的 `SKILL.md` 再动手，它写明了这一步该产出什么。
@@ -523,10 +534,26 @@ def materials_context(username: str, sid: str) -> str:
     兼容：直通改造之前上传的材料只留了解析文本、工作目录里没有原件。这类材料
     回退成注入当时那份文本——不然旧会话一升级就"看不见材料"了。
     """
-    items = load_materials(username, sid)
-    if not items:
-        return ""
     root = session_dir(username, sid)
+    parts: list[str] = []
+
+    # 源码包：软著/专利的代码材料都要从真实项目里抽，先把它在哪儿说清楚
+    project = read_project_summary(root)
+    if project:
+        langs = "、".join(
+            f"{item.get('name')} {item.get('files')} 个文件"
+            for item in (project.get("languages") or [])[:4]
+        )
+        parts.append(
+            "# 项目源码（真实项目根目录）\n\n"
+            f"- 目录：`project/`（源码包 {project.get('archive', '')} 解压而来，只读使用）\n"
+            f"- 文件数：{project.get('files', 0)}，其中可识别源码 {project.get('source_files', 0)} 个\n"
+            f"- 源码总行数（含空行，约等于源程序量）：{project.get('source_lines', 0)}\n"
+            f"- 主要语言：{langs or '未识别'}\n\n"
+            "做代码材料时只从 `project/` 里抽取真实文件，禁止编造源码。"
+        )
+
+    items = load_materials(username, sid)
     live: list[str] = []
     legacy: list[str] = []
     for item in items:
@@ -546,7 +573,6 @@ def materials_context(username: str, sid: str) -> str:
             legacy.append(
                 f"## {name}（历史材料：原件已不在，以下是当时解析出的正文）\n{text}"
             )
-    parts: list[str] = []
     if live:
         parts.append(
             "# 参考材料（原件在工作目录的 materials/ 下）\n\n"
@@ -3248,6 +3274,32 @@ async def chat(request: Request, sid: str, body: ChatRequest) -> StreamingRespon
     )
 
 
+async def _stream_upload(request: Request, target: Path, limit: int) -> int:
+    """把请求体按块写到磁盘。
+
+    源码包可能是几百 MB，`await request.body()` 会整块进内存；限并发 3 的时候
+    三个上传就能把容器打爆。这里流式落盘，超限立刻中断并删掉半截文件。
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    size = 0
+    try:
+        with target.open("wb") as handle:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(status_code=413, detail="file too large")
+                handle.write(chunk)
+    except BaseException:  # noqa: BLE001 超限/断连都要清掉半截文件
+        discard_file(target)
+        raise
+    if not size:
+        discard_file(target)
+        raise HTTPException(status_code=400, detail="empty body")
+    return size
+
+
 @router.post("/sessions/{sid}/materials")
 async def upload_material(
     request: Request, sid: str, name: str = Query(default="")
@@ -3256,28 +3308,64 @@ async def upload_material(
 
     这里刻意不做「解析成文本」：那是替 agent 嚼碎材料——表格、图、排版都在
     那一步丢掉，它想换个方式重新解析也没原件可用。文件给它，怎么读由它决定。
+
+    源码 ZIP 是特例：服务端顺手解成 `project/`，并回一份项目概况（文件数、
+    源码行数、主要语言）。软著的代码材料只能来自真实源码，让 agent 自己去解
+    一个几百 MB 的包既慢又挡不住解压炸弹。
     """
     username = await _user(request)
     root = session_dir(username, sid)
     filename = _safe_name(name or "material.txt")
-    body = await request.body()
-    if not body:
-        raise HTTPException(status_code=400, detail="empty body")
-    if len(body) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="file too large")
-
     dest = root / "materials"
-    dest.mkdir(parents=True, exist_ok=True)
-    (dest / filename).write_bytes(body)
+    is_archive = filename.lower().endswith(".zip")
+    project: dict | None = None
+
+    if is_archive:
+        size = await _stream_upload(request, dest / filename, ARCHIVE_MAX_BYTES)
+        uid, gid = await user_ids(username)
+        try:
+            project = extract_project_zip(root, dest / filename, uid=uid, gid=gid)
+        except ProjectZipError as exc:
+            discard_file(dest / filename)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    else:
+        body = await request.body()
+        if not body:
+            raise HTTPException(status_code=400, detail="empty body")
+        if len(body) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="file too large")
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / filename).write_bytes(body)
+        size = len(body)
 
     items = [i for i in load_materials(username, sid) if i.get("name") != filename]
-    items.append({"name": filename, "bytes": len(body)})
+    items.append({"name": filename, "bytes": size})
     save_materials(username, sid, items)
     LOG.info(
-        "ai: material stored user=%s sid=%s name=%s bytes=%d",
-        username, sid, filename, len(body),
+        "ai: material stored user=%s sid=%s name=%s bytes=%d project=%s",
+        username, sid, filename, size, bool(project),
     )
-    return JSONResponse({"name": filename, "size": len(body)})
+    payload = {"name": filename, "size": size}
+    if project is not None:
+        payload["project"] = project
+    return JSONResponse(payload)
+
+
+@router.get("/sessions/{sid}/project")
+async def get_project(request: Request, sid: str) -> JSONResponse:
+    """当前会话的项目概况（没传源码包就是 null）。"""
+    username = await _user(request)
+    root = session_dir(username, sid)
+    return JSONResponse({"project": read_project_summary(root)})
+
+
+@router.delete("/sessions/{sid}/project")
+async def delete_project(request: Request, sid: str) -> JSONResponse:
+    """丢掉已解开的项目目录（重新上传前用；上传本身也会整体替换）。"""
+    username = await _user(request)
+    root = session_dir(username, sid)
+    clear_project(root)
+    return JSONResponse({"project": None})
 
 
 @router.get("/sessions/{sid}/materials")
@@ -3361,7 +3449,11 @@ async def delete_template(request: Request, sid: str) -> JSONResponse:
 # outputs/），服务端只负责列出来、原样发回去，前端据此展示与下载。
 
 # agent 自己的内部目录 + 材料/模板（它们各有专门的接口），不给文件列表看
-_PRIVATE_DIRS = {".pi-agent", ".pi-sessions", ".home", "materials", "templates"}
+_PRIVATE_DIRS = {
+    ".pi-agent", ".pi-sessions", ".home", "materials", "templates",
+    # 源码包解出来的项目根：几千个文件，列出来只会淹掉产物面板
+    "project",
+}
 
 
 @router.get("/sessions/{sid}/files")
@@ -3375,7 +3467,8 @@ async def list_files(request: Request, sid: str) -> JSONResponse:
             continue
         rel = path.relative_to(root)
         head = rel.parts[0]
-        if head in _PRIVATE_DIRS or head.startswith(".conv-"):
+        # 点开头的一律不列：`.project.json` 这类会话内部账本不该出现在产物面板
+        if head in _PRIVATE_DIRS or head.startswith("."):
             continue
         try:
             stat = path.stat()
@@ -3469,6 +3562,7 @@ async def session_state(request: Request, sid: str) -> JSONResponse:
     draft = load_draft(username, sid)
     return JSONResponse({
         "materials": [{"name": i.get("name"), "size": i.get("bytes")} for i in items],
+        "project": read_project_summary(session_dir(username, sid)),
         "template": public_template(load_template(username, sid)),
         "draft": public_draft(draft),
         "artifacts": list_artifacts(username, sid),

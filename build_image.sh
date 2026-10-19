@@ -732,6 +732,11 @@ if [[ "$SKIP_BUILD" != "1" && "$BUILD_STORAGE" == "1" ]]; then
     mkdir -p server/skills
     find server/skills -mindepth 1 -maxdepth 1 ! -name README.md -exec rm -rf {} +
     cp -r "$PATENT_SKILLS_DIR"/. server/skills/
+    # 仓库自带技能（如 software-copyright）再覆盖一层：隔壁技能仓库里没有它们，
+    # 只按 PATENT_SKILLS_DIR 拷会让「本仓库新增的技能」在开发机上静默丢失。
+    if [[ -d vendor/patent-skills ]]; then
+      cp -r vendor/patent-skills/. server/skills/
+    fi
   else
     # 走到这里 = 显式指定的目录不存在（仓库内兜底副本由上面的逻辑保证存在）。
     # **必须停下**：继续构建会产出一个 md↔docx 全坏、编辑器打不开的镜像，
