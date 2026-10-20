@@ -2636,6 +2636,83 @@ async def wopi_session(
     )
 
 
+def _public_origin(request: Request) -> str:
+    """浏览器视角的 origin。
+
+    本服务自己跑的是明文 HTTP，直接读 request.url 会拼出 http://，而页面是
+    https（TLS 在网关终止）；Traefik 会保留 Host 并带上 X-Forwarded-*，因此
+    优先取这两个头。
+    """
+    proto = (request.headers.get("x-forwarded-proto") or "http").split(",")[0].strip()
+    host = (
+        request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    ).split(",")[0].strip()
+    return f"{proto}://{host}" if host else ""
+
+
+@app.get("/api/v1/documents/editor-link")
+async def editor_link(
+    request: Request,
+    name: str = "",
+    lang: str = "",
+) -> JSONResponse:
+    """给外部宿主一个可以直接嵌进 iframe 的 Collabora 地址。
+
+    链接指向的是 Collabora 自己的前端（cool.html，带 WOPISrc 与短时效
+    access_token），**不是本应用的页面**：宿主不需要为"编辑"另做一个页面，
+    也不用转发任何字节——保存由 Collabora 通过 WOPI 直接写回本服务的私有
+    存储。
+
+    和 /wopi/session 的区别只有两点：只接受私有存储里的文件名，且返回的是
+    浏览器可直接使用的**绝对地址**（宿主拿不到本应用的 base path 规则）。
+    """
+    username = await current_username(request)
+    if not name:
+        raise HTTPException(status_code=400, detail="missing name")
+    target = safe_target(username, name)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    if target.suffix.lower() not in BROWSABLE_SUFFIXES:
+        raise HTTPException(status_code=400, detail="unsupported file type")
+
+    want_write = request.query_params.get("edit", "1") not in ("0", "false")
+    # 会话版本：非 0 时换一个 WOPISrc（coolwsd 的 docKey），逼它重新读盘。
+    # 默认 0 —— 同一份文件的所有人落在同一个协同会话里，这也是多人编辑的前提。
+    try:
+        version = max(0, int(request.query_params.get("version", "0") or 0))
+    except ValueError:
+        version = 0
+
+    doc_name = with_wopi_version(f"{username}/{name}", version)
+    token = issue_wopi_token(username, strip_wopi_version(doc_name), want_write)
+    wopi_src = (
+        f"{WOPI_PUBLIC_BASE.rstrip('/')}/wopi/files/"
+        f"{quote(doc_name, safe='/')}"
+    )
+    editor_url = await _collabora_editor_url(wopi_src, token, lang)
+
+    # 下发给本应用前端的地址是相对路径（按页面 origin 解析）；给外部宿主的
+    # 必须是绝对地址，否则对方拼不出来。COLLABORA_PUBLIC_URL 配成绝对 URL 时
+    # 原样返回。
+    if editor_url.startswith("/"):
+        origin = _public_origin(request)
+        absolute_url = f"{origin}{editor_url}" if origin else editor_url
+    else:
+        absolute_url = editor_url
+
+    LOG.info(
+        "editor link user=%s doc=%s canWrite=%s", username, doc_name, want_write
+    )
+    return JSONResponse(
+        {
+            "url": absolute_url,
+            "name": name,
+            "canWrite": want_write,
+            "expiresIn": WOPI_TOKEN_TTL,
+        }
+    )
+
+
 # 注意路由顺序：`{name:path}` 会吞掉多级路径，因此带 /contents 的两条必须
 # 声明在"仅 {name:path}"的 CheckFileInfo / 锁操作之前。
 @app.get("/wopi/files/{name:path}/contents")
