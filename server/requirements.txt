@@ -18,4 +18,9 @@ pdf2image>=1.17.0
 # 这里只装 Python 包；它要驱动的那台浏览器在 Dockerfile 里按架构单独装：
 # amd64 用 Playwright 自带的那份，arm64 用发行版的 chromium（官方不发布 Debian
 # arm64 构建），由 browser.py 的 executable_path 分支接上，两边能力一致。
-playwright>=1.48
+#
+# 版本钉死不是洁癖：浏览器二进制走 PLAYWRIGHT_DOWNLOAD_HOST 的镜像，而镜像同步
+# 滞后。1.54 要的 chromium / headless-shell 都是 rev 1181，镜像里有（实测 6MB/s，
+# 180MB 约 30 秒）；再新的版本要 1194+，镜像没有，只能回退微软 CDN，国内十几分钟。
+# 升级前先确认 cdn.npmmirror.com/binaries/playwright 有对应的 rev。
+playwright==1.54.0

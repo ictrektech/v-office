@@ -753,6 +753,7 @@ if [[ "$SKIP_BUILD" != "1" && "$BUILD_STORAGE" == "1" ]]; then
     --build-arg "APT_MIRROR=${APT_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn}" \
     --build-arg "PI_NODE_IMAGE=${BASE_REGISTRY_PREFIX}/node:22-slim" \
     --build-arg "NPM_REGISTRY=${NPM_REGISTRY:-https://registry.npmmirror.com}" \
+    --build-arg "PLAYWRIGHT_DOWNLOAD_HOST=${PLAYWRIGHT_DOWNLOAD_HOST:-https://cdn.npmmirror.com/binaries/playwright}" \
     --build-arg "PI_VERSION=${PI_VERSION:-1.1.0}" \
     -f server/Dockerfile \
     -t "${STORAGE_IMAGE}:${TAG}" \

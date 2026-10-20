@@ -57,9 +57,21 @@ RUN pip install --no-cache-dir -i "${PIP_INDEX_URL}" -r requirements.txt
 #   arm64 —— Playwright 不发布 Debian arm64 构建（官方只覆盖 Ubuntu 22.04/24.04），
 #            改用发行版的 chromium 包；tools/browser.py 会用 executable_path
 #            把它接上，走同一个启动路径、同一套能力。
+#
+# PLAYWRIGHT_DOWNLOAD_HOST：浏览器二进制**不走 PyPI**，默认从 cdn.playwright.dev
+# 拉，国内实测几十分钟起步（构建表现为这一步长时间不动）。npmmirror 有镜像，
+# 但它同步有滞后——新版 Playwright 要的构建号可能还没有（实测 1228/1244 缺失）。
+# 所以先试镜像，取不到立刻回退官方 CDN：镜像命中就快，没命中也不会构建失败。
+ARG PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright
 RUN pip install --no-cache-dir -i "${PIP_INDEX_URL}" pymupdf \
  && if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
-        python -m playwright install --with-deps chromium; \
+        if PLAYWRIGHT_DOWNLOAD_HOST="${PLAYWRIGHT_DOWNLOAD_HOST}" \
+             python -m playwright install --with-deps chromium; then \
+            echo "chromium: 来自镜像源"; \
+        else \
+            echo "chromium: 镜像源没有这个构建，回退官方 CDN（会慢）"; \
+            python -m playwright install chromium; \
+        fi; \
     else \
         apt-get update \
         && apt-get install -y --no-install-recommends chromium \
