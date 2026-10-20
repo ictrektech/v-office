@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 from typing import Any
 
@@ -25,8 +26,28 @@ LAUNCH_ARGS = [
     "--no-sandbox",
 ]
 
-# 自动探测顺序：本机 Chrome、本机 Edge，最后才是 Playwright 自带 Chromium
+# 自动探测顺序：本机 Chrome、本机 Edge、Playwright 自带 Chromium，最后是发行版
+# 自带的 Chromium。最后这一档是给 arm64 Linux 用的：Playwright 官方只发布
+# Ubuntu 的 arm64 构建，Debian 镜像上装不到它自带的那份，容器里装的是
+# `apt install chromium`，用 executable_path 指过去即可，能力完全一致。
 _AUTO_CHANNELS: tuple[str | None, ...] = ("chrome", "msedge", None)
+
+_SYSTEM_CHROMIUM_NAMES = ("chromium", "chromium-browser")
+
+
+def system_chromium_path() -> str | None:
+    """发行版自带 Chromium 的可执行文件路径（没有则 None）。
+
+    可用 ``PATENT_BROWSER_PATH`` 显式指定，绕开自动探测。
+    """
+    explicit = os.environ.get("PATENT_BROWSER_PATH", "").strip()
+    if explicit:
+        return explicit if os.path.exists(explicit) else None
+    for name in _SYSTEM_CHROMIUM_NAMES:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
 
 
 def headed() -> bool:
@@ -101,6 +122,20 @@ def launch_chromium(
         except Exception as e:
             errors.append(f"{channel_label(ch)}: {e}")
             continue
+
+    # Playwright 自带的那份不存在时（arm64 Linux），退回发行版自带的 Chromium。
+    # 只在自动模式下做：显式指定了 channel 就是用户的选择，不要替他兜底。
+    if forced is _AUTO:
+        system = system_chromium_path()
+        if system is not None:
+            try:
+                browser = playwright.chromium.launch(
+                    headless=headless, args=args, executable_path=system
+                )
+                print(f"BROWSER: system={system}", file=sys.stderr, flush=True)
+                return browser, "chromium"
+            except Exception as e:
+                errors.append(f"system:{system}: {e}")
 
     hint = install_chromium_hint()
     detail = " | ".join(errors[:3]) if errors else "unknown"

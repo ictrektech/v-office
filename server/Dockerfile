@@ -22,6 +22,24 @@ FROM ${BASE_IMAGE}
 
 WORKDIR /app
 
+# apt 源。国内构建必配：官方 deb.debian.org 实测 1500s 还在爬 Packages 索引
+# （libreoffice-writer 是这一步的大头，几百 MB），换清华源同样的 update 只要 3s。
+# 置空 APT_MIRROR="" 即回退官方源（境外构建机或镜像已就位时用）。
+#
+# 必须早于**任何** apt-get：下面 playwright 的 --with-deps、arm64 装 chromium
+# 都会跑 apt，写晚了它们仍然去打 deb.debian.org。
+# 基础镜像是 deb822 格式（/etc/apt/sources.list.d/debian.sources，没有
+# sources.list），所以换源改的是 URIs 行；先替 debian-security 再替 debian，
+# 前者含后者前缀。
+ARG APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn
+RUN set -eux; \
+    if [ -n "${APT_MIRROR}" ]; then \
+        sed -i \
+            -e "s|http://deb.debian.org/debian-security|${APT_MIRROR}/debian-security|g" \
+            -e "s|http://deb.debian.org/debian|${APT_MIRROR}/debian|g" \
+            /etc/apt/sources.list.d/debian.sources; \
+    fi
+
 COPY requirements.txt ./
 
 # PyPI index override for mirror-rich environments (defaults to upstream).
@@ -33,25 +51,25 @@ RUN pip install --no-cache-dir -i "${PIP_INDEX_URL}" -r requirements.txt
 #   - pymupdf：解析 PDF（材料原件、审查意见通知书）
 #   - chromium：mermaid_render.py / browser.py 要驱动真浏览器（画框图、查国知局）。
 #     playwright 这个包本身在 requirements.txt 里，这里补的是它要驱动的那台"浏览器"。
+#
+# 两种架构都要有浏览器，只是来源不同，功能一致：
+#   amd64 —— Playwright 自带的那份（官方支持 Debian，--with-deps 一并装系统依赖）
+#   arm64 —— Playwright 不发布 Debian arm64 构建（官方只覆盖 Ubuntu 22.04/24.04），
+#            改用发行版的 chromium 包；tools/browser.py 会用 executable_path
+#            把它接上，走同一个启动路径、同一套能力。
 RUN pip install --no-cache-dir -i "${PIP_INDEX_URL}" pymupdf \
- && python -m playwright install --with-deps chromium
+ && if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+        python -m playwright install --with-deps chromium; \
+    else \
+        apt-get update \
+        && apt-get install -y --no-install-recommends chromium \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
 
-# apt 源。国内构建必配：官方 deb.debian.org 实测 1500s 还在爬 Packages 索引
-# （libreoffice-writer 是这一步的大头，几百 MB），换清华源同样的 update 只要 3s。
-# 置空 APT_MIRROR="" 即回退官方源（境外构建机或镜像已就位时用）。
-ARG APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn
 # LibreOffice headless：只服务 OnlyOffice 路线的老 .doc 往返（x2t 读不好也写不了
 # 老二进制）。老 ppt / xls 不走这条路——它们默认交给 Collabora（服务端 LibreOffice，
 # 自带全部过滤器），所以这里不需要 impress / calc。
-# 基础镜像是 deb822 格式（/etc/apt/sources.list.d/debian.sources，没有 sources.list），
-# 所以换源改的是 URIs 行；先替 debian-security 再替 debian，前者含后者前缀。
 RUN set -eux; \
-    if [ -n "${APT_MIRROR}" ]; then \
-        sed -i \
-            -e "s|http://deb.debian.org/debian-security|${APT_MIRROR}/debian-security|g" \
-            -e "s|http://deb.debian.org/debian|${APT_MIRROR}/debian|g" \
-            /etc/apt/sources.list.d/debian.sources; \
-    fi; \
     apt-get update && apt-get install -y --no-install-recommends \
         libreoffice-writer \
         poppler-utils \

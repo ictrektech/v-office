@@ -536,10 +536,23 @@ def svg_to_png(svg_path: Path, png_path: Path) -> bool:
     except ImportError:
         return False
     with sync_playwright() as pw:
-        for channel in ("chrome", "msedge", None):
+        # arm64 镜像里没有 Playwright 自带的 Chromium（官方不发布 Debian 构建），
+        # 容器装的是发行版的 chromium，用 executable_path 指过去，能力一致。
+        candidates: list[tuple[str | None, str | None]] = [
+            ("chrome", None), ("msedge", None), (None, None),
+        ]
+        system = next(
+            (p for p in (shutil.which("chromium"), shutil.which("chromium-browser")) if p),
+            None,
+        )
+        if system:
+            candidates.append((None, system))
+        for channel, executable in candidates:
             kwargs: dict[str, Any] = {"headless": True}
             if channel:
                 kwargs["channel"] = channel
+            if executable:
+                kwargs["executable_path"] = executable
             try:
                 browser = pw.chromium.launch(**kwargs)
             except Exception:
