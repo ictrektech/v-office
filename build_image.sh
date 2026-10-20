@@ -735,7 +735,10 @@ if [[ "$SKIP_BUILD" != "1" && "$BUILD_STORAGE" == "1" ]]; then
     # 仓库自带技能（如 software-copyright）再覆盖一层：隔壁技能仓库里没有它们，
     # 只按 PATENT_SKILLS_DIR 拷会让「本仓库新增的技能」在开发机上静默丢失。
     if [[ -d vendor/patent-skills ]]; then
-      cp -r vendor/patent-skills/. server/skills/
+      # 排除 README.md：server/skills/README.md 讲的是「技能怎么进镜像」，
+      # vendor 那份讲的是「固定副本本身」。直接 cp 会把它覆盖掉，于是每次构建
+      # 都让工作区变脏，且内容变错（这份说明就丢了）。
+      tar -C vendor/patent-skills --exclude=README.md -cf - . | tar -C server/skills -xf -
     fi
   else
     # 走到这里 = 显式指定的目录不存在（仓库内兜底副本由上面的逻辑保证存在）。
