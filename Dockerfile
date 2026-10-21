@@ -155,6 +155,9 @@ RUN PRELOAD="./v${DS_VERSION}-${HASH}/web-apps/apps/api/documents/preload.html" 
 # OnlyOffice 资源层每次重建全部失效重拷（实测 web-apps 单层就要数分钟）。
 # 放在这里，改代码只失效这一层（约 61M / 1900 文件）。
 #
+# 试过「打成 tar 再解包」：在这台机器的存储上反而更慢（多了打包/解包两次
+# 全量读写），已回滚为直拷。真正慢的原因在 Docker 存储层，不在这一步。
+#
 # 无覆盖风险：out/ 落在 /srv，OnlyOffice 落在 /srv/v${DS_VERSION}-${HASH}/，
 # 路径不重叠；上面的 RUN 也只动版本目录内的文件。且 .dockerignore 排除了
 # public/v9.3*，builder 产出的 out/ 里不会出现同名版本目录。

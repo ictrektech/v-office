@@ -24,6 +24,8 @@ edgeone.json
 ictrek.app
 UPSTREAM
 server
+# 专利技能包只有 storage 镜像需要；web 镜像用不到，531 个文件只会拖慢 COPY . .
+vendor
 .github
 
 # Docs & examples
