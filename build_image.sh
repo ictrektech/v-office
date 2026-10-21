@@ -91,6 +91,8 @@ Environment:
   PIP_INDEX_URL               Optional PyPI index for the storage image
   APT_MIRROR                  Optional Debian apt mirror for the storage image
                               (empty string = use deb.debian.org upstream)
+  OFFICECLI_MIRROR            GitHub release 加速前缀 for officecli download
+                              (default https://gh-proxy.com/; empty = direct)
 EOF
 }
 
@@ -757,6 +759,7 @@ if [[ "$SKIP_BUILD" != "1" && "$BUILD_STORAGE" == "1" ]]; then
     --build-arg "PI_NODE_IMAGE=${BASE_REGISTRY_PREFIX}/node:22-slim" \
     --build-arg "NPM_REGISTRY=${NPM_REGISTRY:-https://registry.npmmirror.com}" \
     --build-arg "PLAYWRIGHT_DOWNLOAD_HOST=${PLAYWRIGHT_DOWNLOAD_HOST:-https://cdn.npmmirror.com/binaries/playwright}" \
+    --build-arg "OFFICECLI_MIRROR=${OFFICECLI_MIRROR:-https://gh-proxy.com/}" \
     --build-arg "PI_VERSION=${PI_VERSION:-1.1.0}" \
     -f server/Dockerfile \
     -t "${STORAGE_IMAGE}:${TAG}" \

@@ -95,7 +95,13 @@ RUN set -eux; \
 # 预编译二进制 + SHA256 校验，**不用 install.sh**——那个脚本写 ~/.local 并依赖
 # 运行时联网，而 agent 是断网降权的独立 uid，装也装不上。
 # 软著的页数不走它的 --page-count（非 Windows 是估算），用下面的 LibreOffice。
+#
+# 下载通道：release 资源在 GitHub 上直连实测 67KB/s，34.8MB 的 arm64 包要 9 分钟
+# （构建就卡在这一步）。OFFICECLI_MIRROR 是加速前缀（gh-proxy 实测 1.9MB/s，
+# 约 18 秒），只转发字节，SHA256 校验照旧有效；前缀失败时自动回退直连，不会把
+# 构建卡死。置空 OFFICECLI_MIRROR="" 即完全走官方地址（境外构建机用）。
 ARG OFFICECLI_VERSION=1.0.151
+ARG OFFICECLI_MIRROR=https://gh-proxy.com/
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
@@ -104,8 +110,18 @@ RUN set -eux; \
         *) echo "unsupported arch for officecli: $arch" >&2; exit 1 ;; \
     esac; \
     base="https://github.com/iOfficeAI/OfficeCLI/releases/download/v${OFFICECLI_VERSION}"; \
-    curl -fsSL --retry 3 -o /usr/local/bin/officecli "${base}/${asset}"; \
-    curl -fsSL --retry 3 -o /tmp/SHA256SUMS "${base}/SHA256SUMS"; \
+    fetch() { \
+        if [ -n "${OFFICECLI_MIRROR}" ]; then \
+            if curl -fsSL --retry 2 -m 180 -o "$2" "${OFFICECLI_MIRROR}$1"; then \
+                echo "officecli: 来自镜像 ${OFFICECLI_MIRROR}"; \
+                return 0; \
+            fi; \
+            echo "officecli: 镜像不可用，回退 GitHub 直连（会慢）" >&2; \
+        fi; \
+        curl -fsSL --retry 3 -o "$2" "$1"; \
+    }; \
+    fetch "${base}/${asset}" /usr/local/bin/officecli; \
+    fetch "${base}/SHA256SUMS" /tmp/SHA256SUMS; \
     expected="$(awk -v a="$asset" '$2 == a || $2 == "*"a {print $1}' /tmp/SHA256SUMS)"; \
     echo "${expected}  /usr/local/bin/officecli" | sha256sum -c -; \
     chmod +x /usr/local/bin/officecli; \
