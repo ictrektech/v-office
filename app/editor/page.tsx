@@ -708,10 +708,11 @@ export default function Page() {
         searchParams.get("fileType"),
         fileUrl,
       );
-      // 唯一的引擎决策：扩展名 + 首页开关；文档来源不参与。
-      const useCollabora =
-        resolveEngine(ext, useAppStore.getState().wordEngine) === "collabora";
+      // 唯一的引擎决策：扩展名 + 是否公共区 + 首页开关。
       const sharedTarget = server.getSharedTarget();
+      const useCollabora =
+        resolveEngine(ext, useAppStore.getState().wordEngine, Boolean(sharedTarget)) ===
+        "collabora";
       // 打开耗时打点：带文档标识与阶段，落到 storage 的容器日志里
       const t0 = performance.now();
       let docLabel = "";
@@ -814,8 +815,8 @@ export default function Page() {
             };
             return;
           }
-          if (mustStayOnCollabora(ext)) {
-            // 老格式本地内核写不出：宁可只读，也不能保存出坏文件
+          if (mustStayOnCollabora(ext, Boolean(sharedTarget))) {
+            // 老格式写不出、公共区会被整份覆盖：宁可只读，也不能写坏/覆盖
             forceReadOnly = true;
             toast.error(
               language.toLowerCase().startsWith("zh")
@@ -848,13 +849,13 @@ export default function Page() {
       if (useCollabora) {
         const ready = await ensureCollaboraReady();
         if (!ready) {
-          // 老格式不能退回本地内核，只能只读打开
-          const readOnly = mustStayOnCollabora(ext);
+          // 老格式与公共区文档不能退回本地内核，只能只读打开
+          const readOnly = mustStayOnCollabora(ext, Boolean(sharedTarget));
           if (readOnly) {
             toast.error(
               language.toLowerCase().startsWith("zh")
-                ? "该格式只能由 Collabora 编辑，已以只读方式打开"
-                : "This format can only be edited with Collabora — opened read-only",
+                ? "该文档只能由 Collabora 编辑，已以只读方式打开"
+                : "This document can only be edited with Collabora — opened read-only",
             );
           }
           await startEditor(false, readOnly);
