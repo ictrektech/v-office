@@ -10,6 +10,7 @@ import {
 } from "@ziziyi/utils";
 import { readVOSLocale, watchVOSLocale } from "@/utils/vos/locale";
 import { type OfficeTheme, type PluginMode } from "@/utils/editor/types";
+import { DEFAULT_ENGINE, type Engine } from "@/utils/editor/engine";
 
 /**
  * 把语言设置解析成真正生效的语言。
@@ -29,8 +30,8 @@ function resolveLanguage(language: Language, vosLanguage: Locale | null): Locale
   return standardizeLocale(browserLang || "en");
 }
 
-/** Word 文档（doc/docx）解析内核偏好，默认 OnlyOffice */
-export type WordEngine = "onlyoffice" | "collabora";
+/** 解析内核偏好：docx/pptx/xlsx 等按它启动，默认 Collabora。 */
+export type WordEngine = Engine;
 
 interface AppState {
   // Document State
@@ -69,7 +70,7 @@ export const useAppStore = create<AppState>()(
       language: LocaleExtend.Auto,
       theme: "theme-white",
       plugins: "featured",
-      wordEngine: "onlyoffice",
+      wordEngine: DEFAULT_ENGINE,
 
       // 首屏就读一次（同步），否则会先按浏览器语言渲染一帧再跳到门户语言
       vosLanguage: typeof window === "undefined" ? null : readVOSLocale(),

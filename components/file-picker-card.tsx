@@ -5,6 +5,7 @@ import { useRef, useState, useEffect } from "react";
 import { useExtracted } from "next-intl";
 import { cn } from "@/lib/utils";
 import { fetchCollaboraStatus, type CollaboraState } from "@/utils/editor/collabora";
+import { DEFAULT_ENGINE } from "@/utils/editor/engine";
 import {
   useAppStore,
   useHasHydrated,
@@ -316,9 +317,8 @@ export function FilePickerCard({
 }
 
 /**
- * Word 文档解析引擎选择器：默认 OnlyOffice，可切换到 Collabora
- * （LibreOffice 内核，对复杂文档解析能力更强）。选择持久化到 store，
- * 打开文档后编辑器按此选择启动对应内核。
+ * 文档解析引擎选择器：默认 Collabora。选择持久化到 store，编辑器打开文档时
+ * 只读这个值（pdf 与老格式 doc/xls/ppt 不受它影响）。
  */
 function EngineSwitch() {
   const hasHydrated = useHasHydrated();
@@ -328,10 +328,9 @@ function EngineSwitch() {
   // 渲染，与 i18n/request.ts 的 defaultLocale 保持一致；hydrate 后再跟随
   // 用户语言，避免 hydration 不匹配导致整棵 SSR 树被丢弃重渲染。
   const zh = hasHydrated ? resolved.toLowerCase().startsWith("zh") : true;
-  // SSR 与客户端首帧必须一致（默认 OnlyOffice），persist 恢复完成后再显示
-  // 用户实际选择，否则 localStorage 里的值会触发 hydration 不匹配，
-  // 导致 React 丢弃整棵 SSR 树重渲染（表现为页面闪一下 + dev 报 Issue）。
-  const activeEngine: WordEngine = hasHydrated ? wordEngine : "onlyoffice";
+  // SSR 与客户端首帧必须一致（出厂默认 Collabora），persist 恢复完成后再显示
+  // 用户实际选择，否则 localStorage 里的值会触发 hydration 不匹配。
+  const activeEngine: WordEngine = hasHydrated ? wordEngine : DEFAULT_ENGINE;
 
   // Collabora 就绪状态（storage 侧后台探活）。unknown 表示无 storage 服务
   // （独立部署），按钮保持可用、行为与从前一致。
@@ -366,11 +365,11 @@ function EngineSwitch() {
     ? "Collabora 服务当前不可用，请稍后再试或使用 OnlyOffice"
     : "Collabora is currently unavailable. Try again later or use OnlyOffice";
   const collaboraHint = zh
-    ? "Collabora（LibreOffice 内核）：对复杂文档（如 WPS 表单类 Word）解析能力更强"
-    : "Collabora (LibreOffice core): renders complex documents (e.g. WPS-style Word forms) more faithfully";
+    ? "默认引擎。Collabora（LibreOffice 内核）：复杂排版、表单类文档还原更准"
+    : "Default engine. Collabora (LibreOffice core): more faithful for complex layouts and forms";
   const onlyOfficeHint = zh
-    ? "默认内核，适合常规文档"
-    : "Default core for regular documents";
+    ? "本地内核：适合常规文档，打开更快，不依赖服务端"
+    : "Local engine: fine for regular documents, opens faster with no server dependency";
 
   const collaboraDisabled =
     collaboraState === "warming_up" || collaboraState === "unavailable";
@@ -391,7 +390,7 @@ function EngineSwitch() {
     >
       <div className="flex items-center justify-center gap-2">
         <span className="text-xs text-text-secondary/70">
-          {zh ? "Word 解析引擎" : "Word engine"}
+          {zh ? "文档解析引擎" : "Document engine"}
         </span>
         <div className="inline-flex items-center rounded-lg border border-border bg-background/70 p-0.5 shadow-sm">
           <button

@@ -1,20 +1,9 @@
 "use client";
 
 /**
- * Collabora Online 集成客户端（仅 Word 文档）。
+ * Collabora Online 接入：换会话、推副本、就绪探活、iframe 适配。
  *
- * 背景：OnlyOffice 内核对 WPS 导出的复杂表单类 Word 文档渲染保真度不足
- * （表格错位、页眉浮动对象被当成正文环绕物、Wingdings 复选框变成乱码），
- * 实测 Collabora（LibreOffice 内核）能正确还原这类文档。
- *
- * 接入方式刻意做得最小：只替换“打开 .doc / .docx”这一个入口，
- * 前端先向 storage 换取一次性 access_token 与编辑器地址，再用 iframe
- * 加载 Collabora；Collabora 通过 WOPI 协议直接读写 storage，
- * 因此保存链路与原有实现一致，Excel/PPT 等其它格式完全不受影响。
- *
- * 默认仍用 OnlyOffice 内核解析；用户可在编辑器里点击按钮手动切换到
- * Collabora（对复杂文档解析能力更强），NEXT_PUBLIC_WORD_ENGINE=collabora
- * 可让 Word 文档默认就走 Collabora。
+ * 用哪个内核由 `utils/editor/engine.ts` 的 `resolveEngine` 决定，这里不做判断。
  */
 
 import { getVOSAccessToken, clearVOSAuthCache } from "@/utils/vos/fastpath";
@@ -24,123 +13,6 @@ import type { SharedTarget } from "@/utils/vos/storage";
 
 const STORAGE_API =
   process.env.NEXT_PUBLIC_STORAGE_API || "/api/com.ictrek.v-office/api/v1";
-
-/**
- * doc/docx/ppt/xls 是否默认走 Collabora 内核。
- *
- * 默认关闭（OnlyOffice 优先），由用户在编辑器里手动切换；部署侧想让
- * 这些文档默认用 Collabora 时设 NEXT_PUBLIC_WORD_ENGINE=collabora。
- * 即使默认/手动启用，会话取不到时也会自动回退，不会出现“文档打不开”。
- */
-export const COLLABORA_WORD_ENGINE =
-  process.env.NEXT_PUBLIC_WORD_ENGINE === "collabora";
-
-/**
- * 走 Collabora 的扩展名。
- *
- * Word 文档（doc/docx）之外，还包含老版二进制格式（ppt/xls）：x2t 读不好也写不了
- * 这些格式，而 Collabora 就是服务端 LibreOffice，原生读写并按原格式保存——它自己的
- * discovery 对 doc/xls/ppt 都声明了 edit 动作，对 pdf 只有 view_comment（所以 PDF
- * 仍走 OnlyOffice）。
- *
- * 现代格式 xlsx/pptx 也一并纳入：它们是不是**默认**走 Collabora 仍由部署默认
- * （NEXT_PUBLIC_WORD_ENGINE）决定，这里只决定"能不能交给它"——包括编辑器里的手动
- * 切换、以及模板库（13 个模板里 6 个 pptx、2 个 xlsx）。此前漏了这两个，于是模板
- * 里绝大多数连 Collabora 的入口都不出现，和 shouldUseCollabora 注释里写的
- * "现代格式按部署默认"对不上；共享盘文档也早已在用 Collabora 打开 pptx/xlsx
- * （见 SHARED_COLLABORATIVE_EXTS），能力是验证过的。
- */
-const COLLABORA_EXTS = new Set([
-  "doc",
-  "docx",
-  "ppt",
-  "pptx",
-  "xls",
-  "xlsx",
-]);
-
-/**
- * 老版二进制格式：默认就走 Collabora，不看引擎偏好。
- *
- * OnlyOffice 路线对它们先天不足——x2t 写不出二进制（.doc 输出 0 字节），xls 完全
- * 没有补齐，ppt 还得靠镜像里的 LibreOffice impress；Collabora 是服务端 LibreOffice，
- * 原生读写且按原格式保存，所以这些文件默认交给它。
- */
-const LEGACY_EXTS = new Set(["doc", "ppt", "xls"]);
-
-/**
- * 该扩展名是否可交给 Collabora 内核（doc/docx/ppt/pptx/xls/xlsx），供编辑器 UI 判断
- * ——它决定"使用 Collabora 打开"这个入口出不出现，不代表默认内核。
- */
-export function isCollaboraExt(ext: string | undefined | null): boolean {
-  return COLLABORA_EXTS.has(normalizeExt(ext));
-}
-
-function normalizeExt(ext: string | undefined | null): string {
-  return (ext || "").toLowerCase().replace(/^\./, "");
-}
-
-/** 老版二进制格式（doc / xls / ppt）：本地内核读不好、更要命的是**写不出**。 */
-export function isLegacyOfficeExt(ext: string | undefined | null): boolean {
-  return LEGACY_EXTS.has(normalizeExt(ext));
-}
-
-/**
- * 是否改用 Collabora 内核。
- *
- * 老版二进制格式（doc / xls / ppt）**无条件**走 Collabora：x2t 写不出这些格式
- * （.doc 输出 0 字节、xls 根本没有实现），打开解析也不好——留在本地内核上只会
- * 得到"能打开、一保存就写出坏文件/空文件"这种最糟的结果。因此这里连内核偏好与
- * URL 覆盖都不看：过去把偏好判断放在前面，导致默认配置（wordEngine=onlyoffice）
- * 下这些老格式实际走的是本地内核，与代码注释写的相反。
- *
- * @param ext      文档扩展名
- * @param override URL 上的 `engine` 参数（collabora / onlyoffice），
- *                 便于不重启 dev server 就能切换对比，生产用环境变量即可
- */
-export function shouldUseCollabora(
-  ext: string | undefined | null,
-  override?: string | null,
-): boolean {
-  if (!isCollaboraExt(ext)) return false;
-  if (isLegacyOfficeExt(ext)) return true;
-  if (override === "collabora") return true;
-  if (override === "onlyoffice") return false;
-  // 其余（docx/xlsx/pptx 等现代格式）按部署默认
-  return COLLABORA_WORD_ENGINE;
-}
-
-/**
- * 共享源（NAS / 平台授权的公共目录）文档是否可以多人协同。
- *
- * 共享盘上的同一份文件可能同时被多个人打开，而只有服务端内核（Collabora）能让
- * 大家进同一个文档会话：互见光标、盘上只有一份权威字节（实测：第二个用户加入
- * 只发一次 CheckFileInfo，不再重新拉取文档，两侧状态栏同步变化）。本地内核
- * （OnlyOffice）是浏览器单机渲染，N 个人各改各的内存副本、保存时整份覆盖，
- * 必然互相抹掉——所以共享源文档不看扩展名偏好，也不看用户在设置里选了哪个内核。
- *
- * 刻意排除：pdf（Collabora 只声明批注，不能协同编辑）、txt / md / csv / rtf
- * （多人反复写回语义有坑）。这些继续走原来的单机链路，行为不变。
- */
-const SHARED_COLLABORATIVE_EXTS = new Set([
-  "doc",
-  "docx",
-  "xls",
-  "xlsx",
-  "ppt",
-  "pptx",
-  "odt",
-  "ods",
-  "odp",
-]);
-
-/** 共享源文档是否必须走 Collabora 多人协同（与内核偏好、部署默认无关）。 */
-export function mustCollaborateOnShared(
-  shared: boolean,
-  ext: string | undefined | null,
-): boolean {
-  return shared && SHARED_COLLABORATIVE_EXTS.has(normalizeExt(ext));
-}
 
 /**
  * 摘掉 Collabora 首次打开时的"What's new"浮层，并返回清理函数。
