@@ -709,9 +709,7 @@ export default function Page() {
         fileUrl,
       );
       // 唯一的引擎决策：扩展名 + 首页开关；文档来源不参与。
-      // 新建文档还没有落盘的字节，Collabora 取不到文件，先走本地内核。
       const useCollabora =
-        !server.isNewDocumentOpen() &&
         resolveEngine(ext, useAppStore.getState().wordEngine) === "collabora";
       const sharedTarget = server.getSharedTarget();
       // 打开耗时打点：带文档标识与阶段，落到 storage 的容器日志里
@@ -783,7 +781,7 @@ export default function Page() {
           } else if (sharedTarget) {
             ready = true;
           } else if (source) {
-            ready = await pushDocumentToStorage(source.name, source.data);
+            ready = await pushDocumentToStorage(name, source.data);
           } else {
             ready = Boolean(fileUrl);
           }

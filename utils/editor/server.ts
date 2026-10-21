@@ -181,6 +181,17 @@ export class EditorServer {
     this.fsMap.set("Editor.bin", binData);
     this.urlsMap.set("Editor.bin", getUrl(binData));
 
+    // 新建文档也留一份"原文件"：Collabora 是服务端渲染，必须先把这份空白模板
+    // 推到 storage 才有文件可读；名字带时间戳，避免多次新建互相覆盖。
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const stamp =
+      `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+      `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    this.originalName = `New Document ${stamp}.${this.fileType || "docx"}`;
+    this.originalData = binData.slice().buffer as ArrayBuffer;
+    this.untitledSavedAs = this.originalName;
+
     return {
       id: this.id,
       documentType: documentType,
@@ -235,7 +246,7 @@ export class EditorServer {
     return this.user;
   }
 
-  /** 当前装载的是否是"新建文档"（新建文档不进存储，不能走 Collabora）。 */
+  /** 当前装载的是否是"新建文档"（还没有正式文件名，退出时才弹框命名）。 */
   isNewDocumentOpen() {
     return this.isNewDocument;
   }
@@ -638,6 +649,8 @@ export class EditorServer {
           // 新建文档在编辑期间（自动/手动保存）一律用默认名静默保存，
           // 不打断用户；退出文档时才由 UI 弹框确认命名（对齐 WPS 等
           // 主流办公软件习惯），见 page.tsx 的 closeDocument。
+          // 名字取 openNew 生成的唯一名，Collabora 直接落盘的那份也是它。
+          saveName = this.originalName || saveName;
           if (!/\.[a-z0-9]{2,5}$/i.test(saveName)) {
             saveName += `.${this.fileType}`;
           }
