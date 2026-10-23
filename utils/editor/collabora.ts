@@ -8,6 +8,7 @@
 
 import { getVOSAccessToken, clearVOSAuthCache } from "@/utils/vos/fastpath";
 import type { SharedTarget } from "@/utils/vos/storage";
+import { sitePath } from "@/utils/site-path";
 
 
 
@@ -192,6 +193,41 @@ export async function pushDocumentToStorage(
     return resp.ok;
   } catch {
     return false;
+  }
+}
+
+/**
+ * 新建文档在 Collabora 下要用的**真实**空白文件（public/files/blank.*）。
+ *
+ * `server.openNew()` 留在内存里的"空白模板"其实不是文件，而是 OnlyOffice 内核
+ * 自己的序列化格式：`DOCY;v5;7372;...`（表格是 XLSY、演示是 PPTY）开头的 ASCII
+ * 文本，只有 sdkjs 认得。Collabora 是 LibreOffice 服务端：拿到这种字节既认不出
+ * 是 docx 也认不出是 xlsx/pptx，只能按纯文本导入——于是"新建表格/演示"全变成
+ * 一篇满是 base64 的 Word 文档，而且不是空白。
+ *
+ * 所以新建文档走 Collabora 时，必须换成这里真正的 OOXML 空白文件。
+ * 文件由 python-docx / openpyxl / python-pptx 生成，随 public 一起发布。
+ * 取不到返回 null，调用方据此回退 OnlyOffice（那边认得 bin 模板）。
+ */
+const BLANK_TEMPLATES: Record<string, string> = {
+  docx: "/files/blank.docx",
+  xlsx: "/files/blank.xlsx",
+  pptx: "/files/blank.pptx",
+};
+
+export async function fetchBlankTemplate(
+  fileType: string,
+): Promise<ArrayBuffer | null> {
+  const path = BLANK_TEMPLATES[(fileType || "").toLowerCase()];
+  if (!path) return null;
+  try {
+    const resp = await fetch(sitePath(path), {
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!resp.ok) return null;
+    return await resp.arrayBuffer();
+  } catch {
+    return null;
   }
 }
 

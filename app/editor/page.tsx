@@ -24,6 +24,7 @@ import { DocEditor } from "@/utils/editor/types";
 import { createExtensionLoader } from "@/utils/extension";
 import {
   alignCollaboraHost,
+  fetchBlankTemplate,
   fetchCollaboraSession,
   fetchCollaboraStatus,
   guessExtension,
@@ -782,7 +783,17 @@ export default function Page() {
           } else if (sharedTarget) {
             ready = true;
           } else if (source) {
-            ready = await pushDocumentToStorage(name, source.data);
+            // 新建文档的留底不是真文件，而是 OnlyOffice 内核的序列化模板
+            // （"DOCY;v5;…" 这种 ASCII，表格/演示分别是 XLSY/PPTY）。推给
+            // Collabora 会被 LibreOffice 当纯文本导入：新建表格/演示全变成一篇
+            // 满是 base64 的 Word 文档，且不是空白。这里按扩展名换成真正的空白
+            // OOXML 再推；取不到就不推，回退 OnlyOffice（那边认得 bin 模板）。
+            const data = server.isNewDocumentOpen()
+              ? await fetchBlankTemplate(ext)
+              : source.data;
+            // data 为空只会是「新建文档但空白模板取不到」：此时宁可不推，也不能
+            // 把 bin 推上去（推了就是满屏 base64 的假文档）。
+            ready = data ? await pushDocumentToStorage(name, data) : false;
           } else {
             ready = Boolean(fileUrl);
           }

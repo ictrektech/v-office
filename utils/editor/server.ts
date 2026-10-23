@@ -181,8 +181,13 @@ export class EditorServer {
     this.fsMap.set("Editor.bin", binData);
     this.urlsMap.set("Editor.bin", getUrl(binData));
 
-    // 新建文档也留一份"原文件"：Collabora 是服务端渲染，必须先把这份空白模板
-    // 推到 storage 才有文件可读；名字带时间戳，避免多次新建互相覆盖。
+    // 新建文档也留一份"原文件"。名字带时间戳，避免多次新建互相覆盖。
+    //
+    // 注意：这里留的 binData 是 **OnlyOffice 内核自己的序列化格式**
+    // （"DOCY;v5;…" / "XLSY;…" / "PPTY;…" 开头的 ASCII），不是真的 docx/xlsx/pptx。
+    // 只有 sdkjs 认得它；Collabora（LibreOffice 服务端）读它只会当纯文本导入。
+    // 所以新建文档走 Collabora 时**不能**直接推这份字节，必须换成
+    // `fetchBlankTemplate()` 拿到的真实空白文件（见 utils/editor/collabora.ts）。
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, "0");
     const stamp =
