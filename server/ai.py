@@ -186,6 +186,11 @@ PING_INTERVAL_S = float(os.environ.get("V_OFFICE_AI_PING_INTERVAL", "15"))
 # md↔docx 转换（技能自带脚本）的单次上限。脚本很小、正常不到 1 秒，
 # 给大文档留余量；超时就杀进程树，不让它把接口挂住。
 DOCX_TOOL_TIMEOUT_S = float(os.environ.get("V_OFFICE_AI_DOCX_TIMEOUT", "180"))
+# 同一条工具调用连续重复到这个次数就判为死循环。实测模型卡住时会原样重跑
+# 同一条 bash 三百多次、一个字都不输出，只能靠这个兜住。
+REPEAT_STREAK_LIMIT = int(os.environ.get("V_OFFICE_AI_REPEAT_STREAK", "6"))
+# 同一轮里同一条调用累计出现到这个次数（不要求连续）也中止。
+REPEAT_TOTAL_LIMIT = int(os.environ.get("V_OFFICE_AI_REPEAT_TOTAL", "12"))
 STDERR_TAIL = 20
 # 用哪个用户跑 pi：服务本身是 root（要写 WOPI/私有存储），但 agent 不需要 root
 # ——降权后系统目录不可写，装东西/改配置自然失败。
@@ -1613,7 +1618,11 @@ def _pi_env(settings: dict, root: Path) -> dict:
         "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
         "http_proxy", "https_proxy", "no_proxy",
     }
-    env = {k: v for k, v in os.environ.items() if k in keep or k.startswith(("PYTHON", "UV_", "XDG_"))}
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k in keep or k.startswith(("PYTHON", "UV_", "XDG_", "PLAYWRIGHT_"))
+    }
     # 技能包自己约定的变量（技能目录、OA/地图/解读库位置）：不给的话技能内部找不到自己的库
     env.update({k: v for k, v in os.environ.items() if k.startswith("PATENT_")})
     # agent 的 bash 跑 `python tools/xxx.py` 时，必须解析到**服务端自己这个解释器**。
@@ -1805,6 +1814,25 @@ def _tool_target(args: dict) -> str:
     return ""
 
 
+def _tool_signature(event: dict) -> str | None:
+    """一次工具调用的指纹（工具名 + 参数）。只用于检测死循环，不参与转发。"""
+    if event.get("type") != "message_update":
+        return None
+    inner = event.get("assistantMessageEvent") or {}
+    if inner.get("type") != "toolcall_end":
+        return None
+    call = inner.get("toolCall") or {}
+    name = str(call.get("name") or "")
+    if not name:
+        return None
+    args = call.get("arguments")
+    try:
+        raw = json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        raw = str(args)
+    return f"{name}:{raw[:400]}"
+
+
 def _translate(event: dict) -> list[dict]:
     """把一条 pi JSONL 事件翻成 0..n 条前端事件。
 
@@ -1988,6 +2016,10 @@ async def _run_turn(
     # last_activity 是「pi 打印了一行」（含被 _translate 丢掉的噪音），
     # last_emit 才是「客户端看到了一个事件」——心跳要按后者算。
     last_emit = time.monotonic()
+    # 死循环检测：同一条工具调用连续/累计重复太多次就中止本轮
+    call_totals: dict[str, int] = {}
+    last_sig: str | None = None
+    call_streak = 0
     try:
         assert proc.stdout is not None
         while True:
@@ -2067,6 +2099,24 @@ async def _run_turn(
                 event = json.loads(raw)
             except ValueError:
                 continue
+            sig = _tool_signature(event)
+            if sig:
+                total = call_totals.get(sig, 0) + 1
+                call_totals[sig] = total
+                call_streak = call_streak + 1 if sig == last_sig else 1
+                last_sig = sig
+                if call_streak >= REPEAT_STREAK_LIMIT or total >= REPEAT_TOTAL_LIMIT:
+                    killed = True
+                    stop_kind = "loop"
+                    stop_message = (
+                        f"同一操作连续重复 {call_streak} 次（本轮累计 {total} 次），"
+                        "模型疑似卡在循环里，已中止本轮"
+                    )
+                    LOG.warning(
+                        "ai: tool loop sid=%s streak=%d total=%d sig=%.120s",
+                        sid, call_streak, total, sig,
+                    )
+                    break
             for item in _translate(event):
                 # 只有真的往客户端发了东西才算「发过事件」——ping 的判据就是它
                 last_emit = time.monotonic()

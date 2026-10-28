@@ -48,9 +48,10 @@
 @theme inline {
   /* Tailwind 的 font-sans 跟 body 走同一套 iOS 字体栈 */
   --font-sans:
-    -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
-    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Segoe UI",
-    Roboto, "Helvetica Neue", Arial, sans-serif;
+    ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont,
+    "SF Pro Text", "SF Pro Display", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei UI", "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-primary: var(--primary);
@@ -99,6 +100,8 @@
  */
 body {
   font-family:
+    ui-rounded,
+    "SF Pro Rounded",
     -apple-system,
     BlinkMacSystemFont,
     "SF Pro Text",
@@ -111,7 +114,8 @@ body {
     "Helvetica Neue",
     Arial,
     sans-serif;
-  /* 关掉 Chrome 在 Linux 上的字体合成与次像素抗锯齿：字面更清晰、笔画更实 */
+  /* 字重整体偏实，圆体在 500/600 下更像 iOS 的观感 */
+  font-weight: 450;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;

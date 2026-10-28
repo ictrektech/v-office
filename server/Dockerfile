@@ -63,14 +63,19 @@ RUN pip install --no-cache-dir -i "${PIP_INDEX_URL}" -r requirements.txt
 # 但它同步有滞后——新版 Playwright 要的构建号可能还没有（实测 1228/1244 缺失）。
 # 所以先试镜像，取不到立刻回退官方 CDN：镜像命中就快，没命中也不会构建失败。
 ARG PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright
+# 浏览器装到固定目录：agent 会话的 HOME 是每个会话独立的 `.home`，
+# 默认路径 ~/.cache/ms-playwright 会随之切走，导致会话里找不到浏览器、
+# 转而下场下载（断网就是失败，联网就卡几分钟被空闲超时掐掉）。
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN pip install --no-cache-dir -i "${PIP_INDEX_URL}" pymupdf \
  && if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
         if PLAYWRIGHT_DOWNLOAD_HOST="${PLAYWRIGHT_DOWNLOAD_HOST}" \
+             PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
              python -m playwright install --with-deps chromium; then \
             echo "chromium: 来自镜像源"; \
         else \
             echo "chromium: 镜像源没有这个构建，回退官方 CDN（会慢）"; \
-            python -m playwright install chromium; \
+            PLAYWRIGHT_BROWSERS_PATH=/ms-playwright python -m playwright install chromium; \
         fi; \
     else \
         apt-get update \

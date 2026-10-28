@@ -55,3 +55,11 @@ python skills/patent-disclosure/tools/fence/check_scorecard.py -i outputs/{案�
 ## 产出物
 
 交底书 Markdown + Word，查新与区别定位稿，可选 schema / 线稿 / 公式图；围栏在 `outputs/{案件}/fence/`。对话末块标题 **交付后请确认**。
+
+## 落盘要求
+
+产物写进文件才算交付，对话正文不算。
+
+- 交付回复前，每份产物必须用写文件工具落到 `outputs/{案件}/`，并用 `ls` 确认文件存在、大小非零。
+- 校验或转换工具报错（如 `latex_delim` 退出码 1）不能作为跳过落盘的理由：先写文件，再在交付块注明哪一步校验没过。
+- 自检时发现 `outputs/{案件}/` 为空，必须补写，不允许直接把正文贴在对话里收尾。

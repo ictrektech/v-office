@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
-import { CopyrightTask } from "@/components/patent/task/copyright-task";
+import { CopyrightWorkbench } from "@/components/patent/software-copyright/copyright-workbench";
 
 export const metadata: Metadata = {
   title: "软件著作权",
@@ -14,8 +14,8 @@ export const metadata: Metadata = {
  */
 function CopyrightFallback() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-white dark:bg-[#0e0e0e]">
-      <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#E2562B] border-t-transparent" />
+    <div className="flex h-full items-center justify-center bg-white">
+      <div className="h-6 w-6 animate-spin rounded-full border-2 border-[#C9C9CF] border-t-transparent" />
     </div>
   );
 }
@@ -23,7 +23,7 @@ function CopyrightFallback() {
 export default function PatentCopyrightPage() {
   return (
     <Suspense fallback={<CopyrightFallback />}>
-      <CopyrightTask />
+      <CopyrightWorkbench />
     </Suspense>
   );
 }

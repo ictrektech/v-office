@@ -131,7 +131,8 @@ export interface UseAiChat {
   /** 需要用户先去设置页处理的情况（未配密钥 / 没装 pi） */
   blocked: string | null;
   pendingChanges: number;
-  send: (instruction: string, options?: SendOptions) => Promise<void>;
+  /** 返回本轮是否完整成功；调用方可用它决定是否推进流程 */
+  send: (instruction: string, options?: SendOptions) => Promise<boolean>;
   stop: () => void;
   upload: (file: File) => Promise<AiMaterial>;
   /** 上传成稿模板：之后每轮都按它的结构成文 */
@@ -494,7 +495,7 @@ export function useAiChat(options: {
   const send = useCallback(
     async (instruction: string, options: SendOptions = {}) => {
       const text = instruction.trim();
-      if (!text || streaming) return;
+      if (!text || streaming) return false;
       const sid = await ensureSession();
       const agentId = nextId();
       setMessages((prev) => [
@@ -645,6 +646,28 @@ export function useAiChat(options: {
               case "warn":
                 addNote(String(event.message ?? ""));
                 break;
+              case "stop": {
+                // 用户停止不算异常；超时 / 空闲 / 死循环中止要说明原因，
+                // 并让 send 返回 false，调用方不再推进流程步骤。
+                if (event.kind === "aborted") break;
+                sawError = true;
+                const reason = String(event.message ?? "已中止本轮");
+                const partial = String(event.text ?? "");
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === agentId
+                      ? {
+                          ...m,
+                          streaming: false,
+                          error: true,
+                          text: partial || m.text,
+                          notes: [...(m.notes ?? []), reason],
+                        }
+                      : m,
+                  ),
+                );
+                break;
+              }
               case "error": {
                 sawError = true;
                 const message = String(event.message ?? "出错了");
@@ -691,6 +714,7 @@ export function useAiChat(options: {
         );
         void refresh();
       }
+      return !sawError && !controller.signal.aborted;
     },
     [ensureSession, patchMessage, refresh, streaming],
   );

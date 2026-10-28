@@ -118,7 +118,7 @@ export function Sidebar({ pathname }: SidebarProps) {
 
       <nav className="flex-1 px-4 py-2 space-y-1">
         {sidebarItems.map((item) => {
-          // 栏目内还有子页（如 /patent/studio），子页也要保持高亮
+          // 栏目内还有子页（如 /patent/copyright），子页也要保持高亮
           const isActive =
             pathname === item.href ||
             (item.href !== "/" && pathname.startsWith(`${item.href}/`));
