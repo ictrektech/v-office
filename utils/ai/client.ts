@@ -115,6 +115,8 @@ export interface AiSessionMeta {
   created_at?: number;
   updated_at?: number;
   turn?: number;
+  /** 会话 outputs 目录下的文件数 */
+  files?: number;
 }
 
 export async function createAiSession(

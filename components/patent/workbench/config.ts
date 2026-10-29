@@ -4,6 +4,19 @@
  * 一个任务 = 一条会话（后端技能包按阶段拆开），切换任务只换会话，不换页面。
  */
 
+import {
+  File,
+  FileArchive,
+  FileCode2,
+  FileImage,
+  FileSpreadsheet,
+  FileText,
+  FileType,
+  NotebookText,
+  Presentation,
+  type LucideIcon,
+} from "lucide-react";
+
 export type StageKey = "disclosure" | "application" | "oa" | "full";
 
 export interface StageConfig {
@@ -87,6 +100,23 @@ export type PreviewTarget =
 
 export function baseName(path: string): string {
   return path.split("/").pop() || path;
+}
+
+/** 产出物行前面的小图标：按类型区分，别所有行都是同一张纸 */
+export function rowFileIcon(name: string, kind?: OutputRow["kind"]): LucideIcon {
+  if (kind === "artifact") return NotebookText;
+  const ext = name.match(/\.([a-z0-9]{2,5})$/i)?.[1]?.toLowerCase() ?? "";
+  if (["xlsx", "xls", "csv"].includes(ext)) return FileSpreadsheet;
+  if (["pptx", "ppt"].includes(ext)) return Presentation;
+  if (["png", "jpg", "jpeg", "webp", "gif", "svg"].includes(ext)) return FileImage;
+  if (["zip", "rar", "7z", "tar", "gz"].includes(ext)) return FileArchive;
+  if (["pdf"].includes(ext)) return FileType;
+  if (["md", "txt", "markdown"].includes(ext)) return NotebookText;
+  if (["json", "yaml", "yml", "xml", "html", "tex", "py", "js", "ts"].includes(ext)) {
+    return FileCode2;
+  }
+  if (["doc", "docx"].includes(ext)) return FileText;
+  return File;
 }
 
 /** 时间统一成 HH:mm；服务端有的接口给秒，有的给毫秒 */

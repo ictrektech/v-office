@@ -9,8 +9,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ArrowUpRight, Search } from "lucide-react";
-import { listAiSessions, type AiSessionMeta } from "@/utils/ai/client";
+import { ArrowLeft, ArrowUpRight, Search, Trash2 } from "lucide-react";
+import { deleteAiSession, listAiSessions, type AiSessionMeta } from "@/utils/ai/client";
 
 type TabKey = "all" | "disclosure" | "application" | "oa" | "copyright";
 
@@ -68,6 +68,8 @@ export function HistoryView() {
   const [error, setError] = useState("");
   const [tab, setTab] = useState<TabKey>("all");
   const [query, setQuery] = useState("");
+  const [confirmId, setConfirmId] = useState("");
+  const [deleting, setDeleting] = useState("");
 
   useEffect(() => {
     let alive = true;
@@ -113,6 +115,23 @@ export function HistoryView() {
 
   const total = grouped.reduce((sum, group) => sum + group.items.length, 0);
 
+  const remove = async (id: string) => {
+    if (confirmId !== id) {
+      setConfirmId(id);
+      return;
+    }
+    setDeleting(id);
+    try {
+      await deleteAiSession(id);
+      setSessions((list) => list.filter((item) => item.id !== id));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "删除失败");
+    } finally {
+      setDeleting("");
+      setConfirmId("");
+    }
+  };
+
   return (
     <div className="min-h-[100dvh] bg-white">
       <div className="mx-auto w-full max-w-[clamp(640px,72vw,1080px)] px-10 pb-16 pt-8">
@@ -135,7 +154,7 @@ export function HistoryView() {
           历史记录
         </h1>
         <p className="mt-1.5 text-[11.5px] leading-relaxed text-[#8A8B91]">
-          每个阶段各存一条会话，点「继续办理」回到对应工作台接着用。
+          每个阶段各存一条会话，生成的文档留在这条记录里；只有你自己删除才会清掉。
         </p>
 
         <div className="mt-6 flex flex-wrap items-center gap-2">
@@ -207,9 +226,27 @@ export function HistoryView() {
                           </div>
                           <p className="mt-1 text-[10.5px] text-[#9A9BA1]">
                             {formatTime(ms)}
+                            {item.files ? ` · ${item.files} 个文件` : ""}
                             {item.turn ? ` · ${item.turn} 轮对话` : ""}
                           </p>
                         </div>
+                        <button
+                          type="button"
+                          disabled={deleting === item.id}
+                          onClick={() => void remove(item.id)}
+                          className={`flex flex-none items-center gap-1 rounded-md px-2 py-1.5 text-[11px] transition disabled:opacity-50 ${
+                            confirmId === item.id
+                              ? "text-[#151517] bg-[#F4F4F5]"
+                              : "text-[#9A9BA1] hover:bg-[#F4F4F5] hover:text-[#5F6066]"
+                          }`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          {deleting === item.id
+                            ? "删除中"
+                            : confirmId === item.id
+                              ? "确认删除"
+                              : "删除"}
+                        </button>
                         <button
                           type="button"
                           onClick={() => router.push(hrefOf(item, kind.tab))}

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * 左栏案件页：任务选择、材料、知识库入口、产出物清单。
+ * 左栏案件页：任务选择、材料、产出物清单。
  *
  * 数据都由 useAiChat 和案件文件接口提供，这里只负责展示与把操作转出去。
  */
@@ -14,7 +14,6 @@ import {
   Boxes,
   Check,
   ChevronDown,
-  ChevronRight,
   Database,
   Download,
   FileCode2,
@@ -43,6 +42,7 @@ import {
 import {
   STAGE_LIST,
   formatClock,
+  rowFileIcon,
   type OutputRow,
   type PreviewTarget,
   type StageConfig,
@@ -58,7 +58,6 @@ interface CaseOverviewProps {
   onModeChange: (next: StageKey) => void;
   onUpload: (slot: SlotKey, files: FileList) => void;
   onRemoveMaterial: (name: string) => void;
-  onOpenKnowledge: () => void;
   onOpenPreview: (target: PreviewTarget) => void;
   onDownload: (row: OutputRow) => void;
 }
@@ -91,7 +90,6 @@ export function CaseOverview({
   onModeChange,
   onUpload,
   onRemoveMaterial,
-  onOpenKnowledge,
   onOpenPreview,
   onDownload,
 }: CaseOverviewProps) {
@@ -271,21 +269,6 @@ export function CaseOverview({
         />
       </section>
 
-      <button
-        type="button"
-        onClick={onOpenKnowledge}
-        className="mt-3 flex w-full items-center gap-2 rounded-lg border border-dashed border-[#E2E2E5] px-3.5 py-3 text-left transition hover:border-[#CFCFD4] hover:bg-[#FAFAFB]"
-      >
-        <Database className="h-4 w-4 flex-none text-[#9A9BA1]" />
-        <span className="min-w-0 flex-1">
-          <span className="block text-[12px] text-[#5F6066]">从知识库获取材料</span>
-          <span className="mt-0.5 block text-[10.5px] text-[#9A9BA1]">
-            连接 WeKnora，选库取文件
-          </span>
-        </span>
-        <ChevronRight className="h-4 w-4 flex-none text-[#C9C9CF]" />
-      </button>
-
       <section className="mt-7">
         <div className="mb-2 flex items-center justify-between">
           <h2 className="flex items-center gap-1.5 text-[13.5px] font-bold text-[#0F0F11]">
@@ -329,7 +312,10 @@ export function CaseOverview({
                 >
                   <td className="py-2.5 pr-3">
                     <span className="flex min-w-0 items-center gap-2">
-                      <FileText className="h-3.5 w-3.5 flex-none text-[#9A9BA1]" />
+                      {(() => {
+                        const Icon = rowFileIcon(row.name, row.kind);
+                        return <Icon className="h-3.5 w-3.5 flex-none text-[#9A9BA1]" />;
+                      })()}
                       <span className="truncate text-[12px] font-medium text-[#0F0F11]">{row.name}</span>
                     </span>
                   </td>

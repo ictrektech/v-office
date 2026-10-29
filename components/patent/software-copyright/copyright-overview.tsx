@@ -10,8 +10,6 @@ import { useRef, useState, type ReactNode } from "react";
 import {
   AlertCircle,
   Check,
-  ChevronRight,
-  Database,
   Download,
   FileArchive,
   FileText,
@@ -30,7 +28,7 @@ import {
   COPYRIGHT_SLOTS,
   type CopyrightSlot,
 } from "./materials";
-import { formatClock, type OutputRow, type PreviewTarget } from "../workbench/config";
+import { formatClock, rowFileIcon, type OutputRow, type PreviewTarget } from "../workbench/config";
 
 export interface SlotFile {
   name: string;
@@ -62,7 +60,6 @@ interface CopyrightOverviewProps {
   onRemove: (slot: CopyrightSlot, name: string) => void;
   onOpenPreview: (target: PreviewTarget) => void;
   onDownload: (row: OutputRow) => void;
-  onOpenKnowledge: () => void;
 }
 
 const SLOT_ICONS = {
@@ -96,7 +93,6 @@ export function CopyrightOverview({
   onRemove,
   onOpenPreview,
   onDownload,
-  onOpenKnowledge,
 }: CopyrightOverviewProps) {
   const pickerRef = useRef<HTMLInputElement>(null);
   const shotRef = useRef<HTMLInputElement>(null);
@@ -305,21 +301,6 @@ export function CopyrightOverview({
             event.target.value = "";
           }}
         />
-
-        <button
-          type="button"
-          onClick={onOpenKnowledge}
-          className="mt-3 flex w-full items-center gap-2 rounded-lg border border-dashed border-[#E2E2E5] px-3.5 py-3 text-left transition hover:border-[#CFCFD4] hover:bg-[#FAFAFB]"
-        >
-          <Database className="h-4 w-4 flex-none text-[#9A9BA1]" />
-          <span className="min-w-0 flex-1">
-            <span className="block text-[12px] text-[#5F6066]">从知识库获取材料</span>
-            <span className="mt-0.5 block text-[10.5px] text-[#9A9BA1]">
-              连接 WeKnora，取项目源码或说明文档
-            </span>
-          </span>
-          <ChevronRight className="h-4 w-4 flex-none text-[#C9C9CF]" />
-        </button>
       </section>
 
       <section className="mt-7">
@@ -484,7 +465,10 @@ export function CopyrightOverview({
                 >
                   <td className="py-2.5 pr-3">
                     <span className="flex min-w-0 items-center gap-2">
-                      <FileText className="h-3.5 w-3.5 flex-none text-[#9A9BA1]" />
+                      {(() => {
+                        const Icon = rowFileIcon(row.name, row.kind);
+                        return <Icon className="h-3.5 w-3.5 flex-none text-[#9A9BA1]" />;
+                      })()}
                       <span className="truncate text-[12px] font-medium text-[#0F0F11]">{row.name}</span>
                     </span>
                   </td>

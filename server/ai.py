@@ -485,8 +485,17 @@ def list_sessions(username: str) -> list[dict]:
         if child.is_dir() and not child.name.startswith("."):
             meta = read_meta(username, child.name)
             meta["dir"] = str(child)
+            meta["files"] = _count_files(child / "outputs")
             out.append(meta)
-    return out[:100]
+    # 不截断：截断会让老记录在历史里“消失”，排序由前端按更新时间做
+    return out
+
+
+def _count_files(root: Path) -> int:
+    """会话产物数量，历史页用来提示这条记录里存了几份文档"""
+    if not root.is_dir():
+        return 0
+    return sum(1 for p in root.rglob("*") if p.is_file())
 
 
 # ── 材料：服务端解析成文本，agent 看不到文件 ────────────────────────────────

@@ -9,7 +9,10 @@
 
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { useRouter } from "next/navigation";
-import { useAiChat } from "@/hooks/use-ai-chat";
+import {
+  useAiChat,
+  readPersistedSession,
+} from "@/hooks/use-ai-chat";
 import {
   aiFileObjectUrl,
   listAiFiles,
@@ -32,7 +35,6 @@ import { WorkbenchHeader } from "./workbench-header";
 import { CaseOverview } from "./case-overview";
 import { ChatPanel } from "./chat-panel";
 import { DocPreview } from "./doc-preview";
-import { KnowledgeDialog } from "./knowledge-dialog";
 
 interface StageWorkspaceProps {
   mode: StageKey;
@@ -54,17 +56,19 @@ export function StageWorkspace({
 }: StageWorkspaceProps) {
   const config = STAGES[mode];
   const router = useRouter();
+  /** 没有指定案件、也没有上次的会话时先不建，避免历史里多出一条空记录 */
+  const [paused] = useState(() => !caseId && !readPersistedSession(persistKeyFor(mode)));
   const chat = useAiChat({
     skill: config.skill,
     title: config.sessionTitle,
     persistKey: persistKeyFor(mode),
     resumeFrom: caseId,
+    paused,
   });
 
   const [files, setFiles] = useState<AiFile[]>([]);
   const [width, setWidth] = useState(DEFAULT_CHAT_WIDTH);
   const [preview, setPreview] = useState<PreviewTarget | null>(null);
-  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const noticeTimer = useRef<number | null>(null);
 
@@ -239,14 +243,15 @@ export function StageWorkspace({
               meta={
                 chat.sessionId
                   ? `本地会话 ${chat.sessionId.slice(0, 8)}`
-                  : "正在创建会话"
+                  : paused
+                    ? "发送第一条消息后自动存档"
+                    : "正在创建会话"
               }
               materials={chat.materials}
               rows={rows}
               onModeChange={onModeChange}
               onUpload={uploadToSlot}
               onRemoveMaterial={removeMaterial}
-              onOpenKnowledge={() => setKnowledgeOpen(true)}
               onOpenPreview={setPreview}
               onDownload={(row) =>
                 void downloadTarget(
@@ -283,14 +288,6 @@ export function StageWorkspace({
           />
         </div>
       </div>
-
-      <KnowledgeDialog
-        open={knowledgeOpen}
-        onClose={() => setKnowledgeOpen(false)}
-        onImport={async (file) => {
-          await chat.upload(file);
-        }}
-      />
 
       {notice ? (
         <div className="fixed bottom-6 right-6 z-50 rounded-lg border border-[#EAEAEC] bg-white px-3.5 py-2 text-[11.5px] text-[#3A3B40] shadow-[0_12px_28px_-12px_rgba(20,20,22,0.22)]">

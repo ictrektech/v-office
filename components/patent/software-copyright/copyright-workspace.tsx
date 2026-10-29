@@ -31,7 +31,6 @@ import {
 import { WorkbenchHeader } from "../workbench/workbench-header";
 import { ChatPanel } from "../workbench/chat-panel";
 import { DocPreview } from "../workbench/doc-preview";
-import { KnowledgeDialog } from "../workbench/knowledge-dialog";
 import { CopyrightOverview, type SlotFile } from "./copyright-overview";
 import {
   COPYRIGHT_SLOTS,
@@ -94,7 +93,6 @@ export function CopyrightWorkspace({
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewTarget | null>(null);
   const [width, setWidth] = useState(CHAT_DEFAULT_WIDTH);
-  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const noticeTimer = useRef<number | null>(null);
   const bootRequested = useRef(false);
@@ -502,7 +500,6 @@ export function CopyrightWorkspace({
                     : { kind: "file", path: row.path ?? "", name: row.name },
                 )
               }
-              onOpenKnowledge={() => setKnowledgeOpen(true)}
             />
           )}
         </div>
@@ -530,14 +527,6 @@ export function CopyrightWorkspace({
           />
         </div>
       </div>
-
-      <KnowledgeDialog
-        open={knowledgeOpen}
-        onClose={() => setKnowledgeOpen(false)}
-        onImport={async (file) => {
-          await chat.upload(file);
-        }}
-      />
 
       {notice ? (
         <div className="fixed bottom-6 right-6 z-50 rounded-lg border border-[#EAEAEC] bg-white px-3.5 py-2 text-[11.5px] text-[#3A3B40] shadow-[0_12px_28px_-12px_rgba(20,20,22,0.22)]">
