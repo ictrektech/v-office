@@ -7,6 +7,7 @@ import { ProgressProvider } from "@/components/progress-provider";
 import { AppToaster } from "@/components/app-toaster";
 import "./globals.css";
 import { sitePath } from "@/utils/site-path";
+import { uiSans } from "./fonts";
 
 const publicSiteUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "");
 
@@ -100,7 +101,7 @@ export default async function RootLayout({
   };
 
   return (
-    <html suppressHydrationWarning>
+    <html suppressHydrationWarning className={uiSans.variable}>
       <head>
         <script>{`(${preload.toString()})()`}</script>
         <script
