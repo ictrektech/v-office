@@ -54,9 +54,9 @@ export const STAGES: Record<StageKey, StageConfig> = {
   full: {
     key: "full",
     label: "全流程",
-    skill: "patent-disclosure",
+    skill: "patent-docket",
     sessionTitle: "专利全流程",
-    hint: "从交底书开始；后续阶段在「本次任务」里切换，沿用各自会话。",
+    hint: "一条龙：交底 → 申请文件 → 问题清单修订，最多 3 轮。",
   },
 };
 
@@ -100,6 +100,23 @@ export type PreviewTarget =
 
 export function baseName(path: string): string {
   return path.split("/").pop() || path;
+}
+
+/** 编辑器内核认识的格式：只有这些能交给 Collabora / OnlyOffice 在线打开 */
+export function isOfficePath(path: string): boolean {
+  return /\.(docx?|xlsx|pptx)$/i.test(path);
+}
+
+/**
+ * 能不能在线打开。
+ *
+ * 产物（artifact）是 markdown，看似不是 Office 文件——但服务端有 md→docx
+ * 的确定性管线，打开时导出成 docx 就能进编辑器；所以 artifact 一律可开。
+ * 之前预览页只认 `kind === "file" && 扩展名`，技能产出的四件套恰好全是
+ * artifact，于是「在线打开」按钮永远不出现。
+ */
+export function canOpenOnline(target: PreviewTarget): boolean {
+  return target.kind === "artifact" || isOfficePath(target.path);
 }
 
 /** 产出物行前面的小图标：按类型区分，别所有行都是同一张纸 */

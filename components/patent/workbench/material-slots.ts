@@ -39,50 +39,112 @@ export type SlotKey =
   | "other";
 
 const DISCLOSURE_SLOTS: MaterialSlot[] = [
-  { key: "inventor", label: "发明人材料", hint: "技术方案、实验数据、现有说明" },
-  { key: "project", label: "项目目录", hint: "源码、文档、图纸，可多选" },
-  { key: "tex", label: ".tex 源文件", hint: "可选，有 LaTeX 稿就传" },
-  { key: "disclosure", label: "已有交底书", hint: "上一版交底，用于迭代" },
-  { key: "other", label: "其他材料", hint: "标准、CAD、补充说明" },
+  {
+    key: "inventor",
+    label: "发明人材料",
+    hint: "技术方案、实验数据、现有说明，可多份",
+  },
+  {
+    key: "project",
+    label: "项目目录",
+    hint: "源码/文档打包成 ZIP，可多份；服务端会解包",
+  },
+  { key: "tex", label: ".tex 源文件", hint: "可选，有 LaTeX 稿就传，可多份" },
+  {
+    key: "disclosure",
+    label: "已有交底书",
+    hint: "上一版交底 .md / .docx，用于迭代",
+  },
+  { key: "other", label: "其他材料", hint: "标准、CAD、补充说明，可多份" },
 ];
 
 const APPLICATION_SLOTS: MaterialSlot[] = [
   {
     key: "disclosureDir",
     label: "同案交底目录",
-    hint: "选本机交底案件，或上传交底书 .md / .docx",
+    hint: "交底书 .md / .docx，可多份（技能按目录取稿）",
     required: true,
   },
-  { key: "schema", label: "结构 / 外观 schema", hint: "实用新型、外观需要" },
-  { key: "figurePlan", label: "figure_plan", hint: "附图规划，实用新型、外观需要" },
-  { key: "lineart", label: "入文线稿", hint: "实用新型、外观需要" },
-  { key: "photos", label: "入文实拍", hint: "仅外观需要" },
-  { key: "applicant", label: "申请人信息", hint: "可选，只进问题清单，不拦流程" },
-  { key: "other", label: "其他材料", hint: "补充说明、参考稿" },
+  {
+    key: "schema",
+    label: "结构 / 外观 schema",
+    hint: "实用新型、外观需要；structure_schema / appearance_schema",
+  },
+  {
+    key: "figurePlan",
+    label: "figure_plan",
+    hint: "附图规划，实用新型、外观需要",
+  },
+  { key: "lineart", label: "入文线稿", hint: "实用新型、外观需要，可多张" },
+  { key: "photos", label: "入文实拍", hint: "仅外观需要，可多张" },
+  {
+    key: "applicant",
+    label: "申请人信息",
+    hint: "可选；未填只进问题清单，不拦流程",
+  },
+  { key: "other", label: "其他材料", hint: "补充说明、参考稿，可多份" },
 ];
 
 const OA_SLOTS: MaterialSlot[] = [
   {
     key: "oaNotice",
     label: "审查意见通知书",
-    hint: "OA 原件，PDF 优先",
+    hint: "OA 原件，PDF 优先；可多份",
     required: true,
   },
   {
     key: "applicationDocs",
     label: "本申请文件",
-    hint: "权利要求书、说明书、摘要",
+    hint: "权利要求书、说明书、摘要，可多份",
     required: true,
   },
   { key: "prior", label: "对比文件", hint: "D1、D2 等现有技术，可多份" },
-  { key: "vector", label: "向量配置", hint: "可选，检索用向量库配置" },
-  { key: "cases", label: "历史案例库", hint: "可选，少于 3 件时会提示入库" },
-  { key: "other", label: "其他材料", hint: "补充说明、答复草稿" },
+  {
+    key: "vector",
+    label: "向量配置",
+    hint: "可选，检索用 embedding 配置（json/yaml）",
+  },
+  {
+    key: "cases",
+    label: "历史案例库",
+    hint: "可选，历史答复压缩包；少于 3 件会提示入库",
+  },
+  { key: "other", label: "其他材料", hint: "补充说明、答复草稿，可多份" },
+];
+
+/**
+ * 全流程 = patent-docket（案卷会稿）的输入。
+ *
+ * docket 自己只做调度，正文仍由交底包 / 申请包写；所以这里收的是「立案时
+ * 手上有什么」：发明人材料、已有交底、已有申请、问题清单。没有交底也能
+ * 从零开写，因此发明人材料不设 required，缺技术事实由 docket 在对话里问。
+ */
+const DOCKET_SLOTS: MaterialSlot[] = [
+  {
+    key: "inventor",
+    label: "发明人材料",
+    hint: "技术方案、实验数据、现有说明，可多份",
+  },
+  {
+    key: "disclosure",
+    label: "已有交底书",
+    hint: "有交底就传 .md / .docx；没有则从零开写",
+  },
+  {
+    key: "applicationDocs",
+    label: "已有申请文件",
+    hint: "已有四件套时传，按改稿走而不是重写",
+  },
+  {
+    key: "other",
+    label: "问题清单 / 其他",
+    hint: "问题清单、对比文件、补充说明，可多份",
+  },
 ];
 
 export const STAGE_SLOTS: Record<StageKey, MaterialSlot[]> = {
   disclosure: DISCLOSURE_SLOTS,
-  full: DISCLOSURE_SLOTS,
+  full: DOCKET_SLOTS,
   application: APPLICATION_SLOTS,
   oa: OA_SLOTS,
 };
@@ -137,6 +199,9 @@ export function inferSlot(name: string, stage: StageKey): SlotKey {
   if (/交底|disclosure/.test(text)) {
     return pick(has("disclosureDir") ? "disclosureDir" : "disclosure");
   }
+  if (/发明人|技术方案|实验数据|创新点|technical[_-]?(solution|scheme)/.test(text)) {
+    return pick("inventor");
+  }
   if (/审查|office|(^|[^a-z])oa([^a-z]|$)/.test(text)) return pick("oaNotice");
   if (/对比|prior|(^|[^a-z])d[12]([^0-9]|$)/.test(text)) return pick("prior");
   if (/schema|结构|外观/.test(text)) return pick("schema");
@@ -144,6 +209,7 @@ export function inferSlot(name: string, stage: StageKey): SlotKey {
   if (/线稿|lineart|line_art/.test(text)) return pick("lineart");
   if (/实拍|photo/.test(text)) return pick("photos");
   if (/\.tex$/.test(text)) return pick("tex");
+  if (/权利要求|说明书|申请文件|申请稿|四件套/.test(text)) return pick("applicationDocs");
   if (/申请信息|申请人/.test(text)) return pick("applicant");
   if (/向量|vector|embedding/.test(text)) return pick("vector");
   if (/案例|case/.test(text)) return pick("cases");

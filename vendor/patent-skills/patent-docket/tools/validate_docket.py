@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from docket_spec import (
     START_MODES,
     STATUSES,
     TERMINAL_PHASES,
+    can_transit,
     load_phase_table,
     phase_names,
 )
@@ -134,24 +136,104 @@ def validate_docket(data: dict[str, Any], *, cfg: dict[str, Any] | None = None) 
     return errors
 
 
+# ── 阶段跳转校验 ──────────────────────────────────────────────────────────
+#
+# docket.yaml 本身不记历史，validate 又是无状态脚本。不记上一次通过校验的
+# phase，「bootstrap_disclosure → terminal_complete」这类越级跳转就永远查不
+# 出来（phases.yaml 里写了 transitions，但此前只有单测在用）。
+#
+# 因此在校验通过后把当前 phase 追加到案卷目录的同名隐藏文件里。文件以点开头，
+# 不会出现在产物列表；读不到或写不进时退化成只校验字段，不会误伤正常流程。
+HISTORY_NAME = ".docket-history.json"
+HISTORY_LIMIT = 100
+
+
+def history_path(yaml_path: Path) -> Path:
+    return yaml_path.parent / HISTORY_NAME
+
+
+def _read_history(path: Path) -> list[str]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    phases = data.get("phases") if isinstance(data, dict) else None
+    if not isinstance(phases, list):
+        return []
+    return [str(item) for item in phases if isinstance(item, str)]
+
+
+def last_phase(path: Path) -> str:
+    phases = _read_history(path)
+    return phases[-1] if phases else ""
+
+
+def remember_phase(path: Path, phase: str) -> None:
+    """记下这次通过的 phase；同值重复校验不追加，避免刷屏。"""
+    phases = _read_history(path)
+    if phases and phases[-1] == phase:
+        return
+    phases.append(phase)
+    try:
+        path.write_text(
+            json.dumps({"phases": phases[-HISTORY_LIMIT:]}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        # 无写权限（只读挂载等）时静默：跳转校验是加固项，不该阻断正常校验
+        pass
+
+
+def transition_errors(prev: str, current: str) -> list[str]:
+    """上一阶段 → 当前阶段是否合法。prev 为空表示首次校验，不拦。"""
+    if not prev:
+        return []
+    table = load_phase_table()
+    phases = set(phase_names(table))
+    if prev not in phases:
+        return [f"上一阶段无效: {prev}"]
+    if not can_transit(prev, current, table):
+        return [f"非法阶段跳转: {prev} -> {current}"]
+    return []
+
+
 def main(argv: list[str] | None = None) -> int:
     ensure_utf8_stdio()
     parser = argparse.ArgumentParser(description="校验专利案卷 docket.yaml")
     parser.add_argument("--yaml", required=True, help="docket.yaml 路径")
+    parser.add_argument(
+        "--from",
+        dest="from_phase",
+        default="",
+        help="上一阶段；不给则读案卷目录里记录的上一阶段",
+    )
+    parser.add_argument(
+        "--no-history",
+        action="store_true",
+        help="不读也不写阶段历史（一次性校验用）",
+    )
     args = parser.parse_args(argv)
     path = Path(args.yaml)
     if not path.is_file():
         print(f"DOCKET_ERROR: 找不到 {path}", file=sys.stderr)
         return 2
+    phase = ""
     try:
         data = load_docket(path)
         errors = validate_docket(data)
+        phase = str(data.get("phase") or "")
+        prev = args.from_phase.strip()
+        if not prev and not args.no_history:
+            prev = last_phase(history_path(path))
+        errors += transition_errors(prev, phase)
     except Exception as exc:
         print(f"DOCKET_ERROR: {exc}", file=sys.stderr)
         return 2
     if errors:
         print("DOCKET_ERROR: " + "; ".join(errors), file=sys.stderr)
         return 2
+    if phase and not args.no_history:
+        remember_phase(history_path(path), phase)
     print("DOCKET_OK:", str(path), flush=True)
     return 0
 

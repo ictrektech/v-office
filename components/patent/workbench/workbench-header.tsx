@@ -63,23 +63,23 @@ export function WorkbenchHeader({
   }, [open, skill]);
 
   return (
-    <header className="flex h-14 flex-none items-center gap-3 border-b border-[#EAEAEC] bg-white px-6">
+    <header className="flex h-[60px] flex-none items-center gap-3 border-b border-[#ECECEF] bg-white px-6">
       <button
         type="button"
         onClick={onBack}
         title="返回"
-        className="flex h-7 w-7 items-center justify-center rounded-md text-[#5F6066] transition hover:bg-[#F4F4F5] hover:text-[#151517]"
+        className="flex h-8 w-8 items-center justify-center rounded-full text-[#3C3C43] transition hover:bg-[#F2F2F4] hover:text-[#111113]"
       >
         <ArrowLeft className="h-4 w-4" />
       </button>
 
-      <span className="flex h-6 w-6 items-center justify-center rounded-[8px] bg-[#151517] text-white">
+      <span className="flex h-7 w-7 items-center justify-center rounded-[10px] bg-[#111113] text-white">
         {brandMark ?? <Scale className="h-3.5 w-3.5" strokeWidth={2} />}
       </span>
-      <span className="text-[14.5px] font-bold tracking-normal text-[#0F0F11]">
+      <span className="text-[15px] font-semibold tracking-[-0.01em] text-[#111113]">
         {brandLabel}
       </span>
-      <span className="h-[15px] w-px bg-[#EAEAEC]" />
+      <span className="h-4 w-px bg-[#ECECEF]" />
 
       <div className="relative">
         <button
@@ -89,10 +89,10 @@ export function WorkbenchHeader({
             setOpen(next);
             if (next) setLoading(true);
           }}
-          className="flex max-w-[280px] items-center gap-1.5 rounded-md px-2 py-1 text-[12.5px] text-[#5F6066] transition hover:bg-[#F4F4F5] hover:text-[#151517]"
+          className="flex max-w-[280px] items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[13px] text-[#3C3C43] transition hover:bg-[#F2F2F4] hover:text-[#111113]"
         >
           <span className="truncate">{title}</span>
-          <ChevronDown className="h-3.5 w-3.5 flex-none text-[#9A9BA1]" />
+          <ChevronDown className="h-3.5 w-3.5 flex-none text-[#A1A1A6]" />
         </button>
 
         {open ? (
@@ -153,25 +153,25 @@ export function WorkbenchHeader({
           <button
             type="button"
             onClick={onHistory}
-            className="flex h-8 items-center gap-1.5 rounded-md px-3 text-[12.5px] text-[#5F6066] transition hover:bg-[#F4F4F5] hover:text-[#151517]"
+            className="flex h-9 items-center gap-1.5 rounded-full px-3.5 text-[13px] text-[#3C3C43] transition hover:bg-[#F2F2F4] hover:text-[#111113]"
           >
-            <History className="h-3.5 w-3.5" />
+            <History className="h-4 w-4" />
             历史
           </button>
         ) : null}
         <button
           type="button"
           onClick={onSave}
-          className="h-8 rounded-md px-3 text-[12.5px] text-[#5F6066] transition hover:bg-[#F4F4F5] hover:text-[#151517]"
+          className="h-9 rounded-full px-3.5 text-[13px] text-[#3C3C43] transition hover:bg-[#F2F2F4] hover:text-[#111113]"
         >
           保存
         </button>
         <button
           type="button"
           onClick={onExport}
-          className="flex h-8 items-center gap-1.5 rounded-md bg-[#151517] px-3.5 text-[12.5px] font-medium text-white transition hover:bg-black"
+          className="flex h-9 items-center gap-1.5 rounded-full bg-[#111113] px-4 text-[13px] font-medium text-white transition hover:bg-black"
         >
-          <Download className="h-3.5 w-3.5" />
+          <Download className="h-4 w-4" />
           导出
         </button>
       </div>

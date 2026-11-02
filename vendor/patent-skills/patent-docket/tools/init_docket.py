@@ -126,6 +126,9 @@ def main(argv: list[str] | None = None) -> int:
         yaml.safe_dump(doc, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
+    # 新立案不带旧阶段历史：否则 --force 重开时会把上一案的 phase 当成本案
+    # 的「上一阶段」，跳转校验直接误报。
+    (folder / ".docket-history.json").unlink(missing_ok=True)
     print("DOCKET_DIR:", str(folder), flush=True)
     print("DOCKET_YAML:", str(yaml_path), flush=True)
     return 0

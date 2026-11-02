@@ -12,7 +12,11 @@ sys.path.insert(0, str(PKG / "tools"))
 from docket_paths import normalize_case_id
 from docket_spec import can_transit
 from init_docket import empty_docket, main as init_main
-from validate_docket import main as validate_main, validate_docket
+from validate_docket import (
+    main as validate_main,
+    transition_errors,
+    validate_docket,
+)
 from emit_tracker import render_tracker
 
 
@@ -137,6 +141,23 @@ class ValidateTests(unittest.TestCase):
         self.assertTrue(any("terminal_complete" in e for e in errs))
 
 
+class TransitionGuardTests(unittest.TestCase):
+    def test_first_check_allows_anything(self) -> None:
+        self.assertEqual([], transition_errors("", "triage"))
+
+    def test_legal_step(self) -> None:
+        self.assertEqual([], transition_errors("intake", "bootstrap_disclosure"))
+        self.assertEqual([], transition_errors("wait_disclosure", "bootstrap_application"))
+
+    def test_skipping_phases_is_rejected(self) -> None:
+        errors = transition_errors("bootstrap_disclosure", "terminal_complete")
+        self.assertTrue(any("非法阶段跳转" in e for e in errors))
+
+    def test_unknown_previous_phase(self) -> None:
+        errors = transition_errors("not_a_phase", "triage")
+        self.assertTrue(any("上一阶段无效" in e for e in errors))
+
+
 class InitAndEmitTests(unittest.TestCase):
     def test_init_and_tracker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -159,6 +180,40 @@ class InitAndEmitTests(unittest.TestCase):
                 text = tracker.read_text(encoding="utf-8")
                 self.assertIn("从零开写", text)
                 self.assertIn("调度交底初稿", text)
+            finally:
+                if old is None:
+                    os.environ.pop("PATENT_DOCKET_OUTPUT_DIR", None)
+                else:
+                    os.environ["PATENT_DOCKET_OUTPUT_DIR"] = old
+
+    def test_validate_rejects_illegal_phase_jump(self) -> None:
+        """第一次校验记下阶段，之后越级跳转必须被 CLI 拦下。"""
+        import contextlib
+        import io
+        import os
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old = os.environ.get("PATENT_DOCKET_OUTPUT_DIR")
+            os.environ["PATENT_DOCKET_OUTPUT_DIR"] = tmp
+            try:
+                self.assertEqual(
+                    init_main(["--case-id", "jump-case", "--mode", "from_zero"]),
+                    0,
+                )
+                yaml_path = Path(tmp) / "jump-case" / "docket.yaml"
+                self.assertEqual(validate_main(["--yaml", str(yaml_path)]), 0)
+
+                text = yaml_path.read_text(encoding="utf-8")
+                yaml_path.write_text(
+                    text.replace("phase: bootstrap_disclosure", "phase: triage", 1),
+                    encoding="utf-8",
+                )
+                with contextlib.redirect_stderr(io.StringIO()):
+                    code = validate_main(["--yaml", str(yaml_path)])
+                self.assertEqual(code, 2)
+                self.assertTrue(
+                    (yaml_path.parent / ".docket-history.json").is_file()
+                )
             finally:
                 if old is None:
                     os.environ.pop("PATENT_DOCKET_OUTPUT_DIR", None)

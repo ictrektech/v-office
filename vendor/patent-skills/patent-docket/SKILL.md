@@ -40,7 +40,7 @@ user-invocable: false
 | `round_close` | `prompts/round_close.md` |
 | `terminal_*` | `prompts/round_close.md`（只做收口陈述 + **`## 交付后请确认`**，不再派工） |
 
-阶段合法跳转：`references/phases.yaml`。机器校验：`tools/validate_docket.py`。tracker 落盘：`tools/emit_tracker.py`。交接只传路径：`references/handoff_contract.md`。
+阶段合法跳转：`references/phases.yaml`。机器校验：`tools/validate_docket.py`（会读案卷目录里 `.docket-history.json` 记录的上一阶段，**越级跳转直接报错**）。tracker 落盘：`tools/emit_tracker.py`。交接只传路径：`references/handoff_contract.md`。
 
 轮次上限 **`config.yaml` 的 `max_rounds`（默认 3）**，细则 `references/max_rounds.md`。从零：首套交底 + 首套申请记为第 1 轮。之后每「分诊 → 派工 → 再出申请并核清单」加 1 轮。第 3 轮结束后必须停。
 
@@ -49,6 +49,8 @@ python skills/patent-docket/tools/init_docket.py --case-id 案件slug --mode fro
 python skills/patent-docket/tools/validate_docket.py --yaml outputs/docket/案件slug/docket.yaml
 python skills/patent-docket/tools/emit_tracker.py --yaml outputs/docket/案件slug/docket.yaml
 ```
+
+每次改完 `phase` 都要跑一次 validate：它会自动比对上一阶段，`bootstrap_disclosure → terminal_complete` 这类跳转会被拦。手工复核可用 `--from <上一阶段>`；一次性校验不想写历史就加 `--no-history`。
 
 机读前缀：`DOCKET_DIR:` / `DOCKET_YAML:` / `DOCKET_OK:` / `DOCKET_ERROR:`。
 

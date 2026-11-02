@@ -59,13 +59,13 @@ export function ChatPanel({
   };
 
   return (
-    <aside className="flex h-full min-w-0 flex-none flex-col bg-[#FAFAFB]">
-      <div className="flex h-14 flex-none items-center gap-2.5 border-b border-[#EAEAEC] bg-white px-4">
-        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-[#151517] text-[10px] font-semibold text-white">
+    <aside className="flex h-full min-w-0 flex-none flex-col bg-[#FBFBFC]">
+      <div className="flex h-[60px] flex-none items-center gap-2.5 border-b border-[#ECECEF] bg-white px-4">
+        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#111113] text-[11px] font-semibold text-white">
           P
         </span>
-        <span className="text-[13px] font-semibold text-[#151517]">PI 助手</span>
-        <span className="ml-0.5 flex items-center gap-1 text-[10.5px] text-[#9A9BA1]">
+        <span className="text-[14px] font-semibold text-[#111113]">PI 助手</span>
+        <span className="ml-0.5 flex items-center gap-1 text-[11.5px] text-[#8E8E93]">
           <span
             className={`h-1 w-1 rounded-full ${chat.blocked ? "bg-[#C9C9CF]" : "bg-[#3EA05C]"}`}
           />
@@ -109,8 +109,8 @@ export function ChatPanel({
         </p>
       ) : null}
 
-      <div className="flex-none border-t border-[#EAEAEC] bg-white p-3">
-        <div className="rounded-[10px] border border-[#E2E2E5] bg-white px-3 py-2.5 transition focus-within:border-[#C9C9CF]">
+      <div className="flex-none border-t border-[#ECECEF] bg-white p-3">
+        <div className="rounded-2xl border border-[#E7E7EA] bg-white px-3.5 py-3 transition focus-within:border-[#C9C9CF]">
           <textarea
             value={text}
             disabled={disabled}
@@ -127,7 +127,7 @@ export function ChatPanel({
             }}
             rows={1}
             placeholder={disabled ? disabledHint : "继续和 PI 说…"}
-            className="max-h-32 w-full resize-none bg-transparent text-[12.5px] leading-relaxed text-[#151517] outline-none placeholder:text-[#9A9BA1] disabled:cursor-not-allowed"
+            className="max-h-32 w-full resize-none bg-transparent text-[13px] leading-relaxed text-[#111113] outline-none placeholder:text-[#A1A1A6] disabled:cursor-not-allowed"
           />
           <div className="mt-1.5 flex items-center gap-1">
             <button
@@ -209,7 +209,7 @@ function Message({ message }: { message: ChatMessage }) {
         ) : null}
 
         {message.text ? (
-          <p className="whitespace-pre-wrap text-[12.5px] leading-[1.8] text-[#3A3B40]">
+          <p className="whitespace-pre-wrap text-[13px] leading-[1.8] text-[#3C3C43]">
             {message.text}
           </p>
         ) : null}

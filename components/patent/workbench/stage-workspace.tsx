@@ -15,9 +15,12 @@ import {
 } from "@/hooks/use-ai-chat";
 import {
   aiFileObjectUrl,
+  fetchAiFile,
   listAiFiles,
   type AiFile,
 } from "@/utils/ai/client";
+import { useAppStore } from "@/store";
+import { openStoredFile } from "@/utils/vos/storage";
 import {
   CHAT_DEFAULT_WIDTH,
   CHAT_MAX_WIDTH,
@@ -25,12 +28,14 @@ import {
   STAGES,
   baseName,
   fittedChatWidth,
+  isOfficePath,
   persistKeyFor,
   type OutputRow,
   type PreviewTarget,
   type StageKey,
 } from "./config";
 import { removeSlot, writeSlot, type SlotKey } from "./material-slots";
+import { parseDocketYaml, type DocketState } from "./docket";
 import { WorkbenchHeader } from "./workbench-header";
 import { CaseOverview } from "./case-overview";
 import { ChatPanel } from "./chat-panel";
@@ -56,6 +61,7 @@ export function StageWorkspace({
 }: StageWorkspaceProps) {
   const config = STAGES[mode];
   const router = useRouter();
+  const server = useAppStore((store) => store.server);
   /** 没有指定案件、也没有上次的会话时先不建，避免历史里多出一条空记录 */
   const [paused] = useState(() => !caseId && !readPersistedSession(persistKeyFor(mode)));
   const chat = useAiChat({
@@ -67,6 +73,7 @@ export function StageWorkspace({
   });
 
   const [files, setFiles] = useState<AiFile[]>([]);
+  const [docket, setDocket] = useState<DocketState | null>(null);
   const [width, setWidth] = useState(DEFAULT_CHAT_WIDTH);
   const [preview, setPreview] = useState<PreviewTarget | null>(null);
   const [notice, setNotice] = useState("");
@@ -122,7 +129,57 @@ export function StageWorkspace({
     return [...artifactRows, ...fileRows].sort((a, b) => (b.time ?? 0) - (a.time ?? 0));
   }, [chat.artifacts, files, config.label]);
 
-  const uploadToSlot = (slot: SlotKey, picked: FileList) => {
+  /**
+   * 全流程阶段的案卷进度：只认 `outputs/docket/<case>/docket.yaml`，取最新一份。
+   *
+   * 不新开接口——docket.yaml 本来就在会话工作目录里，`/files` 已经列出来了，
+   * 这里按需取文本、前端解析。签名用「路径 + mtime」而不是 files 数组：
+   * 每轮对话 files 都会换引用，直接依赖数组会把同一份 yaml 反复拉。
+   */
+  const docketPath = useMemo(() => {
+    if (mode !== "full") return "";
+    const hit = files
+      .filter(
+        (file) =>
+          file.path.startsWith("outputs/docket/") &&
+          file.path.endsWith("/docket.yaml") &&
+          file.path.split("/").length === 4,
+      )
+      .sort((a, b) => (b.mtime ?? 0) - (a.mtime ?? 0))[0];
+    return hit?.path ?? "";
+  }, [mode, files]);
+  const docketMtime = useMemo(
+    () => files.find((file) => file.path === docketPath)?.mtime ?? 0,
+    [files, docketPath],
+  );
+
+  useEffect(() => {
+    if (mode !== "full" || !chat.sessionId || !docketPath) return;
+    let alive = true;
+    fetchAiFile(chat.sessionId, docketPath)
+      .then((blob) => blob.text())
+      .then((text) => {
+        const parsed = parseDocketYaml(text);
+        if (!alive) return;
+        setDocket(
+          parsed ? { ...parsed, path: docketPath, updatedAt: docketMtime } : null,
+        );
+      })
+      .catch(() => {
+        if (alive) setDocket(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [mode, chat.sessionId, docketPath, docketMtime]);
+
+  /** 只展示与当前文件签名一致的读数，避免切案卷时闪出上一案 */
+  const visibleDocket =
+    docket && docket.path === docketPath && docket.updatedAt === docketMtime
+      ? docket
+      : null;
+
+  const uploadToSlot = (slot: SlotKey, picked: File[] | FileList) => {
     const list = Array.from(picked);
     void (async () => {
       for (const file of list) {
@@ -140,6 +197,40 @@ export function StageWorkspace({
   const removeMaterial = (name: string) => {
     removeSlot(name);
     void chat.removeMaterial(name);
+  };
+
+  /**
+   * 交给编辑器内核在线打开。
+   *
+   * - 产物是 markdown：先灌进会话草稿，再走服务端 md→docx 管线，把生成的
+   *   docx 从「我的文档」取回来交出去——这条链路是技能四件套唯一能进
+   *   Collabora 的路。
+   * - 案件文件是 Office：原样取字节，用会话尾号命名避免和「我的文档」同名互覆盖。
+   *
+   * 失败在这里统一提示（CaseOverview / DocPreview 只负责按钮的 loading 状态）。
+   */
+  const openOnline = async (target: PreviewTarget) => {
+    try {
+      if (target.kind === "artifact") {
+        await chat.openArtifact(target.key);
+        const saved = await chat.exportDocx();
+        const { file } = await openStoredFile(saved);
+        await server.open(file);
+      } else {
+        if (!chat.sessionId) throw new Error("会话还没就绪");
+        if (!isOfficePath(target.path)) throw new Error("这种格式不能在线编辑");
+        const blob = await fetchAiFile(chat.sessionId, target.path);
+        const ext = target.path.match(/\.[a-z0-9]{2,5}$/i)?.[0] ?? ".docx";
+        const name = `${target.name.replace(/\.[^.]+$/, "")}-${chat.sessionId.slice(-6)}${ext}`;
+        const file = new File([blob], name, {
+          type: blob.type || "application/octet-stream",
+        });
+        await server.open(file);
+      }
+      router.push("/editor");
+    } catch (error) {
+      say(error instanceof Error ? error.message : "在线打开失败");
+    }
   };
 
   const downloadTarget = async (target: PreviewTarget) => {
@@ -235,6 +326,7 @@ export function StageWorkspace({
               onBack={() => setPreview(null)}
               onDownload={(target) => void downloadTarget(target)}
               loadArtifact={chat.loadArtifact}
+              onOpenOnline={openOnline}
             />
           ) : (
             <CaseOverview
@@ -248,11 +340,13 @@ export function StageWorkspace({
                     : "正在创建会话"
               }
               materials={chat.materials}
+              docket={visibleDocket}
               rows={rows}
               onModeChange={onModeChange}
               onUpload={uploadToSlot}
               onRemoveMaterial={removeMaterial}
               onOpenPreview={setPreview}
+              onOpenOnline={openOnline}
               onDownload={(row) =>
                 void downloadTarget(
                   row.kind === "artifact"

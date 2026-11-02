@@ -5,14 +5,16 @@
  *
  * 草稿产物读 markdown 直接排版；案件文件里 md/txt 预览、图片显示、
  * Word 这类格式可下载，也可推给 Collabora 在线打开。
+ *
+ * 「在线打开」对**产物**同样可用：产物本身是 markdown，但打开时会先由
+ * 服务端转成 docx 再交给编辑器。之前这里只判 Office 扩展名，技能产出的
+ * 四件套全是 artifact，按钮于是永远不出现。
  */
 
 import { useEffect, useState, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
 import { ArrowLeft, Download, ExternalLink, FileText } from "lucide-react";
-import { useAppStore } from "@/store";
 import { fetchAiFile } from "@/utils/ai/client";
-import type { PreviewTarget } from "./config";
+import { canOpenOnline, type PreviewTarget } from "./config";
 
 interface DocPreviewProps {
   target: PreviewTarget;
@@ -20,6 +22,8 @@ interface DocPreviewProps {
   onBack: () => void;
   onDownload: (target: PreviewTarget) => void;
   loadArtifact: (key: string) => Promise<string>;
+  /** 交给编辑器内核打开；失败由上层统一提示，这里只管 loading */
+  onOpenOnline: (target: PreviewTarget) => Promise<void>;
 }
 
 type PreviewState =
@@ -39,33 +43,18 @@ export function DocPreview({
   onBack,
   onDownload,
   loadArtifact,
+  onOpenOnline,
 }: DocPreviewProps) {
   const [state, setState] = useState<PreviewState>({ status: "loading" });
   const [opening, setOpening] = useState(false);
   const [notice, setNotice] = useState("");
-  const officeFile = target.kind === "file" && OFFICE_EXT.test(target.path);
-  const router = useRouter();
-  const server = useAppStore((store) => store.server);
+  const onlineOpenable = canOpenOnline(target);
 
-  /**
-   * 在线打开：交给应用自己的编辑器页（`server.open(file)` + `/editor`）。
-   *
-   * 不自己拼编辑器地址：Collabora 在 VOS 里是网关注入前缀 `/app/<app-id>/cool/…`，
-   * host/端口/前缀都随部署变；直接 `window.open` 一个会话地址等于把 URL 写死。
-   * `/editor` 内部统一处理内核选择、推副本、首启浮层和保存，这里只负责交文件。
-   * 文件名带上会话尾号，避免和用户「我的文档」里的同名文档互相覆盖。
-   */
-  const openInEditor = async () => {
-    if (target.kind !== "file" || !sessionId) return;
+  const openOnline = async () => {
     setOpening(true);
     setNotice("");
     try {
-      const blob = await fetchAiFile(sessionId, target.path);
-      const ext = target.path.match(/\.([a-z0-9]{2,5})$/i)?.[0] ?? ".docx";
-      const name = `${target.name.replace(/\.[^.]+$/, "")}-${sessionId.slice(-6)}${ext}`;
-      const file = new File([blob], name, { type: blob.type || "application/octet-stream" });
-      await server.open(file);
-      router.push("/editor");
+      await onOpenOnline(target);
     } catch (reason) {
       setNotice(reason instanceof Error ? reason.message : "在线打开失败");
     } finally {
@@ -124,29 +113,29 @@ export function DocPreview({
 
   return (
     <div className="flex min-h-full flex-col bg-[#F7F7F8]">
-      <div className="sticky top-0 z-10 flex h-14 flex-none items-center gap-2 border-b border-[#EAEAEC] bg-white px-5">
+      <div className="sticky top-0 z-10 flex h-[60px] flex-none items-center gap-2 border-b border-[#ECECEF] bg-white px-5">
         <button
           type="button"
           onClick={onBack}
-          className="-ml-2 flex h-7 items-center gap-1 rounded-md px-2 text-[12.5px] text-[#5F6066] transition hover:bg-[#F4F4F5] hover:text-[#151517]"
+          className="-ml-2 flex h-8 items-center gap-1 rounded-full px-2.5 text-[13px] text-[#3C3C43] transition hover:bg-[#F2F2F4] hover:text-[#111113]"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
           返回
         </button>
-        <span className="h-[15px] w-px bg-[#EAEAEC]" />
-        <span className="min-w-0 truncate text-[13px] font-semibold text-[#151517]">
+        <span className="h-4 w-px bg-[#ECECEF]" />
+        <span className="min-w-0 truncate text-[13.5px] font-semibold text-[#111113]">
           {target.name}
         </span>
-        <span className="flex-none rounded bg-[#EAF6EF] px-1.5 py-0.5 text-[10.5px] text-[#3EA05C]">
+        <span className="flex-none rounded-full bg-[#EAF6EF] px-2 py-0.5 text-[11px] text-[#2E8B4F]">
           已生成
         </span>
-        <div className="ml-auto flex items-center gap-1">
-          {officeFile ? (
+        <div className="ml-auto flex items-center gap-1.5">
+          {onlineOpenable ? (
             <button
               type="button"
               disabled={opening}
-              onClick={() => void openInEditor()}
-              className="flex h-8 items-center gap-1.5 rounded-md border border-[#EAEAEC] px-2.5 text-[11.5px] text-[#5F6066] transition hover:bg-[#F4F4F5] hover:text-[#151517] disabled:opacity-50"
+              onClick={() => void openOnline()}
+              className="flex h-8 items-center gap-1.5 rounded-full bg-[#111113] px-3.5 text-[12px] font-medium text-white transition hover:bg-black disabled:opacity-50"
             >
               <ExternalLink className="h-3.5 w-3.5" />
               {opening ? "打开中…" : "在线打开"}
@@ -155,7 +144,7 @@ export function DocPreview({
           <button
             type="button"
             onClick={() => onDownload(target)}
-            className="flex h-8 items-center gap-1.5 rounded-md border border-[#EAEAEC] px-2.5 text-[11.5px] text-[#5F6066] transition hover:bg-[#F4F4F5] hover:text-[#151517]"
+            className="flex h-8 items-center gap-1.5 rounded-full border border-[#E7E7EA] px-3.5 text-[12px] text-[#3C3C43] transition hover:border-[#D6D6DA] hover:bg-[#F5F5F7]"
           >
             <Download className="h-3.5 w-3.5" />
             下载
@@ -164,23 +153,23 @@ export function DocPreview({
       </div>
 
       {notice ? (
-        <div className="flex-none border-b border-[#EAEAEC] bg-white px-5 py-2 text-[11.5px] text-[#8A8B91]">
+        <div className="flex-none border-b border-[#ECECEF] bg-white px-5 py-2 text-[12px] text-[#8E8E93]">
           {notice}
         </div>
       ) : null}
 
-      <div className="flex flex-1 justify-center px-6 py-8">
-        <div className="w-[680px] max-w-full self-start rounded-[4px] border border-[#EAEAEC] bg-white px-14 py-12 shadow-[0_16px_40px_-32px_rgba(0,0,0,0.25)]">
-          <h2 className="mb-7 text-center text-[19px] font-semibold leading-snug tracking-[-0.01em] text-[#151517]">
+      <div className="flex flex-1 justify-center px-6 py-10">
+        <div className="w-[720px] max-w-full self-start rounded-2xl border border-[#ECECEF] bg-white px-14 py-12 shadow-[0_24px_60px_-40px_rgba(0,0,0,0.3)]">
+          <h2 className="mb-8 text-center text-[21px] font-semibold leading-snug tracking-[-0.015em] text-[#111113]">
             {fileTitle(target.name)}
           </h2>
           <PreviewBody
             state={state}
             target={target}
             onDownload={onDownload}
-            officeFile={officeFile}
+            onlineOpenable={onlineOpenable}
             opening={opening}
-            onOpen={() => void openInEditor()}
+            onOpen={() => void openOnline()}
           />
         </div>
       </div>
@@ -192,36 +181,36 @@ function PreviewBody({
   state,
   target,
   onDownload,
-  officeFile,
+  onlineOpenable,
   opening,
   onOpen,
 }: {
   state: PreviewState;
   target: PreviewTarget;
   onDownload: (target: PreviewTarget) => void;
-  officeFile: boolean;
+  onlineOpenable: boolean;
   opening: boolean;
   onOpen: () => void;
 }) {
   if (state.status === "loading") {
-    return <p className="py-16 text-center text-[12px] text-[#9A9BA1]">正在读取文件…</p>;
+    return <p className="py-16 text-center text-[13px] text-[#A1A1A6]">正在读取文件…</p>;
   }
   if (state.status === "error") {
-    return <p className="py-16 text-center text-[12px] text-[#C0392B]">{state.message}</p>;
+    return <p className="py-16 text-center text-[13px] text-[#C0392B]">{state.message}</p>;
   }
   if (state.status === "unsupported") {
     return (
       <div className="flex flex-col items-center gap-3 py-16 text-center">
-        <FileText className="h-5 w-5 text-[#9A9BA1]" />
-        <p className="text-[12px] text-[#9A9BA1]">
+        <FileText className="h-5 w-5 text-[#A1A1A6]" />
+        <p className="max-w-[320px] text-[13px] leading-relaxed text-[#8E8E93]">
           这种格式不便在网页预览，可以在线用 Collabora 打开，或下载后查看
         </p>
-        {officeFile ? (
+        {onlineOpenable ? (
           <button
             type="button"
             disabled={opening}
             onClick={onOpen}
-            className="flex h-8 items-center gap-1.5 rounded-md bg-[#151517] px-3 text-[12px] font-medium text-white transition hover:bg-black disabled:opacity-50"
+            className="flex h-9 items-center gap-1.5 rounded-full bg-[#111113] px-4 text-[12.5px] font-medium text-white transition hover:bg-black disabled:opacity-50"
           >
             <ExternalLink className="h-3.5 w-3.5" />
             {opening ? "打开中…" : "在线打开"}
@@ -230,7 +219,7 @@ function PreviewBody({
         <button
           type="button"
           onClick={() => onDownload(target)}
-          className="flex h-8 items-center gap-1.5 rounded-md border border-[#EAEAEC] px-3 text-[12px] text-[#5F6066] transition hover:bg-[#F4F4F5] hover:text-[#151517]"
+          className="flex h-9 items-center gap-1.5 rounded-full border border-[#E7E7EA] px-4 text-[12.5px] text-[#3C3C43] transition hover:border-[#D6D6DA] hover:bg-[#F5F5F7]"
         >
           <Download className="h-3.5 w-3.5" />
           下载文件
@@ -262,7 +251,7 @@ function MarkdownView({ markdown }: { markdown: string }) {
     blocks.push(
       <ul key={`ul-${blocks.length}`} className="mb-3 list-disc pl-5">
         {list.map((item, index) => (
-          <li key={index} className="mb-1 text-[12.8px] leading-[1.9] text-[#3A3B40]">
+          <li key={index} className="mb-1.5 text-[13.5px] leading-[1.9] text-[#3C3C43]">
             {inline(item)}
           </li>
         ))}
@@ -273,7 +262,7 @@ function MarkdownView({ markdown }: { markdown: string }) {
   const flushParagraph = () => {
     if (paragraph.length === 0) return;
     blocks.push(
-      <p key={`p-${blocks.length}`} className="mb-3 text-[12.8px] leading-[1.95] text-[#3A3B40]">
+      <p key={`p-${blocks.length}`} className="mb-3 text-[13.5px] leading-[1.95] text-[#3C3C43]">
         {inline(paragraph.join(" "))}
       </p>,
     );

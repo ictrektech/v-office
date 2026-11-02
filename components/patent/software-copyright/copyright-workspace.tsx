@@ -14,17 +14,21 @@ import { useRouter } from "next/navigation";
 import { useAiChat, readPersistedSession } from "@/hooks/use-ai-chat";
 import {
   aiFileObjectUrl,
+  fetchAiFile,
   getAiProject,
   listAiFiles,
   type AiFile,
   type AiProject,
 } from "@/utils/ai/client";
+import { useAppStore } from "@/store";
+import { openStoredFile } from "@/utils/vos/storage";
 import {
   CHAT_DEFAULT_WIDTH,
   CHAT_MAX_WIDTH,
   CHAT_MIN_WIDTH,
   baseName,
   fittedChatWidth,
+  isOfficePath,
   type OutputRow,
   type PreviewTarget,
 } from "../workbench/config";
@@ -82,6 +86,7 @@ export function CopyrightWorkspace({
   onNewCase,
 }: CopyrightWorkspaceProps) {
   const router = useRouter();
+  const server = useAppStore((store) => store.server);
   const [restoring, setRestoring] = useState(!caseId);
   const [started, setStarted] = useState(Boolean(caseId));
   const [info, setInfo] = useState<SoftwareInfo>(EMPTY_INFO);
@@ -395,6 +400,31 @@ export function CopyrightWorkspace({
     }
   };
 
+  /** 产物先转 docx，案件文件直接取字节，统一交给编辑器内核 */
+  const openOnline = async (target: PreviewTarget) => {
+    try {
+      if (target.kind === "artifact") {
+        await chat.openArtifact(target.key);
+        const saved = await chat.exportDocx();
+        const { file } = await openStoredFile(saved);
+        await server.open(file);
+      } else {
+        if (!chat.sessionId) throw new Error("会话还没就绪");
+        if (!isOfficePath(target.path)) throw new Error("这种格式不能在线编辑");
+        const blob = await fetchAiFile(chat.sessionId, target.path);
+        const ext = target.path.match(/\.[a-z0-9]{2,5}$/i)?.[0] ?? ".docx";
+        const name = `${target.name.replace(/\.[^.]+$/, "")}-${chat.sessionId.slice(-6)}${ext}`;
+        const file = new File([blob], name, {
+          type: blob.type || "application/octet-stream",
+        });
+        await server.open(file);
+      }
+      router.push("/editor");
+    } catch (err) {
+      say(err instanceof Error ? err.message : "在线打开失败");
+    }
+  };
+
   const startDrag = (event: PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
     const startX = event.clientX;
@@ -451,6 +481,7 @@ export function CopyrightWorkspace({
               onBack={() => setPreview(null)}
               onDownload={(target) => void downloadTarget(target)}
               loadArtifact={chat.loadArtifact}
+              onOpenOnline={openOnline}
             />
           ) : (
             <CopyrightOverview

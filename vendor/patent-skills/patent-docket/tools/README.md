@@ -5,7 +5,7 @@
 | 脚本 | 作用 |
 |------|------|
 | `init_docket.py` | 新建案卷目录与 `docket.yaml` |
-| `validate_docket.py` | 校验阶段、轮次、议题枚举 |
+| `validate_docket.py` | 校验阶段、轮次、议题枚举，并按阶段历史拦非法跳转 |
 | `emit_tracker.py` | 由 yaml 覆盖生成 `TRACKER.md` |
 
 依赖仓库根 `PyYAML`。

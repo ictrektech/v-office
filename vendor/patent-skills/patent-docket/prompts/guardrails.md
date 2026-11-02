@@ -13,7 +13,7 @@
 - 派工时让**被派工的那一包**自己跑它的 `tools/`。本包只改 `outputs/docket/`。
 - **禁止**为销问题清单条目而编造结构、参数、步骤、查新命中。
 - 存在 `blocking: true` 且 `status: open` 的 `ask_human` 时，不得 `dispatch_*`，不得加轮次。发明人/申请人/文头联系人默认非阻塞。
-- `phase` 必须以 `docket.yaml` 为准，跳转必须落在 `references/phases.yaml` 的 `transitions` 内；改完跑 `validate_docket.py`。
+- `phase` 必须以 `docket.yaml` 为准，跳转必须落在 `references/phases.yaml` 的 `transitions` 内；改完跑 `validate_docket.py`——它按案卷目录里的阶段历史自动校验跳转，越级会报 `非法阶段跳转`，先改回合法路径再派工。
 
 ## 产出
 
