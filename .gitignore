@@ -24,6 +24,8 @@
 # lightningcss 报 "Parsing CSS source code failed" → 整站样式表作废、页面白屏
 # （2026-10-13 本地就是这么白屏的）。
 /.next-dev/
+# 其他 NEXT_DIST_DIR 试构建目录（.next-verify 等）：同理不能进 Tailwind 扫描
+/.next-*/
 
 # playwright-cli（浏览器自动化）的工作目录：快照、控制台日志、截图都落在这里，
 # 是本地调试产物，不该进仓库。

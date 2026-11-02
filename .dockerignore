@@ -1,10 +1,11 @@
 # Exclude dev/build artifacts — these are rebuilt inside Docker
 node_modules
 .next
-# 本地 dev 的构建目录（next.config.ts 的 NEXT_DIST_DIR，dev 用 .next-dev），
-# 只有 turbopack 缓存没有它照样能构建；漏排会让上下文多出 ~480MB，
+# 本地 dev / 试构建目录（next.config.ts 的 NEXT_DIST_DIR，dev 用 .next-dev），
+# 只有 turbopack 缓存没有它照样能构建；漏排会让上下文多出几百 MB，
 # COPY . . 从几秒变成五六分钟
 .next-dev
+.next-*
 out
 
 # Git & editor
