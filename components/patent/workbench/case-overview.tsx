@@ -269,7 +269,12 @@ export function CaseOverview({
       </section>
 
       {copyright ? (
-        <CopyrightInfoCard key={copyright.sessionId || "new"} sessionId={copyright.sessionId} />
+        /* key 必须和下面进度卡的 key 不同：两张卡是同级兄弟，sessionId 为空时
+           都退化成 "new" 会撞 key，React 会把子节点渲染成两份（实测重复到 2~3 张） */
+        <CopyrightInfoCard
+          key={`copyright-info:${copyright.sessionId || "new"}`}
+          sessionId={copyright.sessionId}
+        />
       ) : null}
 
       <section className="mt-9">
@@ -391,7 +396,7 @@ export function CaseOverview({
 
       {copyright ? (
         <CopyrightProgressCard
-          key={copyright.sessionId || "new"}
+          key={`copyright-steps:${copyright.sessionId || "new"}`}
           sessionId={copyright.sessionId}
           files={copyright.files}
           streaming={copyright.streaming}
