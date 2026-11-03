@@ -189,6 +189,12 @@ export function CaseOverview({
   const slotMap = readSlotMap();
 
   const slotOf = (name: string): SlotKey => {
+    /* 软著：压缩包一律显示在「项目源码包」——服务端按扩展名解 zip（不管从
+       哪行上传），槽位标记却跟着上传行走，显示错位会让必需项误标红、让人
+       以为源码传丢了。 */
+    if (config.key === "copyright" && /\.(zip|rar|7z|tar|gz)$/i.test(name)) {
+      return "source";
+    }
     const stored = slotMap[name];
     return stored && isSlotFor(config.key, stored) ? stored : inferSlot(name, config.key);
   };
@@ -426,7 +432,8 @@ export function CaseOverview({
         </div>
         {missing.length > 0 ? (
           <p className="mt-3 text-[13px] leading-relaxed text-[#8E8E93]">
-            还缺 {missing.map((slot) => slot.label).join("、")}，补齐后技能才会继续。
+            还缺 {missing.map((slot) => slot.label).join("、")}
+            。不是摆设：助手跑到依赖它的那一步会直接停下向你要材料，不会跳过。
           </p>
         ) : null}
         <input
