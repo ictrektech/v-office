@@ -30,6 +30,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
 import os
@@ -3669,6 +3670,62 @@ async def rebuild_final_docx(request: Request, sid: str) -> JSONResponse:
     if proc.returncode != 0:
         tail = "\n".join(text.splitlines()[-30:]) or f"exit {proc.returncode}"
         return JSONResponse({"ok": False, "message": tail}, status_code=422)
+    return JSONResponse({"ok": True})
+
+
+class SaveFileRequest(BaseModel):
+    """网页编辑 md 源后的写回请求。
+
+    `base_sha256` 是用户打开文件时的内容指纹（乐观锁）：保存时若磁盘上的
+    版本已经变了（多半是 agent 同一轮也改了它），拒绝写入并提示刷新——
+    无声覆盖等于把助手的活儿删了。
+    """
+
+    path: str
+    content: str
+    base_sha256: str = ""
+
+
+@router.post("/sessions/{sid}/file")
+async def save_session_file(request: Request, sid: str, body: SaveFileRequest) -> JSONResponse:
+    """把用户在网页上编辑的 md/txt 源写回会话目录（原子写 + 冲突检测）。"""
+    username = await _user(request)
+    if sid in _running:
+        raise HTTPException(status_code=409, detail="助手正在本会话回复，等本轮结束再保存")
+    root = session_dir(username, sid).resolve()
+    target = (root / body.path).resolve()
+    # 路径校验与 get_file 同款：必须落在会话目录内
+    if target != root and not target.is_relative_to(root):
+        raise HTTPException(status_code=400, detail="bad path")
+    if target.suffix.lower() not in {".md", ".txt"}:
+        raise HTTPException(status_code=400, detail="只支持编辑 .md / .txt")
+    rel = target.relative_to(root)
+    if rel.parts and (rel.parts[0] in _PRIVATE_DIRS or rel.parts[0].startswith(".")):
+        raise HTTPException(status_code=400, detail="bad path")
+    if len(body.content.encode("utf-8")) > 4 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="文件过大（上限 4MB）")
+    if target.is_file():
+        current = hashlib.sha256(target.read_bytes()).hexdigest()
+        if current != body.base_sha256:
+            raise HTTPException(
+                status_code=409,
+                detail="这份 md 在你打开后被（助手）改过了。先回列表刷新看最新内容，"
+                "把你的改动补进去再保存，直接覆盖会丢掉助手的修改。",
+            )
+    elif body.base_sha256:
+        raise HTTPException(status_code=409, detail="文件已不存在，请刷新列表")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f".{target.name}.tmp-{uuid.uuid4().hex}")
+    tmp.write_text(body.content, encoding="utf-8")
+    os.replace(tmp, target)
+    # 属主跟 agent 对齐（服务可能以 root 跑，agent 按用户降权）
+    uid, gid = await user_ids(username)
+    if uid > 0 and os.geteuid() == 0:
+        try:
+            os.chown(target, uid, gid)
+        except OSError:
+            pass
+    LOG.info("ai: file saved user=%s sid=%s path=%s bytes=%s", username, sid, body.path, len(body.content))
     return JSONResponse({"ok": True})
 
 

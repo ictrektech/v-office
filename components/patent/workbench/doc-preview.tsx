@@ -12,8 +12,8 @@
  */
 
 import { useEffect, useState, type ReactNode } from "react";
-import { ArrowLeft, Download, ExternalLink, FileText } from "lucide-react";
-import { fetchAiFile } from "@/utils/ai/client";
+import { ArrowLeft, Download, ExternalLink, FileText, Loader2, PenLine, X } from "lucide-react";
+import { fetchAiFile, saveAiFile, sha256Hex } from "@/utils/ai/client";
 import { canOpenOnline, type PreviewTarget } from "./config";
 
 interface DocPreviewProps {
@@ -24,6 +24,8 @@ interface DocPreviewProps {
   loadArtifact: (key: string) => Promise<string>;
   /** 交给编辑器内核打开；失败由上层统一提示，这里只管 loading */
   onOpenOnline: (target: PreviewTarget) => Promise<void>;
+  /** md 源保存成功后通知上层刷新文件列表（「草稿已更新」提示随之亮起） */
+  onFileSaved?: () => void;
 }
 
 type PreviewState =
@@ -44,11 +46,43 @@ export function DocPreview({
   onDownload,
   loadArtifact,
   onOpenOnline,
+  onFileSaved,
 }: DocPreviewProps) {
   const [state, setState] = useState<PreviewState>({ status: "loading" });
   const [opening, setOpening] = useState(false);
   const [notice, setNotice] = useState("");
+  /* md/txt 源可以直接在网页上改：保存走 base_sha256 乐观锁，被助手改过就拒 */
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
   const onlineOpenable = canOpenOnline(target);
+  const editable =
+    target.kind === "file" && /\.(md|txt)$/i.test(target.path) && state.status === "text";
+
+  const startEdit = () => {
+    if (state.status !== "text") return;
+    setDraft(state.content);
+    setNotice("");
+    setEditing(true);
+  };
+
+  const saveEdit = async () => {
+    if (state.status !== "text" || !sessionId || target.kind !== "file") return;
+    setSaving(true);
+    setNotice("");
+    try {
+      const baseSha = await sha256Hex(state.content);
+      await saveAiFile(sessionId, target.path, draft, baseSha);
+      setState({ status: "text", content: draft });
+      setEditing(false);
+      setNotice("已保存。回到案件页点「重新生成 Word」就能出新文档。");
+      onFileSaved?.();
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : "保存失败");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const openOnline = async () => {
     setOpening(true);
@@ -130,7 +164,39 @@ export function DocPreview({
           已生成
         </span>
         <div className="ml-auto flex items-center gap-1.5">
-          {onlineOpenable ? (
+          {editable && !editing ? (
+            <button
+              type="button"
+              onClick={startEdit}
+              className="flex h-8 items-center gap-1.5 rounded-full bg-[#111113] px-3.5 text-[12px] font-medium text-white transition hover:bg-black"
+            >
+              <PenLine className="h-3.5 w-3.5" />
+              编辑
+            </button>
+          ) : null}
+          {editing ? (
+            <>
+              <button
+                type="button"
+                onClick={() => setEditing(false)}
+                disabled={saving}
+                className="flex h-8 items-center gap-1.5 rounded-full border border-[#E7E7EA] px-3.5 text-[12px] text-[#3C3C43] transition hover:border-[#D6D6DA] hover:bg-[#F5F5F7] disabled:opacity-50"
+              >
+                <X className="h-3.5 w-3.5" />
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => void saveEdit()}
+                className="flex h-8 items-center gap-1.5 rounded-full bg-[#111113] px-3.5 text-[12px] font-medium text-white transition hover:bg-black disabled:opacity-50"
+              >
+                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                {saving ? "保存中…" : "保存"}
+              </button>
+            </>
+          ) : null}
+          {onlineOpenable && !editing ? (
             <button
               type="button"
               disabled={opening}
@@ -159,19 +225,28 @@ export function DocPreview({
       ) : null}
 
       <div className="flex flex-1 justify-center px-6 py-10">
-        <div className="w-[720px] max-w-full self-start rounded-2xl border border-[#ECECEF] bg-white px-14 py-12 shadow-[0_24px_60px_-40px_rgba(0,0,0,0.3)]">
-          <h2 className="mb-8 text-center text-[21px] font-semibold leading-snug tracking-[-0.015em] text-[#111113]">
-            {fileTitle(target.name)}
-          </h2>
-          <PreviewBody
-            state={state}
-            target={target}
-            onDownload={onDownload}
-            onlineOpenable={onlineOpenable}
-            opening={opening}
-            onOpen={() => void openOnline()}
+        {editing ? (
+          <textarea
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            spellCheck={false}
+            className="h-[calc(100dvh-160px)] w-full max-w-[900px] resize-y rounded-2xl border border-[#ECECEF] bg-white p-6 font-mono text-[13px] leading-[1.8] text-[#1C1C1E] shadow-[0_24px_60px_-40px_rgba(0,0,0,0.3)] outline-none focus:border-[#C9C9CF]"
           />
-        </div>
+        ) : (
+          <div className="w-[720px] max-w-full self-start rounded-2xl border border-[#ECECEF] bg-white px-14 py-12 shadow-[0_24px_60px_-40px_rgba(0,0,0,0.3)]">
+            <h2 className="mb-8 text-center text-[21px] font-semibold leading-snug tracking-[-0.015em] text-[#111113]">
+              {fileTitle(target.name)}
+            </h2>
+            <PreviewBody
+              state={state}
+              target={target}
+              onDownload={onDownload}
+              onlineOpenable={onlineOpenable}
+              opening={opening}
+              onOpen={() => void openOnline()}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

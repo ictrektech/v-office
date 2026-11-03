@@ -55,5 +55,9 @@ public/ai-assistant
 # 本地测试素材（不进镜像）
 /samples/
 
+# 专利端到端实测目录：跑批脚本 + 真实项目素材 + 实测报告，纯测试资产，
+# 不进 git 也不进镜像（.gitignore 里已整目录排除）
+/scripts/patent-e2e/
+
 # 热修复备份（仅本地排查用，已在 .gitignore）
 /.hotfix-backup/

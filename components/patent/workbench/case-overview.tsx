@@ -47,6 +47,7 @@ import {
 } from "./material-slots";
 import {
   STAGE_LIST,
+  baseName,
   canOpenOnline,
   formatClock,
   rowFileIcon,
@@ -56,6 +57,7 @@ import {
   type StageKey,
 } from "./config";
 import { CopyrightInfoCard, CopyrightProgressCard } from "./copyright-cards";
+import type { CopyrightPair } from "./copyright";
 
 interface CaseOverviewProps {
   config: StageConfig;
@@ -85,6 +87,10 @@ interface CaseOverviewProps {
     stale?: boolean;
     /** 重建正式资料；返回错误信息（null = 成功） */
     onRebuild?: () => Promise<string | null>;
+    /** 申请材料：md 源 ↔ 成品配对；传了就用专属面板替代通用表格 */
+    pairs?: CopyrightPair[];
+    /** 过程记录：没配进申请材料的中间稿 md，折叠展示 */
+    processRows?: OutputRow[];
   };
 }
 
@@ -127,6 +133,7 @@ export function CaseOverview({
 }: CaseOverviewProps) {
   const [modeOpen, setModeOpen] = useState(false);
   const [draftOpen, setDraftOpen] = useState(false);
+  const [processOpen, setProcessOpen] = useState(false);
   const [pendingSlot, setPendingSlot] = useState<SlotKey>("other");
   const [dragSlot, setDragSlot] = useState<SlotKey | null>(null);
   const [openingRow, setOpeningRow] = useState<string | null>(null);
@@ -135,11 +142,32 @@ export function CaseOverview({
   const inputRef = useRef<HTMLInputElement>(null);
   const slots = slotsFor(config.key);
 
+  /**
+   * 软著模式：申请材料用专属面板（md 源 ↔ 成品配对），替代通用表格。
+   * 面板自己讲用法：源在哪改、成品在哪下、改完点哪。
+   */
+  const copyrightMaterials =
+    copyright && copyright.pairs && copyright.processRows
+      ? (copyright as typeof copyright & {
+          pairs: CopyrightPair[];
+          processRows: OutputRow[];
+        })
+      : null;
+
   /** 正式资料已有 docx 才亮重建按钮；首次生成仍走 8 步卡片 */
   const hasFinalDocx = (copyright?.files ?? []).some(
     (file) =>
       file.path.startsWith("outputs/软著/正式资料/") && file.path.endsWith(".docx"),
   );
+
+  const fileRowOf = (path: string, mtime: number): OutputRow => ({
+    id: `file:${path}`,
+    name: baseName(path),
+    stage: config.label,
+    time: mtime,
+    kind: "file",
+    path,
+  });
 
   const runRebuild = async () => {
     if (!copyright?.onRebuild || rebuilding) return;
@@ -425,6 +453,142 @@ export function CaseOverview({
         />
       ) : null}
 
+      {copyrightMaterials ? (
+        <section className="mt-9">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="flex items-center gap-2 text-[17px] font-semibold tracking-[-0.01em] text-[#0E0E10]">
+              申请材料
+              <span className="rounded-full bg-[#F1F1F4] px-2 py-0.5 text-[12px] font-medium text-[#5F6066]">
+                {copyrightMaterials.pairs.length}
+              </span>
+            </h2>
+            {copyrightMaterials.onRebuild ? (
+              <button
+                type="button"
+                disabled={rebuilding}
+                onClick={() => void runRebuild()}
+                title="重算指纹并按当前 md 源重建正式 Word（页数门禁照旧，失败不影响上一版）"
+                className="flex h-8 items-center gap-1.5 rounded-full bg-[#111113] px-3.5 text-[12.5px] font-medium text-white transition hover:bg-black disabled:opacity-40"
+              >
+                {rebuilding ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {copyrightMaterials.stale ? "草稿已更新，重新生成 Word" : "重新生成 Word"}
+              </button>
+            ) : null}
+          </div>
+
+          <div className="overflow-hidden rounded-[22px] border border-[#ECECEF] bg-white">
+            {copyrightMaterials.pairs.length === 0 ? (
+              <p className="px-5 py-14 text-center text-[13px] text-[#8E8E93]">
+                还没有申请材料：在对话里从第 1 步跑到第 8 步就有了。
+              </p>
+            ) : (
+              copyrightMaterials.pairs.map((pair) => {
+                const outputTarget: PreviewTarget | null = pair.output
+                  ? { kind: "file", path: pair.output.path, name: baseName(pair.output.path) }
+                  : null;
+                const outputRow = pair.output
+                  ? fileRowOf(pair.output.path, pair.output.mtime)
+                  : null;
+                return (
+                  <div
+                    key={pair.key}
+                    className="border-t border-[#F2F2F4] px-5 py-4 first:border-t-0"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="flex items-center gap-2 text-[14px] font-medium text-[#1C1C1E]">
+                          {pair.label}
+                          {pair.stale ? (
+                            <span className="rounded-full bg-[#FDF3EC] px-2 py-0.5 text-[11.5px] font-medium text-[#B4762A]">
+                              源已更新
+                            </span>
+                          ) : null}
+                        </p>
+                        <div className="mt-1.5 space-y-1 text-[12.5px] text-[#6E6E73]">
+                          {pair.source ? (
+                            <p className="flex items-center gap-1.5">
+                              <span
+                                className={`h-1.5 w-1.5 flex-none rounded-full ${
+                                  pair.stale ? "bg-[#E8A33D]" : "bg-[#34A853]"
+                                }`}
+                              />
+                              源 {baseName(pair.source.path)} · {formatClock(pair.source.mtime)}
+                            </p>
+                          ) : (
+                            <p className="text-[#B4B4BA]">还没有 md 源</p>
+                          )}
+                          {pair.output ? (
+                            <p className="flex items-center gap-1.5">
+                              <span className="h-1.5 w-1.5 flex-none rounded-full bg-[#34A853]" />
+                              成品 {baseName(pair.output.path)} · {formatClock(pair.output.mtime)}
+                            </p>
+                          ) : (
+                            <p className="text-[#B4B4BA]">还没有成品，点右上角「重新生成 Word」</p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex flex-none items-center gap-1">
+                        {pair.source ? (
+                          <button
+                            type="button"
+                            title="打开 md 源：直接编辑、保存，然后点『重新生成 Word』"
+                            onClick={() =>
+                              onOpenPreview({
+                                kind: "file",
+                                path: pair.source!.path,
+                                name: baseName(pair.source!.path),
+                              })
+                            }
+                            className="flex h-8 items-center gap-1.5 rounded-full border border-[#E4E4E8] px-3 text-[12.5px] font-medium text-[#3C3C43] transition hover:border-[#D2D2D8] hover:bg-[#F5F5F7]"
+                          >
+                            <PenLine className="h-3.5 w-3.5" />
+                            改源
+                          </button>
+                        ) : null}
+                        {outputTarget && canOpenOnline(outputTarget) ? (
+                          <button
+                            type="button"
+                            title="用 Collabora 在线打开"
+                            disabled={openingRow === pair.key}
+                            onClick={() => {
+                              setOpeningRow(pair.key);
+                              Promise.resolve(onOpenOnline(outputTarget)).finally(() =>
+                                setOpeningRow((value) => (value === pair.key ? null : value)),
+                              );
+                            }}
+                            className="flex h-8 w-8 items-center justify-center rounded-[10px] text-[#8E8E93] transition hover:bg-[#F2F2F4] hover:text-[#1C1C1E] disabled:opacity-40"
+                          >
+                            {openingRow === pair.key ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <ExternalLink className="h-4 w-4" />
+                            )}
+                          </button>
+                        ) : null}
+                        {outputRow ? (
+                          <button
+                            type="button"
+                            title="下载成品"
+                            onClick={() => onDownload(outputRow)}
+                            className="flex h-8 w-8 items-center justify-center rounded-[10px] text-[#8E8E93] transition hover:bg-[#F2F2F4] hover:text-[#1C1C1E]"
+                          >
+                            <Download className="h-4 w-4" />
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+          {rebuildError ? (
+            <p className="mt-3 whitespace-pre-wrap rounded-[18px] bg-[#FDF3F2] px-4 py-3 text-[12.5px] leading-relaxed text-[#C0392B]">
+              {rebuildError}
+            </p>
+          ) : null}
+        </section>
+      ) : (
       <section className="mt-9">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="flex items-center gap-2 text-[17px] font-semibold tracking-[-0.01em] text-[#0E0E10]">
@@ -548,12 +712,76 @@ export function CaseOverview({
         <p className="mt-3 text-[12.5px] leading-relaxed text-[#8E8E93]">
           Word / Excel / PPT 可直接在线编辑；其余格式先下载。
         </p>
-        {rebuildError ? (
-          <p className="mt-3 whitespace-pre-wrap rounded-[18px] bg-[#FDF3F2] px-4 py-3 text-[12.5px] leading-relaxed text-[#C0392B]">
-            {rebuildError}
-          </p>
-        ) : null}
       </section>
+      )}
+
+      {copyrightMaterials && copyrightMaterials.processRows.length > 0 ? (
+        <section className="mt-9">
+          <button
+            type="button"
+            onClick={() => setProcessOpen((value) => !value)}
+            className="mb-3 flex w-full items-center justify-between text-left"
+          >
+            <h2 className="flex items-center gap-2 text-[17px] font-semibold tracking-[-0.01em] text-[#0E0E10]">
+              过程记录
+              <span className="rounded-full bg-[#F1F1F4] px-2 py-0.5 text-[12px] font-medium text-[#5F6066]">
+                {copyrightMaterials.processRows.length}
+              </span>
+            </h2>
+            <span className="flex items-center gap-1.5 text-[12.5px] text-[#8E8E93]">
+              {processOpen ? "收起" : "展开"}
+              <ChevronDown
+                className={`h-4 w-4 transition-transform ${processOpen ? "rotate-180" : ""}`}
+              />
+            </span>
+          </button>
+
+          {processOpen ? (
+            <div className="overflow-hidden rounded-[22px] border border-[#ECECEF] bg-white">
+              {copyrightMaterials.processRows.map((row) => {
+                const target: PreviewTarget = {
+                  kind: "file",
+                  path: row.path ?? "",
+                  name: row.name,
+                };
+                const Icon = rowFileIcon(row.name, row.kind);
+                return (
+                  <div
+                    key={row.id}
+                    onClick={() => onOpenPreview(target)}
+                    className="flex cursor-pointer items-center gap-3 border-t border-[#F2F2F4] px-5 py-3 transition first:border-t-0 hover:bg-[#FAFAFB]"
+                  >
+                    <span className="flex h-8 w-8 flex-none items-center justify-center rounded-[10px] bg-[#F4F4F7]">
+                      <Icon className="h-4 w-4 text-[#8E8E93]" strokeWidth={1.8} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[13.5px] text-[#3C3C43]">{row.name}</p>
+                      <p className="mt-0.5 text-[12px] text-[#8E8E93]">
+                        过程记录 · {formatClock(row.time)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      title="下载"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onDownload(row);
+                      }}
+                      className="flex h-8 w-8 flex-none items-center justify-center rounded-[10px] text-[#8E8E93] transition hover:bg-[#F2F2F4] hover:text-[#1C1C1E]"
+                    >
+                      <Download className="h-4 w-4" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="rounded-[18px] border border-dashed border-[#E4E4E8] px-4 py-3 text-[12.5px] text-[#8E8E93]">
+              业务理解、选材清单、自检记录等中间稿在这里，不算正式产出。
+            </p>
+          )}
+        </section>
+      ) : null}
 
       {draftRows.length > 0 ? (
         <section className="mt-9">
@@ -563,7 +791,7 @@ export function CaseOverview({
             className="mb-3 flex w-full items-center justify-between text-left"
           >
             <h2 className="flex items-center gap-2 text-[17px] font-semibold tracking-[-0.01em] text-[#0E0E10]">
-              草稿
+              旁路文档
               <span className="rounded-full bg-[#F1F1F4] px-2 py-0.5 text-[12px] font-medium text-[#5F6066]">
                 {draftRows.length}
               </span>

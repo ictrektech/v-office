@@ -206,3 +206,70 @@ export function analyzePrompt(info?: SoftwareInfo | null): string {
 export function hasFinalMaterials(files: ReadonlyArray<{ path: string }>): boolean {
   return files.some((file) => /outputs\/软著\/正式资料\/.+\.(docx|txt|md)$/.test(file.path));
 }
+
+// ── 申请材料配对：md 源 ↔ 正式资料成品 ──────────────────────────────────────
+//
+// 用户的问题从来不是「有哪些文件」，而是「这个 Word 从哪改、改完怎么重建」。
+// 把草稿 md 和它生成的成品配成一组摆出来，谁新谁旧、点哪里，一眼可见。
+
+export interface CopyrightPair {
+  key: string;
+  label: string;
+  source?: { path: string; mtime: number };
+  output?: { path: string; mtime: number };
+  /** 源比成品新：改过 md 还没重建 */
+  stale: boolean;
+}
+
+const OUTPUT_PAIRS: Array<{ key: string; label: string; source: string; output: RegExp }> = [
+  { key: "manual", label: "操作手册", source: "操作手册.md", output: /操作手册\.docx$/ },
+  { key: "code-head", label: "代码（前 30 页）", source: "代码-前30页.md", output: /代码\(前30页\)\.docx$/ },
+  { key: "code-tail", label: "代码（后 30 页）", source: "代码-后30页.md", output: /代码\(后30页\)\.docx$/ },
+  { key: "code-all", label: "代码（全部）", source: "代码-全部.md", output: /代码\(全部\)\.docx$/ },
+  { key: "app-info", label: "申请表", source: "申请表信息.md", output: /申请表信息\.txt$/ },
+];
+
+export function buildCopyrightPairs(
+  files: ReadonlyArray<{ path: string; mtime?: number }>,
+): CopyrightPair[] {
+  const inDraft = new Map(
+    files
+      .filter((f) => f.path.startsWith("outputs/软著/草稿/") && f.path.endsWith(".md"))
+      .map((f) => [f.path.split("/").pop() ?? "", f]),
+  );
+  const inFinal = files.filter((f) => f.path.startsWith("outputs/软著/正式资料/"));
+  const pairs: CopyrightPair[] = [];
+  for (const spec of OUTPUT_PAIRS) {
+    const src = inDraft.get(spec.source);
+    const out = inFinal.find((f) => spec.output.test(f.path));
+    if (!src && !out) continue;
+    const source = src ? { path: src.path, mtime: src.mtime ?? 0 } : undefined;
+    const output = out ? { path: out.path, mtime: out.mtime ?? 0 } : undefined;
+    pairs.push({
+      key: spec.key,
+      label: spec.label,
+      source,
+      output,
+      stale: Boolean(source && output && source.mtime > output.mtime),
+    });
+  }
+  return pairs;
+}
+
+/** 过程记录：软著目录里没配进申请材料的其余 md（业务理解、清单、自检记录、环境检查…） */
+export function copyrightProcessFiles(
+  files: ReadonlyArray<{ path: string; mtime?: number }>,
+  paired: CopyrightPair[],
+): Array<{ path: string; mtime: number }> {
+  const used = new Set(paired.map((p) => p.source?.path).filter(Boolean) as string[]);
+  return files
+    .filter(
+      (f) =>
+        f.path.startsWith("outputs/软著/") &&
+        f.path.endsWith(".md") &&
+        !f.path.includes("正式资料") &&
+        !used.has(f.path),
+    )
+    .map((f) => ({ path: f.path, mtime: f.mtime ?? 0 }))
+    .sort((a, b) => b.mtime - a.mtime);
+}

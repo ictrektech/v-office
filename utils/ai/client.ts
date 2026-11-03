@@ -371,6 +371,36 @@ export async function rebuildFinalDocx(sid: string): Promise<void> {
   throw new Error(body.message || body.detail || `重建失败（${resp.status}）`);
 }
 
+/** 内容的 sha256（十六进制），作 md 写回的乐观锁基准 */
+export async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * 把网页上编辑的 md/txt 写回会话目录。
+ *
+ * `baseSha256` 是打开文件时的内容指纹：期间被 agent 改过就抛 409 冲突文案，
+ * 绝不无声覆盖。保存成功后 md 的 mtime 更新，「草稿已更新」提示随之亮起。
+ */
+export async function saveAiFile(
+  sid: string,
+  path: string,
+  content: string,
+  baseSha256: string,
+): Promise<void> {
+  const resp = await aiFetch(`/sessions/${encodeURIComponent(sid)}/file`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, content, base_sha256: baseSha256 }),
+  });
+  if (resp.ok) return;
+  const body = (await resp.json().catch(() => ({}))) as { detail?: string };
+  throw new Error(body.detail || `保存失败（${resp.status}）`);
+}
+
 /** 取一个产物文件（鉴权走 aiFetch，所以不能直接塞进 <img src>） */
 export async function fetchAiFile(sid: string, path: string): Promise<Blob> {
   const encoded = path.split("/").map(encodeURIComponent).join("/");

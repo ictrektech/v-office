@@ -20,6 +20,10 @@ import {
   rebuildFinalDocx,
   type AiFile,
 } from "@/utils/ai/client";
+import {
+  buildCopyrightPairs,
+  copyrightProcessFiles,
+} from "./copyright";
 import { useAppStore } from "@/store";
 import { openStoredFile } from "@/utils/vos/storage";
 import {
@@ -173,6 +177,27 @@ export function StageWorkspace({
       }))
       .sort((a, b) => (b.time ?? 0) - (a.time ?? 0));
   }, [files, config.label]);
+
+  /**
+   * 软著申请材料：md 源 ↔ 正式资料成品配对，另有专属面板展示（通用表格对
+   * 这套「从哪改、怎么重建」的心智模型说不清楚）。过程记录单独收进折叠区。
+   */
+  const copyrightPairs = useMemo(
+    () => (mode === "copyright" ? buildCopyrightPairs(files) : []),
+    [mode, files],
+  );
+  const copyrightProcessRows = useMemo<OutputRow[]>(() => {
+    if (mode !== "copyright") return [];
+    const stage = config.label;
+    return copyrightProcessFiles(files, copyrightPairs).map((file) => ({
+      id: `file:${file.path}`,
+      name: baseName(file.path),
+      stage,
+      time: file.mtime,
+      kind: "file" as const,
+      path: file.path,
+    }));
+  }, [mode, files, copyrightPairs, config.label]);
 
   /** 草稿：对话成稿 artifact + 旁路 md（问题清单、对照表等），收进折叠区 */
   const draftRows = useMemo<OutputRow[]>(() => {
@@ -396,6 +421,7 @@ export function StageWorkspace({
               onDownload={(target) => void downloadTarget(target)}
               loadArtifact={chat.loadArtifact}
               onOpenOnline={openOnline}
+              onFileSaved={() => void refreshFiles()}
             />
           ) : (
             <CaseOverview
@@ -419,6 +445,8 @@ export function StageWorkspace({
                       onSend: (prompt) => chat.send(prompt),
                       stale: copyrightStale,
                       onRebuild: rebuildFinal,
+                      pairs: copyrightPairs,
+                      processRows: copyrightProcessRows,
                     }
                   : undefined
               }
