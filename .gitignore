@@ -87,3 +87,6 @@ __pycache__/
 
 # 热修复备份（本地回滚用，不入 git）
 /.hotfix-backup/
+
+# 本地工作记录（问题单/交接），不进版本库
+/HANDOFF.md
