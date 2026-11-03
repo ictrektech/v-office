@@ -17,7 +17,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-export type StageKey = "disclosure" | "application" | "oa" | "full";
+export type StageKey = "disclosure" | "application" | "oa" | "full" | "copyright";
 
 export interface StageConfig {
   key: StageKey;
@@ -58,6 +58,13 @@ export const STAGES: Record<StageKey, StageConfig> = {
     sessionTitle: "专利全流程",
     hint: "一条龙：交底 → 申请文件 → 问题清单修订，最多 3 轮。",
   },
+  copyright: {
+    key: "copyright",
+    label: "软件著作权",
+    skill: "software-copyright",
+    sessionTitle: "软件著作权申请",
+    hint: "传源码包，8 步出申请表、操作手册与前后 30 页代码材料。",
+  },
 };
 
 export const STAGE_LIST = Object.values(STAGES);
@@ -78,6 +85,8 @@ export function isStageKey(value: string): value is StageKey {
 
 /** 每个任务的会话 id 存在这个 key 下，刷新后接着用 */
 export function persistKeyFor(mode: StageKey): string {
+  // 软著并入工作台后沿用原来的键：老案件（/patent/copyright）还能自动接上
+  if (mode === "copyright") return "ai:software-copyright";
   return `ai:patent:${mode}`;
 }
 

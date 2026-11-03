@@ -36,6 +36,8 @@ export type SlotKey =
   | "prior"
   | "vector"
   | "cases"
+  | "source"
+  | "screens"
   | "other";
 
 const DISCLOSURE_SLOTS: MaterialSlot[] = [
@@ -142,11 +144,39 @@ const DOCKET_SLOTS: MaterialSlot[] = [
   },
 ];
 
+/**
+ * 软著 = software-copyright 的输入。
+ *
+ * 与专利不同，它只有一个真正必需的材料：**项目源码包**（服务端会解成
+ * `project/`）。截图是第 6 步才用到的，先放一行占位、跳过也行；需求/设计文档
+ * 属于可选补充。刻意不复用「项目目录」槽：那个是专利交底的源码/文档打包，
+ * 语义不同，混用会让用户不知道该传什么。
+ */
+const COPYRIGHT_SLOTS: MaterialSlot[] = [
+  {
+    key: "source",
+    label: "项目源码包",
+    hint: "项目根目录打包成 ZIP（排除 node_modules/.git/dist），服务端解成 project/",
+    required: true,
+  },
+  {
+    key: "screens",
+    label: "软件截图",
+    hint: "可选；第 6 步选了「我自行上传截图」时用，按页面顺序命名",
+  },
+  {
+    key: "other",
+    label: "需求 / 设计文档",
+    hint: "可选；需求说明、设计文档、演示数据，可多份",
+  },
+];
+
 export const STAGE_SLOTS: Record<StageKey, MaterialSlot[]> = {
   disclosure: DISCLOSURE_SLOTS,
   full: DOCKET_SLOTS,
   application: APPLICATION_SLOTS,
   oa: OA_SLOTS,
+  copyright: COPYRIGHT_SLOTS,
 };
 
 export function slotsFor(stage: StageKey): MaterialSlot[] {
@@ -213,6 +243,10 @@ export function inferSlot(name: string, stage: StageKey): SlotKey {
   if (/申请信息|申请人/.test(text)) return pick("applicant");
   if (/向量|vector|embedding/.test(text)) return pick("vector");
   if (/案例|case/.test(text)) return pick("cases");
+  /* 软著：源码包和截图各自只有一行，按扩展名就能分准 */
+  if (has("screens") && /\.(png|jpe?g|webp|gif|bmp)$/.test(text)) return "screens";
+  if (has("source") && /\.(zip|rar|7z|tar|gz)$/.test(text)) return "source";
+  if (has("source")) return "source";
 
   if (has("project")) return "project";
   if (has("disclosureDir")) return "disclosureDir";

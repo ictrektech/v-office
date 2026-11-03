@@ -59,7 +59,7 @@ function formatTime(ms: number): string {
 }
 
 function hrefOf(item: AiSessionMeta, tab: Exclude<TabKey, "all">): string {
-  if (tab === "copyright") return `/patent/copyright?case=${item.id}`;
+  /* 软著已并入工作台的第五个任务，历史记录统一回 /patent（旧路径仍可跳转） */
   return `/patent?mode=${tab}&case=${item.id}`;
 }
 

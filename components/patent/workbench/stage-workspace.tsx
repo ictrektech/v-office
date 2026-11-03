@@ -362,6 +362,16 @@ export function StageWorkspace({
               }
               materials={chat.materials}
               docket={visibleDocket}
+              copyright={
+                mode === "copyright"
+                  ? {
+                      sessionId: chat.sessionId ?? "",
+                      files,
+                      streaming: chat.streaming,
+                      onSend: (prompt) => chat.send(prompt),
+                    }
+                  : undefined
+              }
               rows={rows}
               draftRows={draftRows}
               onModeChange={onModeChange}

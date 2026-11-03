@@ -1,5 +1,9 @@
 /**
- * 软著办理的 8 个阶段与对应指令。
+ * 软著办理的 8 个阶段、对应指令与进度推导。
+ *
+ * 原来放在 `components/patent/software-copyright/steps.ts`；软著并入工作台后
+ * 挪到这里，和 `config.ts` / `material-slots.ts` 同级，工作台直接复用，
+ * 不再维护第二套页面。
  *
  * 顺序必须和技能 SKILL.md 的工作流一致：代码抽取完成后再出申请表，
  * 因为「页数」字段依赖抽取结果。每一步都要用户确认后才进入下一步。
@@ -33,7 +37,11 @@ export const STEPS: StepMeta[] = [
   { key: "extract", title: "抽取代码材料", desc: "前 30 页 + 后 30 页，共 60 页" },
   { key: "application", title: "申请表信息", desc: "软件全称、版本、环境与功能说明" },
   { key: "manual", title: "操作手册", desc: "按真实页面逐章写，并完成自检" },
-  { key: "shots", title: "截图", desc: "上传软件真实界面截图插入手册；跳过则手册留占位，正式提交前需补图" },
+  {
+    key: "shots",
+    title: "截图",
+    desc: "上传真实界面截图插入手册；跳过则手册留占位，正式提交前需补图",
+  },
   { key: "build", title: "正式资料", desc: "生成 Word / TXT，校验页数" },
 ];
 
@@ -53,7 +61,7 @@ export const PROMPTS: Record<Exclude<StepKey, "shots">, string> = {
     "报告生成的是前30页/后30页还是全部，以及总页数。",
   application:
     "确认代码材料，继续：生成 outputs/软著/草稿/申请表信息.md（页数用抽取结果），" +
-    "并列出需要我补全的字段（著作权人、日期、硬件/系统环境等）。",
+    "并一次性列出需要我补全的字段（著作权人、日期、硬件/系统环境等）。",
   manual:
     "确认申请表信息，继续：记录 application-fields 门禁，生成操作手册草稿到 outputs/软著/草稿/操作手册.md，" +
     "按真实页面逐章写，并完成操作手册自检记录（至少三轮）。",
@@ -69,11 +77,27 @@ export const SHOT_PROMPTS = {
     "然后记录 screenshot-method 门禁（method=user-supplied）并整理截图清单。",
 } as const;
 
+/** 申请信息存在本地：恢复案件时不用再向 agent 问一遍 */
+export interface SoftwareInfo {
+  name: string;
+  version: string;
+  owner: string;
+  finishDate: string;
+  devEnv: string;
+  runEnv: string;
+}
+
+export const EMPTY_INFO: SoftwareInfo = {
+  name: "",
+  version: "V1.0",
+  owner: "",
+  finishDate: "",
+  devEnv: "",
+  runEnv: "",
+};
+
 const STEPS_KEY = "ai:copyright:steps:";
 const INFO_KEY = "ai:copyright:info:";
-
-/** 本页面认领会话用；新建案件时也清这个键 */
-export const COPYRIGHT_PERSIST_KEY = "ai:software-copyright";
 
 export function readStepMarks(sessionId: string): Partial<Record<StepKey, StepMark>> {
   try {
@@ -90,7 +114,7 @@ export function writeStepMark(sessionId: string, key: StepKey): void {
     marks[key] = { done: true, at: Date.now() };
     localStorage.setItem(STEPS_KEY + sessionId, JSON.stringify(marks));
   } catch {
-    // 无痕模式忽略；本页仍以内存状态为准
+    // 无痕模式忽略；页面仍以磁盘产物为准
   }
 }
 
@@ -141,20 +165,14 @@ export function mergeStepMarks(
   return merged;
 }
 
-/** 申请信息存在本地，恢复案件时不用再向 agent 问一遍 */
-export interface SoftwareInfo {
-  name: string;
-  version: string;
-  owner: string;
-  finishDate: string;
-  devEnv: string;
-  runEnv: string;
+export function nextStep(marks: Partial<Record<StepKey, StepMark>>): StepKey | null {
+  return STEPS.find((step) => !marks[step.key]?.done)?.key ?? null;
 }
 
 export function readSoftwareInfo(sessionId: string): SoftwareInfo | null {
   try {
     const raw = localStorage.getItem(INFO_KEY + sessionId);
-    return raw ? (JSON.parse(raw) as SoftwareInfo) : null;
+    return raw ? { ...EMPTY_INFO, ...(JSON.parse(raw) as Partial<SoftwareInfo>) } : null;
   } catch {
     return null;
   }
@@ -168,19 +186,23 @@ export function writeSoftwareInfo(sessionId: string, info: SoftwareInfo): void {
   }
 }
 
-/** 产出物表格里的阶段标签，按文件路径猜，够用且不依赖服务端字段 */
-export function stageOf(path: string): string {
-  const text = path.toLowerCase();
-  if (text.includes("正式资料")) return "正式资料";
-  if (text.includes("操作手册")) return "操作手册";
-  if (text.includes("申请表")) return "申请表";
-  if (text.includes("代码")) return "代码材料";
-  if (text.includes("业务理解")) return "业务理解";
-  if (text.includes("截图")) return "截图";
-  if (text.includes("分析") || text.includes("project")) return "项目分析";
-  return "草稿";
+/**
+ * 第 0 步的指令带上申请信息。
+ *
+ * 旧版软著页是「先填表 → 开始」，把信息写成 materials 里的一份 md 一起上传；
+ * 并入工作台后材料槽只收文件，所以改成把已知字段拼进首条指令——同样让 agent
+ * 一开始就知道全称和版本，少一轮追问。
+ */
+export function analyzePrompt(info?: SoftwareInfo | null): string {
+  const name = info?.name?.trim();
+  if (!name) return PROMPTS.analyze;
+  const parts = [`软件全称「${name}」`];
+  if (info?.version?.trim()) parts.push(`版本 ${info.version.trim()}`);
+  if (info?.owner?.trim()) parts.push(`著作权人「${info.owner.trim()}」`);
+  return `${PROMPTS.analyze}\n\n申请信息：${parts.join("，")}。`;
 }
 
-export function nextStep(marks: Partial<Record<StepKey, StepMark>>): StepKey | null {
-  return STEPS.find((step) => !marks[step.key]?.done)?.key ?? null;
+/** 交付件按 正式资料 / 草稿 / 过程记录 分层？工作台已另有分层，这里只判「是否已出正式资料」 */
+export function hasFinalMaterials(files: ReadonlyArray<{ path: string }>): boolean {
+  return files.some((file) => /outputs\/软著\/正式资料\/.+\.(docx|txt|md)$/.test(file.path));
 }

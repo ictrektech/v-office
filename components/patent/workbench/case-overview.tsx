@@ -7,10 +7,8 @@
  */
 
 import { useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import {
   Archive,
-  ArrowUpRight,
   Boxes,
   Check,
   ChevronDown,
@@ -57,6 +55,7 @@ import {
   type StageConfig,
   type StageKey,
 } from "./config";
+import { CopyrightInfoCard, CopyrightProgressCard } from "./copyright-cards";
 
 interface CaseOverviewProps {
   config: StageConfig;
@@ -76,6 +75,13 @@ interface CaseOverviewProps {
   /** 交给编辑器内核（Collabora / OnlyOffice）在线打开 */
   onOpenOnline: (target: PreviewTarget) => Promise<void> | void;
   onDownload: (row: OutputRow) => void;
+  /** 软著阶段专用：申请信息卡 + 8 步进度卡；其他阶段不传 */
+  copyright?: {
+    sessionId: string;
+    files: ReadonlyArray<{ path: string }>;
+    streaming: boolean;
+    onSend: (prompt: string) => Promise<boolean>;
+  };
 }
 
 const SLOT_ICONS: Record<SlotKey, LucideIcon> = {
@@ -94,6 +100,8 @@ const SLOT_ICONS: Record<SlotKey, LucideIcon> = {
   prior: Layers,
   vector: Database,
   cases: Archive,
+  source: Archive,
+  screens: ImageIcon,
   other: FileText,
 };
 
@@ -111,8 +119,8 @@ export function CaseOverview({
   onOpenPreview,
   onOpenOnline,
   onDownload,
+  copyright,
 }: CaseOverviewProps) {
-  const router = useRouter();
   const [modeOpen, setModeOpen] = useState(false);
   const [draftOpen, setDraftOpen] = useState(false);
   const [pendingSlot, setPendingSlot] = useState<SlotKey>("other");
@@ -249,27 +257,20 @@ export function CaseOverview({
                 <div className="my-1.5 border-t border-[#F1F1F3]" />
                 <button
                   type="button"
-                  onClick={() => {
-                    setModeOpen(false);
-                    router.push("/patent/copyright");
-                  }}
-                  className="flex w-full items-start gap-2 rounded-2xl px-3 py-3 text-left transition hover:bg-[#F5F5F7]"
+                  onClick={() => setModeOpen(false)}
+                  className="flex w-full items-center gap-2 rounded-2xl px-3 py-2.5 text-left text-[12.5px] text-[#8E8E93] transition hover:bg-[#F5F5F7]"
                 >
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-[14px] font-semibold text-[#0E0E10]">
-                      软件著作权
-                    </span>
-                    <span className="mt-1 block text-[12.5px] leading-[1.6] text-[#6E6E73]">
-                      申请表、操作手册、源码前后 30 页
-                    </span>
-                  </span>
-                  <ArrowUpRight className="mt-1 h-4 w-4 flex-none text-[#8E8E93]" />
+                  收起
                 </button>
               </div>
             </>
           ) : null}
         </div>
       </section>
+
+      {copyright ? (
+        <CopyrightInfoCard key={copyright.sessionId || "new"} sessionId={copyright.sessionId} />
+      ) : null}
 
       <section className="mt-9">
         <div className="mb-3 flex items-center justify-between">
@@ -387,6 +388,16 @@ export function CaseOverview({
           }}
         />
       </section>
+
+      {copyright ? (
+        <CopyrightProgressCard
+          key={copyright.sessionId || "new"}
+          sessionId={copyright.sessionId}
+          files={copyright.files}
+          streaming={copyright.streaming}
+          onSend={copyright.onSend}
+        />
+      ) : null}
 
       <section className="mt-9">
         <div className="mb-3 flex items-center justify-between">
