@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
 import tempfile
 import time
 import xml.etree.ElementTree as ET
@@ -22,6 +23,7 @@ from common import (
     file_sha256,
     read_json,
     safe_filename,
+    write_json,
 )
 from officecli_backend import OfficeCli, OfficeCliError, issue_count, json_data, structural_error_count
 
@@ -116,6 +118,36 @@ def confirmation_issues(workdir: Path) -> list[str]:
         issues.append("Markdown/JSON 草稿在最终确认后已有变化：请重新记录 `markdown` 门禁")
     issues.extend(draft_completeness_issues(workdir))
     return issues
+
+
+def refresh_confirmations(workdir: Path) -> None:
+    """重建按钮入口：把当前草稿快照写回确认记录。
+
+    点按钮本身就是用户的确认动作——重建前先重算指纹，否则草稿一改
+    门禁就会挡住（「Markdown/JSON 草稿在最终确认后已有变化」）。其余门禁
+    （业务理解、代码选择、截图方式…）照常校验，不受本函数影响。
+
+    申请表字段必须一起刷新：`申请表信息.md` 是用户最常改的一份，只刷新
+    markdown 指纹的话，改一个字就会撞「申请表信息在确认后已被修改」，
+    按钮直接变成只能看不能用（2026-11-03 实测复现后补上）。
+    """
+    draft_dir = workdir / "草稿"
+    # 顺序不能颠倒：草稿指纹（draft_snapshot）包含 草稿/ 下的所有 .json
+    # （申请表字段确认.json 就在里面），所以必须先把别的确认文件写完，
+    # 再算指纹写进 最终生成确认.json，否则算完就被自己改动弄失效。
+    app_md = draft_dir / "申请表信息.md"
+    if app_md.is_file():
+        app_path = draft_dir / "申请表字段确认.json"
+        app = read_json_if_exists(app_path)
+        app["application_fields_confirmed"] = True
+        app["application_md_sha256"] = file_sha256(app_md)
+        write_json(app_path, app)
+
+    out_path = draft_dir / "最终生成确认.json"
+    data = read_json_if_exists(out_path)
+    data["markdown_confirmed"] = True
+    data["draft_file_sha256"] = draft_snapshot(workdir)
+    write_json(out_path, data)
 
 
 def parse_code_pages(md_path: Path) -> list[tuple[int, list[str]]]:
@@ -298,6 +330,97 @@ def build_code_docx(cli: OfficeCli, md_path: Path, out_path: Path, software_name
         f"{out_path.name} 正文完整性校验失败：草稿 {expected_paragraphs} 个物理行，"
         f"DOCX 只有 {actual_paragraphs} 个正文段落"
     )
+
+
+# 前/后 30 页代码材料的重排目标与轮数上限。DOCX 里没有硬分页，md 的
+# 「第 N 页」只是草稿分节；某节行数超过一页实际容量全文就多出一页（31），
+# 少了就缺一页（29）。按实测页数反推每页行数重新分节再重建。
+TARGET_CODE_DRAFTS = {"代码-前30页.md", "代码-后30页.md"}
+TARGET_CODE_PAGES = 30
+CALIBRATION_ROUNDS = 3
+
+
+def _measured_pages(cli: OfficeCli, out_path: Path) -> int | None:
+    """LibreOffice 实测页数；取不到（转换失败）返回 None，交给 docx_checks 报错。"""
+    try:
+        stats = cli.stats(out_path, native_page_count=True)
+    except OfficeCliError:
+        return None
+    pages = json_data(stats).get("pages")
+    try:
+        return int(pages) if pages is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _rewrite_code_md(md_path: Path, pages: list[tuple[int, list[str]]]) -> None:
+    """按新的分节重写代码草稿 md，保留文件头部（标题/软件名称/版本号）。"""
+    text = md_path.read_text(encoding="utf-8")
+    marker = text.find("\n## 第")
+    header = text[: marker + 1] if marker >= 0 else text
+    chunks: list[str] = []
+    for page_no, page_lines in pages:
+        chunks.extend([f"## 第 {page_no} 页", "", "```text", *page_lines, "```", ""])
+    md_path.write_text(header + "\n".join(chunks), encoding="utf-8")
+
+
+def calibrate_code_docx(
+    cli: OfficeCli,
+    md_path: Path,
+    out_path: Path,
+    software_name: str,
+    version: str,
+    estimated: int,
+) -> tuple[int, list[str]]:
+    """把 30 页代码材料自动重排到正好 30 页，返回 (估算页数, 说明)。
+
+    只动草稿 md 的分节密度/行数，不改任何一行代码内容：
+      - 超页（31+）：删末尾多余物理行——材料本来就是节选，删行等价于
+        人工「重新校准选材量」；
+      - 缺页（29-）：文末补空行凑满一页。
+    每轮按实测页数重新计算，最多 CALIBRATION_ROUNDS 轮；仍不达标则报错，
+    上一版正式资料由调用方的备份机制保住。
+    """
+    notes: list[str] = []
+    actual = _measured_pages(cli, out_path)
+    for _ in range(CALIBRATION_ROUNDS):
+        if actual is None or actual == TARGET_CODE_PAGES:
+            break
+        flat = [line for _, page_lines in parse_code_pages(md_path) for line in page_lines]
+        total = len(flat)
+        if total == 0:
+            break
+        if actual > TARGET_CODE_PAGES:
+            keep = max(TARGET_CODE_PAGES, TARGET_CODE_PAGES * (total // max(1, actual)))
+            notes.append(
+                f"页数校准：`{out_path.name}` 实测 {actual} 页，"
+                f"删除末尾 {total - keep} 行代码至 {keep} 行。"
+            )
+            flat = flat[:keep]
+        else:
+            per = -(-total // actual)
+            pad = TARGET_CODE_PAGES * per - total
+            notes.append(
+                f"页数校准：`{out_path.name}` 实测 {actual} 页，"
+                f"文末补 {pad} 个空行至 {TARGET_CODE_PAGES * per} 行。"
+            )
+            flat = flat + [""] * pad
+        per = max(1, -(-len(flat) // TARGET_CODE_PAGES))
+        repaginated = [
+            (page_no, flat[(page_no - 1) * per : page_no * per])
+            for page_no in range(1, TARGET_CODE_PAGES + 1)
+        ]
+        _rewrite_code_md(md_path, repaginated)
+        build_code_docx(cli, md_path, out_path, software_name, version)
+        estimated = TARGET_CODE_PAGES
+        actual = _measured_pages(cli, out_path)
+    if actual is not None and actual != TARGET_CODE_PAGES:
+        raise OfficeCliError(
+            f"{out_path.name} 自动重排 {CALIBRATION_ROUNDS} 轮后仍为 {actual} 页"
+            f"（要求正好 {TARGET_CODE_PAGES} 页）。请检查环境（LibreOffice 转换是否被"
+            "并发抢占）或手工调整代码选材量后重试。"
+        )
+    return estimated, notes
 
 
 IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
@@ -592,7 +715,13 @@ def build_all(workdir: Path, software_name: str, version: str, skip_preview: boo
     for md_name in declared_code_drafts:
         md_path = draft_dir / md_name
         out_path = final_dir / code_spec_map[md_name]
-        estimated_pages[out_path] = build_code_docx(cli, md_path, out_path, final_software_name, final_version)
+        estimated = build_code_docx(cli, md_path, out_path, final_software_name, final_version)
+        if md_name in TARGET_CODE_DRAFTS and strict_pages:
+            estimated, calibration_notes = calibrate_code_docx(
+                cli, md_path, out_path, final_software_name, final_version, estimated
+            )
+            warnings.extend(calibration_notes)
+        estimated_pages[out_path] = estimated
         outputs.append(out_path)
     manual_md = draft_dir / "操作手册.md"
     if manual_md.exists():
@@ -655,6 +784,29 @@ def write_report(workdir: Path, outputs: list[Path], warnings: list[str], notes:
     return report
 
 
+def _stash_final_dir(workdir: Path) -> Path | None:
+    """把现有正式资料挪到备份目录；重建失败时由 _restore_final_dir 还原。"""
+    final_dir = workdir / "正式资料"
+    if not final_dir.is_dir() or not any(final_dir.iterdir()):
+        return None
+    backup_dir = Path(tempfile.mkdtemp(prefix=".正式资料备份-", dir=workdir))
+    for item in list(final_dir.iterdir()):
+        item.replace(backup_dir / item.name)
+    return backup_dir
+
+
+def _restore_final_dir(workdir: Path, backup_dir: Path | None) -> None:
+    final_dir = workdir / "正式资料"
+    if backup_dir is None:
+        return
+    shutil.rmtree(final_dir, ignore_errors=True)
+    # rmtree 会连目录一起删掉，os.replace 不重建父目录，必须先补回来
+    final_dir.mkdir(parents=True, exist_ok=True)
+    for item in list(backup_dir.iterdir()):
+        item.replace(final_dir / item.name)
+    backup_dir.rmdir()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--workdir", default="软件著作权申请资料")
@@ -664,8 +816,12 @@ def main() -> None:
     parser.add_argument("--skip-preview", action="store_true")
     # 页数未达 30 时默认硬失败；容器里先生成再校准时用 --allow-page-mismatch 降级为报告提示
     parser.add_argument("--allow-page-mismatch", action="store_true")
+    # 重建按钮入口：先按当前草稿重算指纹再走门禁（其余门禁照常校验）
+    parser.add_argument("--refresh-confirmation", action="store_true")
     args = parser.parse_args()
     workdir = Path(args.workdir)
+    if args.refresh_confirmation:
+        refresh_confirmations(workdir)
     issues = confirmation_issues(workdir)
     if issues:
         print("STOP_FOR_USER")
@@ -673,12 +829,21 @@ def main() -> None:
         for issue in issues:
             print(f"- {issue}")
         raise SystemExit(2)
+    # 页数检查发生在 docx 落盘之后：先把上一版正式资料挪开，失败就整体还原，
+    # 绝不让页数不达标的坏文件顶掉上一版合格产出。
+    backup_dir = _stash_final_dir(workdir)
     try:
         result = build_all(workdir, args.software_name, args.version, args.skip_preview,
                            args.allow_untested_officecli,
                            strict_pages=not args.allow_page_mismatch)
     except (OfficeCliError, ValueError) as exc:
+        _restore_final_dir(workdir, backup_dir)
         raise SystemExit(f"DOCX_BUILD_FAILED\n{exc}") from exc
+    except BaseException:
+        _restore_final_dir(workdir, backup_dir)
+        raise
+    if backup_dir is not None:
+        shutil.rmtree(backup_dir, ignore_errors=True)
     print(f"OK final materials: {workdir / '正式资料'}")
     for output in result["outputs"]:
         print(output)

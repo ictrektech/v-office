@@ -7,7 +7,7 @@
  * 不会出现「会话里换技能」这种不确定状态。
  */
 
-import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
 import { useRouter } from "next/navigation";
 import {
   useAiChat,
@@ -17,6 +17,7 @@ import {
   aiFileObjectUrl,
   fetchAiFile,
   listAiFiles,
+  rebuildFinalDocx,
   type AiFile,
 } from "@/utils/ai/client";
 import { useAppStore } from "@/store";
@@ -81,6 +82,13 @@ export function StageWorkspace({
   const [notice, setNotice] = useState("");
   const noticeTimer = useRef<number | null>(null);
 
+  const refreshFiles = useCallback(() => {
+    if (!chat.sessionId) return Promise.resolve();
+    return listAiFiles(chat.sessionId)
+      .then((list) => setFiles(list))
+      .catch(() => setFiles([]));
+  }, [chat.sessionId]);
+
   /* 大屏别让对话栏一直固定 408，首次进入按窗口比例给一个更均衡的宽度 */
   useEffect(() => {
     const frame = requestAnimationFrame(() => setWidth(fittedChatWidth()));
@@ -109,6 +117,46 @@ export function StageWorkspace({
       alive = false;
     };
   }, [chat.sessionId, chat.artifacts.length, chat.streaming]);
+
+  /**
+   * 软著「草稿有更新」：任一草稿 md 比 正式资料 里最新的成品新，就亮提示。
+   *
+   * 不维护额外状态——重建会整体重写正式资料，mtime 直接比较就是事实源。
+   */
+  const copyrightStale = useMemo(() => {
+    if (mode !== "copyright") return false;
+    const inFinal = (path: string) => path.startsWith("outputs/软著/正式资料/");
+    const hasFinal = files.some(
+      (file) => inFinal(file.path) && file.path.endsWith(".docx"),
+    );
+    if (!hasFinal) return false;
+    const finalMtime = Math.max(
+      0,
+      ...files
+        .filter((file) => inFinal(file.path))
+        .map((file) => file.mtime ?? 0),
+    );
+    return files.some(
+      (file) =>
+        file.path.startsWith("outputs/软著/草稿/") &&
+        file.path.endsWith(".md") &&
+        (file.mtime ?? 0) > finalMtime,
+    );
+  }, [mode, files]);
+
+  /** 重建正式资料：返回错误信息（null = 成功），按钮据此内联展示 */
+  const rebuildFinal = useCallback(async (): Promise<string | null> => {
+    if (!chat.sessionId) return "会话还没就绪";
+    if (chat.streaming) return "助手还在回复，等本轮结束再重建";
+    try {
+      await rebuildFinalDocx(chat.sessionId);
+      await refreshFiles();
+      say("正式资料已重新生成");
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }, [chat.sessionId, chat.streaming, refreshFiles]);
 
   /** 成品：技能落盘的交付件（docx / 图片 / 成稿 md），默认展示 */
   const rows = useMemo<OutputRow[]>(() => {
@@ -369,6 +417,8 @@ export function StageWorkspace({
                       files,
                       streaming: chat.streaming,
                       onSend: (prompt) => chat.send(prompt),
+                      stale: copyrightStale,
+                      onRebuild: rebuildFinal,
                     }
                   : undefined
               }

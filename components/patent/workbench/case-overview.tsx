@@ -78,9 +78,13 @@ interface CaseOverviewProps {
   /** 软著阶段专用：申请信息卡 + 8 步进度卡；其他阶段不传 */
   copyright?: {
     sessionId: string;
-    files: ReadonlyArray<{ path: string }>;
+    files: ReadonlyArray<{ path: string; mtime?: number }>;
     streaming: boolean;
     onSend: (prompt: string) => Promise<boolean>;
+    /** 草稿 md 比 正式资料 成品新（mtime 比较，不维护额外状态） */
+    stale?: boolean;
+    /** 重建正式资料；返回错误信息（null = 成功） */
+    onRebuild?: () => Promise<string | null>;
   };
 }
 
@@ -126,8 +130,25 @@ export function CaseOverview({
   const [pendingSlot, setPendingSlot] = useState<SlotKey>("other");
   const [dragSlot, setDragSlot] = useState<SlotKey | null>(null);
   const [openingRow, setOpeningRow] = useState<string | null>(null);
+  const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildError, setRebuildError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const slots = slotsFor(config.key);
+
+  /** 正式资料已有 docx 才亮重建按钮；首次生成仍走 8 步卡片 */
+  const hasFinalDocx = (copyright?.files ?? []).some(
+    (file) =>
+      file.path.startsWith("outputs/软著/正式资料/") && file.path.endsWith(".docx"),
+  );
+
+  const runRebuild = async () => {
+    if (!copyright?.onRebuild || rebuilding) return;
+    setRebuilding(true);
+    setRebuildError("");
+    const message = await copyright.onRebuild();
+    setRebuilding(false);
+    if (message) setRebuildError(message);
+  };
 
   /**
    * 「哪个文件属于哪一行」记在 localStorage。
@@ -412,7 +433,20 @@ export function CaseOverview({
               {rows.length}
             </span>
           </h2>
-          <span className="text-[12.5px] text-[#8E8E93]">点任意一行预览</span>
+          {copyright?.onRebuild && hasFinalDocx ? (
+            <button
+              type="button"
+              disabled={rebuilding}
+              onClick={() => void runRebuild()}
+              title="按当前草稿重算指纹并重建正式 Word（页数门禁照旧，失败不影响上一版）"
+              className="flex h-8 items-center gap-1.5 rounded-full bg-[#111113] px-3.5 text-[12.5px] font-medium text-white transition hover:bg-black disabled:opacity-40"
+            >
+              {rebuilding ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {copyright.stale ? "草稿已更新，重新生成 Word" : "重新生成 Word"}
+            </button>
+          ) : (
+            <span className="text-[12.5px] text-[#8E8E93]">点任意一行预览</span>
+          )}
         </div>
 
         <div className="overflow-hidden rounded-[22px] border border-[#ECECEF] bg-white">
@@ -514,6 +548,11 @@ export function CaseOverview({
         <p className="mt-3 text-[12.5px] leading-relaxed text-[#8E8E93]">
           Word / Excel / PPT 可直接在线编辑；其余格式先下载。
         </p>
+        {rebuildError ? (
+          <p className="mt-3 whitespace-pre-wrap rounded-[18px] bg-[#FDF3F2] px-4 py-3 text-[12.5px] leading-relaxed text-[#C0392B]">
+            {rebuildError}
+          </p>
+        ) : null}
       </section>
 
       {draftRows.length > 0 ? (

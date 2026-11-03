@@ -210,14 +210,21 @@ python3 "$SKILL_DIR/scripts/confirm_stage.py" --workdir outputs/软著 \
 
 ### 8. 生成正式 Word/TXT
 
+第一次生成由你执行：
+
 ```bash
 python3 "$SKILL_DIR/scripts/build_docx_from_md.py" \
   --workdir outputs/软著 --software-name "<软件全称>" --version "<版本号>" \
   --skip-preview
 ```
 
-- 页数由 LibreOffice 实测。前 30 页/后 30 页必须正好 30 页；脚本默认因此失败退出，
-  这是对的——按 `正式资料/生成报告.md` 的提示调整选材量后重跑。
+**之后的重建不归你跑**：用户改完草稿后自己点界面上的「重新生成 Word」按钮
+（按钮会带 `--refresh-confirmation` 重算指纹再重建，页数/OpenXML 门禁照旧生效）。
+你改完 md 只需告诉用户「点产出物区的『重新生成 Word』按钮」，不要再自己执行
+第 8 步脚本——省一轮对话，也避免和按钮互相覆盖。
+
+- 页数由 LibreOffice 实测。前 30 页/后 30 页必须正好 30 页；脚本会自动重排
+  （删尾行/补空行）最多 3 轮，仍不达标才失败退出。
 - **取不到页数（转换失败）同样算失败**：脚本会直接报错，不要改用 `--allow-page-mismatch`
   把未验证页数的文档当正式资料。若怀疑并发的 soffice 抢了转换（页数忽大忽小），
   先 `pkill -f soffice` 再重跑一次 `build_docx_from_md.py`。
@@ -247,7 +254,7 @@ python3 "$SKILL_DIR/scripts/build_docx_from_md.py" \
 | `确认代码材料，生成申请表信息` | 第 4 步 |
 | `确认申请表，生成操作手册` | 记录 application-fields 门禁 + 第 5 步 |
 | `截图跳过` / `已上传截图` | 第 6 步，method=skip / user-supplied |
-| `确认草稿，生成正式资料` | 记录 markdown 门禁 + 第 8 步 |
+| `确认草稿，生成正式资料` | 记录 markdown 门禁 + 第 8 步（仅首次生成；草稿是改过的旧案，让用户点「重新生成 Word」按钮，不要自己重跑第 8 步） |
 
 ## 参考文档（按阶段读，不要一次全读）
 

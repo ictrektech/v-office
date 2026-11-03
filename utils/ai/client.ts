@@ -353,6 +353,24 @@ export async function listAiFiles(sid: string): Promise<AiFile[]> {
   return (await jsonOrThrow<{ files: AiFile[] }>(resp)).files;
 }
 
+/**
+ * 重建软著正式资料（产出物区按钮触发，不走 agent）。
+ *
+ * 服务端跑技能的 build_docx_from_md.py：重算草稿指纹 → 重建 → 页数/OpenXML
+ * 门禁照旧。失败时返回 422，message 是脚本输出的错误尾部（含页数重排结论）。
+ */
+export async function rebuildFinalDocx(sid: string): Promise<void> {
+  const resp = await aiFetch(`/sessions/${encodeURIComponent(sid)}/rebuild-final`, {
+    method: "POST",
+  });
+  if (resp.ok) return;
+  const body = (await resp.json().catch(() => ({}))) as {
+    detail?: string;
+    message?: string;
+  };
+  throw new Error(body.message || body.detail || `重建失败（${resp.status}）`);
+}
+
 /** 取一个产物文件（鉴权走 aiFetch，所以不能直接塞进 <img src>） */
 export async function fetchAiFile(sid: string, path: string): Promise<Blob> {
   const encoded = path.split("/").map(encodeURIComponent).join("/");

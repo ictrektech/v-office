@@ -3608,6 +3608,70 @@ async def get_file(request: Request, sid: str, path: str) -> FileResponse:
     return FileResponse(target)
 
 
+# ── 软著：md → Word 重建（用户点按钮触发，不走 agent）───────────────────────
+#
+# agent 每轮耗时几乎全在生成 token，而重建只是本地脚本活：用户改完草稿后点
+# 一下按钮就该出结果。脚本自带的门禁照常生效——页数不是 30（自动重排 3 轮
+# 后仍不达标）、OpenXML 校验不过、其他确认门禁缺失都会失败退出，且失败时
+# 上一版正式资料原样保留（备份回滚在脚本 main() 里）。
+
+REBUILD_TIMEOUT_S = float(os.environ.get("V_OFFICE_AI_REBUILD_TIMEOUT", "900"))
+
+
+@router.post("/sessions/{sid}/rebuild-final")
+async def rebuild_final_docx(request: Request, sid: str) -> JSONResponse:
+    """重算软著草稿指纹并重建正式资料（docx/txt/生成报告）。
+
+    用与该用户 agent 相同的 uid 跑（文件属主才一致），cwd 锁在技能脚本目录
+    （脚本从同目录 import common/officecli_backend）。workdir 在运行时由会话
+    目录推导，代码里不写死任何机器相关路径。
+    """
+    username = await _user(request)
+    if sid in _running:
+        raise HTTPException(status_code=409, detail="助手正在本会话回复，等本轮结束再重建")
+    root = session_dir(username, sid)
+    workdir = root / "outputs" / "软著"
+    if not (workdir / "草稿").is_dir():
+        raise HTTPException(status_code=404, detail="本会话还没有软著草稿（outputs/软著/草稿）")
+    script = Path(SKILLS_DIR) / "software-copyright" / "scripts" / "build_docx_from_md.py"
+    if not script.is_file():
+        raise HTTPException(status_code=503, detail="技能脚本未就绪（缺少 software-copyright/scripts/build_docx_from_md.py）")
+    # 正式名称优先取草稿申请表信息.md；缺了就给占位，门禁会要求补全
+    software_name = "软件"
+    info_md = workdir / "草稿" / "申请表信息.md"
+    if info_md.is_file():
+        match = re.search(r"^➤软件全称：(.+)$", info_md.read_text(encoding="utf-8"), re.M)
+        if match:
+            software_name = match.group(1).strip()
+    uid, gid = await user_ids(username)
+    priv = ({"user": uid, "group": gid} if uid > 0 and os.geteuid() == 0 else {})
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, str(script),
+        "--workdir", str(workdir),
+        "--software-name", software_name,
+        "--skip-preview",
+        # 环境里 officecli 小版本会随升级漂移，别让版本钉死挡住重建；
+        # 页数/OpenXML/主题字体等文档级校验不受此开关影响，照常生效
+        "--allow-untested-officecli",
+        "--refresh-confirmation",
+        cwd=str(script.parent),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,  # 超时可整组杀（soffice 子进程一并带走）
+        **priv,
+    )
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=REBUILD_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        _kill_tree(proc)
+        raise HTTPException(status_code=504, detail="重建超时，请稍后重试")
+    text = out.decode("utf-8", "replace").strip()
+    if proc.returncode != 0:
+        tail = "\n".join(text.splitlines()[-30:]) or f"exit {proc.returncode}"
+        return JSONResponse({"ok": False, "message": tail}, status_code=422)
+    return JSONResponse({"ok": True})
+
+
 class ToDocsRequest(BaseModel):
     """收件请求：把会话目录里的哪些产物送进「我的文档」。
 
