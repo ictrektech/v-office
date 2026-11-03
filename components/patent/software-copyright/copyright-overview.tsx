@@ -6,10 +6,12 @@
  * 只负责展示和把操作转给工作台；进度顺序、门禁含义都来自 steps.ts。
  */
 
-import { useRef, useState, type ReactNode } from "react";
+import { Fragment, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertCircle,
   Check,
+  ChevronDown,
+  ChevronRight,
   Download,
   FileArchive,
   FileText,
@@ -97,8 +99,26 @@ export function CopyrightOverview({
   const pickerRef = useRef<HTMLInputElement>(null);
   const shotRef = useRef<HTMLInputElement>(null);
   const [pendingSlot, setPendingSlot] = useState<CopyrightSlot>("requirements");
+  /* 产出物分组折叠：默认只展开「正式资料」，草稿与过程记录收起来 */
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
   const doneCount = STEPS.filter((step) => marks[step.key]?.done).length;
+  const groups = useMemo(() => {
+    const final: OutputRow[] = [];
+    const drafts: OutputRow[] = [];
+    const misc: OutputRow[] = [];
+    for (const row of rows) {
+      const where = `${row.path ?? ""}${row.name}`;
+      if (where.includes("正式资料")) final.push(row);
+      else if (row.kind === "artifact" || where.includes("草稿")) drafts.push(row);
+      else misc.push(row);
+    }
+    return [
+      { key: "final", label: "正式资料", rows: final },
+      { key: "drafts", label: "草稿", rows: drafts },
+      { key: "misc", label: "过程记录", rows: misc },
+    ].filter((group) => group.rows.length > 0);
+  }, [rows]);
   const title = info.name.trim()
     ? [info.name.trim(), info.version.trim()].filter(Boolean).join(" ")
     : "软件著作权申请";
@@ -451,7 +471,35 @@ export function CopyrightOverview({
                 </td>
               </tr>
             ) : (
-              rows.map((row) => (
+              groups.map((group) => (
+                <Fragment key={group.key}>
+                  <tr className="bg-[#FAFAFB]">
+                    <td colSpan={5} className="py-1.5 pl-1">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCollapsedGroups((currentGroups) => ({
+                            ...currentGroups,
+                            [group.key]: !currentGroups[group.key],
+                          }))
+                        }
+                        className="flex items-center gap-1 text-[10.5px] font-medium text-[#5F6066] transition hover:text-[#0F0F11]"
+                      >
+                        {collapsedGroups[group.key] ? (
+                          <ChevronRight className="h-3 w-3" />
+                        ) : (
+                          <ChevronDown className="h-3 w-3" />
+                        )}
+                        {group.label}
+                        <span className="rounded bg-[#EAEAEC] px-1 text-[9.5px] text-[#9A9BA1]">
+                          {group.rows.length}
+                        </span>
+                      </button>
+                    </td>
+                  </tr>
+                  {(collapsedGroups[group.key] ?? false)
+                    ? null
+                    : group.rows.map((row) => (
                 <tr
                   key={row.id}
                   onClick={() =>
@@ -498,6 +546,8 @@ export function CopyrightOverview({
                     </button>
                   </td>
                 </tr>
+                      ))}
+                </Fragment>
               ))
             )}
           </tbody>

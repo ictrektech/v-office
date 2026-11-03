@@ -136,6 +136,35 @@ export function rowFileIcon(name: string, kind?: OutputRow["kind"]): LucideIcon 
   return File;
 }
 
+/**
+ * 产出物面板分「成品 / 草稿」两层。
+ *
+ * - 成品：docx / xlsx / pdf / 图片 / 成稿 md，默认展开的产出物表；
+ * - 草稿：对话成稿 artifact + 旁路 md（问题清单、对照表、TRACKER…），
+ *   收进单独的「草稿」折叠区，点开才见；
+ * - 过程件（json / yaml / figure_plan 等纯中间格式）：两层都不进，留在磁盘。
+ */
+const DELIVERABLE_EXT = /\.(docx?|xlsx?|pptx?|pdf|csv|png|jpe?g|svg)$/i;
+const INTERNAL_FILE =
+  /(^|\/)(标号核对|TRACKER|README|figure_plan|invention_figures|intake|chart|index)(\.|$)/i;
+/** 旁路文档：人看的，但不是交付件 → 草稿区 */
+const DRAFT_FILE =
+  /(^|\/)(问题清单|视图检查清单|对照表|生成报告|lint|底稿|调试)(\.|$)/i;
+
+export function isDraftFile(path: string): boolean {
+  const name = baseName(path);
+  if (!name) return false;
+  return /\.md$/i.test(name) && DRAFT_FILE.test(name);
+}
+
+export function isDeliverable(path: string): boolean {
+  const name = baseName(path);
+  if (!name || INTERNAL_FILE.test(name) || isDraftFile(name)) return false;
+  if (DELIVERABLE_EXT.test(name)) return true;
+  // Markdown 是技能的主要成稿格式
+  return /\.md$/i.test(name);
+}
+
 /** 时间统一成 HH:mm；服务端有的接口给秒，有的给毫秒 */
 export function formatClock(value?: number | null): string {
   if (!value) return "—";

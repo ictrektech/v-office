@@ -33,7 +33,7 @@ export const STEPS: StepMeta[] = [
   { key: "extract", title: "抽取代码材料", desc: "前 30 页 + 后 30 页，共 60 页" },
   { key: "application", title: "申请表信息", desc: "软件全称、版本、环境与功能说明" },
   { key: "manual", title: "操作手册", desc: "按真实页面逐章写，并完成自检" },
-  { key: "shots", title: "截图", desc: "上传截图，或本次跳过并保留占位" },
+  { key: "shots", title: "截图", desc: "上传软件真实界面截图插入手册；跳过则手册留占位，正式提交前需补图" },
   { key: "build", title: "正式资料", desc: "生成 Word / TXT，校验页数" },
 ];
 
@@ -92,6 +92,53 @@ export function writeStepMark(sessionId: string, key: StepKey): void {
   } catch {
     // 无痕模式忽略；本页仍以内存状态为准
   }
+}
+
+/**
+ * 每一步对应的磁盘产物。进度以「产物是否存在」为准，而不是「用户点没点按钮」：
+ * 对话里一口气跑完（或 e2e/API 驱动）时没有按钮点击记录，进度卡照样要亮。
+ */
+const STEP_EVIDENCE: Record<StepKey, RegExp> = {
+  analyze: /outputs\/软著\/(analysis\/project\.json|环境检查\.json)/,
+  business: /outputs\/软著\/草稿\/业务理解\.md/,
+  selection: /outputs\/软著\/草稿\/代码文件选择\.json/,
+  extract: /outputs\/软著\/草稿\/代码提取清单\.json|outputs\/软著\/草稿\/代码-(全部|前30页)\.md/,
+  application: /outputs\/软著\/草稿\/申请表信息\.md/,
+  manual: /outputs\/软著\/草稿\/操作手册\.md/,
+  shots: /outputs\/软著\/截图方式确认\.json/,
+  build: /outputs\/软著\/正式资料\/.+\.(docx|txt|md)$/,
+};
+
+/** 从会话文件清单推导各步完成状态。 */
+export function deriveStepMarks(
+  files: ReadonlyArray<{ path: string }>,
+): Partial<Record<StepKey, StepMark>> {
+  const marks: Partial<Record<StepKey, StepMark>> = {};
+  for (const file of files) {
+    for (const [key, pattern] of Object.entries(STEP_EVIDENCE) as [StepKey, RegExp][]) {
+      if (pattern.test(file.path) && !marks[key]) {
+        marks[key] = { done: true, at: 0 };
+      }
+    }
+  }
+  return marks;
+}
+
+/**
+ * 合并两路进度：磁盘产物是事实（优先），localStorage 点击记录只做即时反馈
+ * （文件清单刷新有延迟，点完按钮先亮起来）。
+ */
+export function mergeStepMarks(
+  derived: Partial<Record<StepKey, StepMark>>,
+  clicked: Partial<Record<StepKey, StepMark>>,
+): Partial<Record<StepKey, StepMark>> {
+  const merged: Partial<Record<StepKey, StepMark>> = { ...clicked };
+  for (const [key, mark] of Object.entries(derived) as [StepKey, StepMark][]) {
+    if (!merged[key] || (merged[key]?.at ?? 0) < (mark.at ?? Number.MAX_SAFE_INTEGER)) {
+      merged[key] = mark;
+    }
+  }
+  return merged;
 }
 
 /** 申请信息存在本地，恢复案件时不用再向 agent 问一遍 */

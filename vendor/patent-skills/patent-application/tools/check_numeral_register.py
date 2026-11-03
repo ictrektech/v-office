@@ -198,12 +198,24 @@ def check_register(
         for fig in sorted(plan_figs):
             if fig not in registered_figs:
                 findings.append(
-                    Finding("ERROR", "FIG_UNREGISTERED", f"入文图 {fig} 未写入登记表 figures 或 parts.figures。")
+                    Finding(
+                        "ERROR",
+                        "FIG_UNREGISTERED",
+                        f"入文图 {fig} 未写入登记表。修复：在登记表 yaml 顶层加"
+                        f"`figures:\n  - fig: {fig}\n    title: <图名>`，"
+                        f"或把 {fig} 加进对应部件的 `figures:` 列表；"
+                        "若该图本不该入文，改 figure_plan.yaml 去掉该 fig。",
+                    )
                 )
         for fig in sorted(registered_figs):
             if plan_figs and fig not in plan_figs:
                 findings.append(
-                    Finding("ERROR", "FIG_UNKNOWN", f"登记表图 {fig} 不是 figure_plan 的入文 fig。")
+                    Finding(
+                        "ERROR",
+                        "FIG_UNKNOWN",
+                        f"登记表图 {fig} 不是 figure_plan 的入文 fig。修复：从登记表"
+                        f"（顶层 figures 或某部件的 figures）删掉 {fig}，或改 figure_plan.yaml 补上。",
+                    )
                 )
         for item in parts:
             pid = _part_id(item.get("id"))

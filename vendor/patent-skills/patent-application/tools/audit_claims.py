@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import re
 import sys
@@ -31,6 +32,24 @@ TERM_INTRO = re.compile(r"(?:所述|该)([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za
 PLACEHOLDER = re.compile(r"\[(?:TO CONFIRM|待确认)[^\]]*\]", re.IGNORECASE)
 INDEPENDENT_OPEN = re.compile(r"^一种.{0,60}(方法|系统|装置|设备)")
 PROMO = promo_pattern()
+# 模糊数量词：约60°、60左右、大约、大概、大致（A26.4 清楚）。左右须跟在数字后，
+# 避免「左右两侧」这类方位词误报。
+VAGUE_QUANTIFIER = re.compile(
+    r"约\s*(?:\d+(?:\.\d+)?|[\d一二三四五六七八九十百千]+)|大约|大概|大致|\d(?:\.\d+)?\s*左右"
+)
+# 引用句剥掉后，剩下的才是从属自己的附加特征
+DEPENDENT_REF_HEAD = re.compile(
+    r"^根据权利要求[\d\-—~～至、或]+\s*(?:所述的?)?[^，。：:]{0,30}[，。：:]?"
+)
+# 同一部件混用语：同组两个词都出现即报警（全文统一为一个用语）。可按案卷领域补充。
+SYNONYM_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("杯身", "杯体"),
+    ("壳体", "外壳"),
+    ("阀芯", "阀瓣"),
+    ("连接杆", "连杆"),
+    ("紧固件", "固定件"),
+    ("密封圈", "密封环"),
+)
 
 
 @dataclass
@@ -130,6 +149,37 @@ def audit(text: str) -> list[Finding]:
             findings.append(
                 Finding("WARNING", number, "RESULT_LANGUAGE", "含结果或宣传性措辞，确认是否改为技术限定。")
             )
+        if VAGUE_QUANTIFIER.search(compact):
+            hit = VAGUE_QUANTIFIER.search(compact).group(0)
+            findings.append(
+                Finding(
+                    "WARNING",
+                    number,
+                    "VAGUE_NUMBER",
+                    f"含模糊数量词「{hit}」（A26.4 清楚）；改为明确数值或给出范围端点。",
+                )
+            )
+        if refs and number > 1 and not is_further_independent(compact):
+            # 从属权要剥掉引用句后才是自己的附加特征；与被引用权要几乎相同
+            # 说明没有附加技术特征（从属写了也白写）。
+            added = normalize(DEPENDENT_REF_HEAD.sub("", body, count=1).replace("其特征在于", ""))
+            for ref in refs:
+                base = claim_map.get(ref)
+                if not base or not added:
+                    continue
+                matcher = difflib.SequenceMatcher(None, added, base)
+                coverage = sum(block.size for block in matcher.get_matching_blocks()) / len(added)
+                if coverage > 0.75:
+                    findings.append(
+                        Finding(
+                            "WARNING",
+                            number,
+                            "DEPENDENT_DUPLICATE",
+                            f"去掉引用句后 {coverage:.0%} 内容与权利要求{ref}重复，附加技术特征不足；"
+                            "从属须补充优选参数、材料、位置关系或分支实现。",
+                        )
+                    )
+                    break
 
         searchable_basis = previous_text + "".join(claim_map.get(ref, "") for ref in refs)
         skip_terms = {"方法", "装置", "设备", "系统", "步骤", "程序", "权利要求"}
@@ -169,6 +219,19 @@ def audit(text: str) -> list[Finding]:
                     )
                 )
         previous_text += compact
+
+    full = normalize(text)
+    for group in SYNONYM_GROUPS:
+        present = [term for term in group if term in full]
+        if len(present) > 1:
+            findings.append(
+                Finding(
+                    "WARNING",
+                    None,
+                    "TERM_INCONSISTENT",
+                    f"同一部件混用「{'/'.join(present)}」；全文（含说明书）统一为一个用语。",
+                )
+            )
 
     return findings
 

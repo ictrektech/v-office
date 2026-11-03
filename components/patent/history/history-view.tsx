@@ -12,9 +12,10 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, ArrowUpRight, Search, Trash2 } from "lucide-react";
 import { deleteAiSession, listAiSessions, type AiSessionMeta } from "@/utils/ai/client";
 
-type TabKey = "all" | "disclosure" | "application" | "oa" | "copyright";
+type TabKey = "all" | "disclosure" | "application" | "oa" | "full" | "copyright";
 
 const SKILLS: Record<string, { label: string; tab: Exclude<TabKey, "all"> }> = {
+  "patent-docket": { label: "全流程", tab: "full" },
   "patent-disclosure": { label: "交底书", tab: "disclosure" },
   "patent-application": { label: "申请文件", tab: "application" },
   "patent-oa": { label: "审查答复", tab: "oa" },
@@ -23,6 +24,7 @@ const SKILLS: Record<string, { label: string; tab: Exclude<TabKey, "all"> }> = {
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "all", label: "全部" },
+  { key: "full", label: "全流程" },
   { key: "disclosure", label: "交底书" },
   { key: "application", label: "申请文件" },
   { key: "oa", label: "审查答复" },

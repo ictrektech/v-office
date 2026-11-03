@@ -18,6 +18,8 @@
 
 发明方法独权默认要流程图；另有系统独立权项则加框图。不要为了凑套图去画权要没写到的剖视/爆炸。
 
+**结构产品（独权主题无「方法/步骤」，如密封结构、装置、杯体）**：`kind` 只能从 `section / exploded / multi_state / lineart / source_image` 里选——框图/流程图不能当申请附图（A26.3 公开不充分），`plan_figures.py` 会对产品主题的流程图直接报 `SUBJECT_KIND_MISMATCH`。交底没有可用线稿就 `source: pending` 记问题清单，提示用户补剖视/爆炸线稿，**不要**画框图或流程图凑数。
+
 剖视 / 爆炸 / 多状态：优先用交底 `relates_to` 已标明的入文线稿升格。交底没有对应图则 `source: pending`，记问题清单，禁止编内部结构。
 
 每条写清 `reason` 和 `covers`（可见件号或模块名）。

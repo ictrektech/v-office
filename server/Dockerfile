@@ -146,6 +146,14 @@ RUN printf '#!/bin/sh\nexec /opt/pi-node/node /opt/pi/dist/bundle/cli.js "$@"\n'
 # 拷到 server/skills/ 再构建；仓库里该目录只有一份说明文件，缺技能时 AI 仍可用、
 # 只是没有专用技能。
 COPY skills/ /opt/patent-skills/
+# 技能里的命令和 Read 路径都是仓库相对写法（skills/<包>/tools/...），而 agent
+# 的 cwd 是案件目录，那里没有 skills/ 这一层。构建期把前缀改写成镜像里的真实
+# 绝对路径，运行时 pi 和 bash 都能直接用，不依赖软链、也不往提示词里塞路径。
+COPY tools/rewrite_skills.py /tmp/rewrite_skills.py
+RUN python3 /tmp/rewrite_skills.py \
+      --src /opt/patent-skills --dest /opt/patent-skills \
+      --root /opt/patent-skills --in-place \
+ && rm -f /tmp/rewrite_skills.py
 
 # 一次性拷全部模块。**不要退回逐个列文件**：显式列表已经漏过一次——`safe_fs.py`
 # 和 `docx_revise.py` 都是 ai.py 顶部的硬 import，漏了容器一起来就 ModuleNotFoundError，

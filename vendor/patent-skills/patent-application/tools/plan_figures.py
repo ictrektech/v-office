@@ -32,6 +32,14 @@ ALLOWED_KINDS = (
 )
 RENDERABLE = {"flowchart", "block_diagram", "lineart", "source_image"}
 
+# 机械/结构产品：框图、流程图不能当申请附图（A26.3 公开不充分），只有方法权要配流程图
+STRUCTURAL_KINDS = {"section", "exploded", "multi_state", "lineart", "source_image"}
+
+
+def claims_subject(text: str) -> str:
+    """权要主题：method（方法/步骤展开）或 product（结构产品）。"""
+    return "method" if re.search(r"包括以下步骤|步骤[一二三四五六七八九十百零\d]|方法", text or "") else "product"
+
 KIND_RULES: list[tuple[str, tuple[str, ...], str]] = (
     ("flowchart", (r"包括以下步骤", r"步骤[一二三四五六七八九十百零\d]+"), "独权按步骤展开"),
     ("block_diagram", (r"模块", r"单元", r"处理器", r"存储器"), "权要写了模块/单元"),
@@ -119,6 +127,8 @@ def suggest_figures(
     disclosure_plan: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     text = claims_text or ""
+    # 实用新型法定只能是产品；发明按权要语言判断
+    subject = "product" if patent_type == "utility_model" else claims_subject(text)
     hits: list[dict[str, Any]] = []
     seen: set[str] = set()
     for kind, patterns, reason in KIND_RULES:
@@ -133,9 +143,13 @@ def suggest_figures(
                 }
             )
             seen.add(kind)
+    if subject == "product":
+        # 产品权要不得配流程图；模块/单元明确才可框图
+        hits = [item for item in hits if item["kind"] != "flowchart"]
+        seen.discard("flowchart")
     head = text[:120]
     if patent_type == "invention":
-        if re.search(r"方法|步骤", head) and "flowchart" not in seen:
+        if subject == "method" and re.search(r"方法|步骤", head) and "flowchart" not in seen:
             hits.insert(
                 0,
                 {
@@ -159,15 +173,26 @@ def suggest_figures(
             )
             seen.add("block_diagram")
         if not hits:
-            hits.append(
-                {
-                    "kind": "flowchart",
-                    "reason": "未检出特定图型，发明默认流程图",
-                    "covers": [],
-                    "source": "claim_language",
-                    "path": "",
-                }
-            )
+            if subject == "product":
+                hits.append(
+                    {
+                        "kind": "section",
+                        "reason": "结构产品默认剖视；交底没有对应线稿则转 pending 并记问题清单",
+                        "covers": [],
+                        "source": "pending",
+                        "path": "",
+                    }
+                )
+            else:
+                hits.append(
+                    {
+                        "kind": "flowchart",
+                        "reason": "未检出特定图型，发明默认流程图",
+                        "covers": [],
+                        "source": "claim_language",
+                        "path": "",
+                    }
+                )
     disclosed = from_disclosure(disclosure_plan)
     disclosed_kinds = {str(item.get("kind")) for item in disclosed}
     extra = [item for item in hits if item["kind"] not in disclosed_kinds]
@@ -199,6 +224,30 @@ def validate_plan(plan: dict[str, Any]) -> list[Finding]:
     if not figs:
         findings.append(Finding("ERROR", "EMPTY_PLAN", "figure_plan.figures 为空。"))
         return findings
+    subject = str(plan.get("subject") or "")
+    if subject == "product":
+        for item in figs:
+            kind = str(item.get("kind") or "")
+            fig = item.get("fig")
+            if kind == "flowchart":
+                findings.append(
+                    Finding(
+                        "ERROR",
+                        "SUBJECT_KIND_MISMATCH",
+                        f"图{fig} 是流程图，但权要主题是产品：框图/流程图不能当申请附图"
+                        "（A26.3 公开不充分）。改为剖视/爆炸/多状态结构图；没有线稿则"
+                        " source: pending 并记问题清单，提示用户补线稿。",
+                    )
+                )
+            elif kind == "block_diagram":
+                findings.append(
+                    Finding(
+                        "WARNING",
+                        "PRODUCT_BLOCK_DIAGRAM",
+                        f"图{fig} 是框图而权要是结构产品：机械结构应用剖视/爆炸图表达，"
+                        "框图一般不足以公开结构。",
+                    )
+                )
     seen: set[int] = set()
     for item in figs:
         kind = str(item.get("kind") or "")
@@ -239,6 +288,7 @@ def build_plan(
         "$schema": "application_figure_plan",
         "version": 1,
         "patent_type": patent_type,
+        "subject": "product" if patent_type == "utility_model" else claims_subject(claims_text),
         "figures": suggest_figures(
             claims_text, patent_type=patent_type, disclosure_plan=disclosure_plan
         ),

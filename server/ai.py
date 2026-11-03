@@ -90,6 +90,8 @@ def init_ai(*, username_resolver, log, save_document=None, read_document=None) -
     LOG = log
     _save_document = save_document
     _read_document = read_document
+    # 历史目录可能是 0755（可被 agent 列举用户名/会话 id），启动时统一收口
+    _harden_shared_roots()
     # 启动时把「能力边界」打进日志：出事时第一眼看的就是这行。
     # 这里显示的是**默认值**——每个会话实际用什么由它自己的设置决定（设置页可改），
     # 所以别再把这行写死成 TOOLS_NO_SHELL，否则开了 shell 也看不出来。
@@ -190,7 +192,7 @@ DOCX_TOOL_TIMEOUT_S = float(os.environ.get("V_OFFICE_AI_DOCX_TIMEOUT", "180"))
 # 同一条 bash 三百多次、一个字都不输出，只能靠这个兜住。
 REPEAT_STREAK_LIMIT = int(os.environ.get("V_OFFICE_AI_REPEAT_STREAK", "6"))
 # 同一轮里同一条调用累计出现到这个次数（不要求连续）也中止。
-REPEAT_TOTAL_LIMIT = int(os.environ.get("V_OFFICE_AI_REPEAT_TOTAL", "12"))
+REPEAT_TOTAL_LIMIT = int(os.environ.get("V_OFFICE_AI_REPEAT_TOTAL", "6"))
 STDERR_TAIL = 20
 # 用哪个用户跑 pi：服务本身是 root（要写 WOPI/私有存储），但 agent 不需要 root
 # ——降权后系统目录不可写，装东西/改配置自然失败。
@@ -297,6 +299,17 @@ SYSTEM_POLICY = """你是 V-Office 内置的写作助手，只服务三件事：
 - 不联网、不下载、不安装：不要 curl/wget/git/npm/pip/apt 之类的命令，也不要访问外部地址。
 - 不动系统：不修改系统配置、不读取与本任务无关的文件、不查看环境变量里的密钥。
 - 不执行与写作无关的命令（进程管理、网络探测、权限操作、软件安装等）。
+- **不读工具源码**：技能包 `tools/*.py` 是给你**运行**的，不是给你读的。
+  绝不用 cat/sed/grep 翻看脚本源码去「理解行为」——校验不过就按报错信息改产物
+  再重跑；用法看 `SKILL.md` / prompts / 脚本 `--help`。实测翻源码一条命令就灌进
+  5-10KB，几轮就把上下文打满触发压缩，压缩后失忆又去翻源码，循环烧掉上百轮。
+- 长输出要收口：bash 里 cat/sed/grep 一律接 `| head -30` 之类的截尾，别整文件倒出来。
+- **写文件只能用 bash**（`cat > path <<'EOF' … EOF`）：这个环境**没有 `write` 工具**，
+  调它只会得到 `Tool write not found`，白费一个回合。长 JSON/Markdown 用 heredoc 一次写完，
+  不要先写一小段再反复 `python3 -c` 打补丁。
+- **工具回合的正文压到 1-2 句**：不要写 "Let me…"/"Let me check…"/"Actually, wait…"
+  这类英文草稿，也不要复述命令、贴日志。实测一轮 27k 输出 token 有八成是这种草稿，
+  按网关速度折算就是十几分钟白等——思考留在心里，正文只给结论。
 - 只依据材料与技能写内容：材料里没有的事实不要编；不确定的写进「待确认」。
 - 交付物必须干净：正文整篇放进 `<final-doc>…</final-doc>`，**前后不要**写计划、理由、
   自评，也不要写「我先读一下技能」「Reason for each choice」这类过程说明——
@@ -467,6 +480,12 @@ def _write_meta(username: str, sid: str, meta: dict) -> None:
     path = _meta_path(username, sid)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    # meta 在用户目录**外面**（那层是 0711，可穿过）。不显式收权限就是 0644，
+    # 别的用户的 agent 只要知道 sid 就能读到标题/技能/时间（线上实测可读）。
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
     tmp.replace(path)
 
 
@@ -503,6 +522,29 @@ def _count_files(root: Path) -> int:
 # 用户上传的材料由服务端（root、按用户隔离）解析成文本，存在 AI_HOME/materials/
 # 下，0600、root 属主 —— agent 的会话目录里**没有**任何材料文件，它连路径都不知道。
 # 每轮由服务端把文本拼进 prompt，所以「A 的 agent 扫到 B 的材料」在结构上不可能。
+
+def _harden_shared_roots() -> None:
+    """把 AI_HOME 下的公共父目录统一收成 0711（可穿过、不可列举）。
+
+    这些目录按 umask 建出来默认是 0755：agent 的 uid 与 root 不同，但 0755
+    允许 readdir，`ls /data/.ai/artifacts` 就能列出所有用户名，再顺着
+    `artifacts/<用户>/<sid>` 拿到别人的会话 id，最后读 0644 的 meta。
+    改成 0711 后，已知路径仍可穿过（会话目录需要），但列不出内容。
+    """
+    for path in (
+        AI_HOME,
+        AI_HOME / "sessions",
+        AI_HOME / "materials",
+        AI_HOME / "artifacts",
+        AI_HOME / "drafts",
+        AI_HOME / "templates",
+    ):
+        try:
+            if path.is_dir():
+                os.chmod(path, 0o711)
+        except OSError:
+            LOG.warning("ai: chmod shared root failed: %s", path)
+
 
 def _materials_dir(username: str) -> Path:
     d = AI_HOME / "materials" / username
@@ -1655,8 +1697,18 @@ def _pi_env(settings: dict, root: Path) -> dict:
             # 密钥只经环境变量传入（models.json 里用 $VOFFICE_AI_KEY 插值），
             # 不进命令行参数，ps 里看不到
             "VOFFICE_AI_KEY": settings.get("api_key") or "",
+            # 技能里偶尔需要自己定位技能根（而不是靠 cwd 下的 skills 软链）
+            "PATENT_SKILLS_DIR": SKILLS_DIR,
         }
     )
+    # 浏览器：本地 dev 的 HOME 被指到会话目录，Playwright 默认找不到用户级
+    # 安装的浏览器，agent 就会去 `playwright install`（线上被出网闸门掐住，
+    # 白等一轮）。这里把真实浏览器目录显式传下去，有就直接用。
+    browsers = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or str(
+        Path.home() / ".cache" / "ms-playwright"
+    )
+    if Path(browsers).is_dir():
+        env["PLAYWRIGHT_BROWSERS_PATH"] = browsers
     return env
 
 
@@ -1669,7 +1721,10 @@ def _prepare_workdir(root: Path, uid: int = 0, gid: int = 0) -> None:
        连有哪些会话都数不出来；
     3. 会话目录 0700 且归该用户 uid → 别人的 agent 连进都进不来。
     """
-    for name in (".pi-agent", ".pi-sessions", ".home"):
+    # outputs 预先建好：技能脚本默认把产物写到「当前目录/outputs」，目录存在
+    # 能减少 agent 自己找位置；缺失时它会 cd 到仓库根再写，产物就跑到服务端
+    # 目录里（chart 实测发生过），前端案件文件区完全看不到。
+    for name in (".pi-agent", ".pi-sessions", ".home", "outputs"):
         (root / name).mkdir(parents=True, exist_ok=True)
 
     # 祖先链：AI_HOME / sessions / sessions/<user> 只要可穿过
@@ -1685,7 +1740,7 @@ def _prepare_workdir(root: Path, uid: int = 0, gid: int = 0) -> None:
             os.chown(root, uid, gid)
         except OSError:
             LOG.warning("ai: chown failed for %s", root)
-        for sub in (".pi-agent", ".pi-sessions", ".home"):
+        for sub in (".pi-agent", ".pi-sessions", ".home", "outputs"):
             for path in [root / sub, *(root / sub).rglob("*")]:
                 try:
                     os.chown(path, uid, gid)
@@ -3643,7 +3698,16 @@ async def session_state(request: Request, sid: str) -> JSONResponse:
 
 
 def _artifacts_dir(username: str, sid: str) -> Path:
-    d = AI_HOME / "artifacts" / username / _safe_sid(sid)
+    # 用户层也要收权限：这一层若是 0755，agent 能 `ls` 出该用户所有会话 id，
+    # 再配合 meta/目录命名枚举别人的案件（线上实测 artifacts/admin 是 0755）。
+    owner_dir = AI_HOME / "artifacts" / username
+    owner_dir.mkdir(parents=True, exist_ok=True)
+    if os.geteuid() == 0:
+        try:
+            os.chmod(owner_dir, 0o700)
+        except OSError:
+            pass
+    d = owner_dir / _safe_sid(sid)
     d.mkdir(parents=True, exist_ok=True)
     if os.geteuid() == 0:
         try:

@@ -492,10 +492,14 @@ def docx_checks(cli: OfficeCli, outputs: list[Path], estimated_pages: dict[Path,
         pages = json_data(stats).get("pages")
         if estimated is not None:
             if pages is None:
-                notes.append(
-                    f"- `{output.name}`：当前环境无法取得 Word 原生页数；草稿按 {estimated} 页估算，"
-                    "提交前需在 Word/WPS 中复核自动分页结果。"
+                message = (
+                    f"{output.name} 取不到实际页数（LibreOffice 转 PDF 失败），"
+                    f"草稿按 {estimated} 页估算——页数未验证，不能作为正式资料。"
+                    "请重跑生成；确认环境确实无法转 PDF 时才用 --allow-page-mismatch 降级。"
                 )
+                if strict_pages:
+                    raise OfficeCliError(message)
+                notes.append(f"- 页数未验证：{message}")
             elif int(pages) != estimated and estimated == 30 and any(
                 marker in output.name for marker in ("(前30页)", "(后30页)")
             ):

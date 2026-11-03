@@ -27,6 +27,9 @@
 # 其他 NEXT_DIST_DIR 试构建目录（.next-verify 等）：同理不能进 Tailwind 扫描
 /.next-*/
 
+# 端到端测试报告：产物含 docx/xlsx 二进制，只留本地复核，不进仓库
+/scripts/patent-e2e/reports/
+
 # playwright-cli（浏览器自动化）的工作目录：快照、控制台日志、截图都落在这里，
 # 是本地调试产物，不该进仓库。
 /.playwright-cli/

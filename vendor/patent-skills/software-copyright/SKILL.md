@@ -23,10 +23,11 @@ metadata:
   - `project/`：用户上传源码 ZIP 后由服务端解开得到的**真实项目根目录**，只读使用。
   - `materials/`：用户上传的其它材料原件（需求文档、设计文档、测试用例、截图…）。
   - `outputs/`：**所有产物必须写在这里**，界面上的「产物文件」面板只列这一层以下。
-- 本技能的脚本固定在镜像内：
-  `SKILL_DIR=/opt/patent-skills/software-copyright`
-  本地开发时是 `vendor/patent-skills/software-copyright`。所有命令用
-  `python3 "$SKILL_DIR/scripts/xxx.py"` 执行。
+- 本技能的脚本跟着技能目录走，运行时环境变量 `PATENT_SKILLS_DIR` 指向技能根：
+  `SKILL_DIR="${PATENT_SKILLS_DIR:-/opt/patent-skills}/software-copyright"`
+  所有命令用 `python3 "$SKILL_DIR/scripts/xxx.py"` 执行。
+  **不要**自己 `ls`/`find` 去别的目录找技能脚本；这个变量没设或目录不存在就停下
+  告诉用户「技能目录不可用」，不要拿别处的同名脚本顶替。
 - 工作目录统一用 `outputs/软著`（下文记作 `$WORK`），第一次用时先
   `mkdir -p outputs/软著/草稿`。
 - DOCX 后端是 OfficeCLI（`officecli` 已在 PATH，固定 1.0.151，无需安装、不要尝试升级）。
@@ -46,6 +47,16 @@ metadata:
 4. 源程序量 = 项目全部源程序总行数，不是已选材行数。
 5. 需要用户确认的节点必须停下（见下文「门禁」），不得默认继续。
 6. 正式 Word/TXT 只能由 `build_docx_from_md.py` 生成，不要用 python-docx 手写。
+
+## 回合纪律（省时间，也省上下文）
+
+- 工具回合的正文只写**一到两句结论**。不要写 "Let me…"、"Actually, wait…"、
+  "Now I need to…" 这类英文草稿，也不要复述命令、贴大段日志——思考留在心里，
+  正文只给用户结论。实测：一轮里 27k 输出 token 有八成是这种草稿，
+  按网关 26 tok/s 算就是白等十几分钟。
+- 一条 bash 尽量把相关步骤用 `&&` 串起来，不要一个回合只跑一条 `ls`/`cat`。
+- 能由脚本确定算出来的数（页数、行数、字段校验）直接跑脚本看输出，
+  不要手工试探、不要靠改参数反复试。
 
 ## 工作流
 
@@ -87,6 +98,11 @@ python3 "$SKILL_DIR/scripts/generate_business_context.py" \
 页面文案、接口和必要源码，判断行业、目标用户、核心价值、主要功能、典型操作流程，
 写一份业务理解模型稿 JSON（字段见 `references/business_understanding_rules.md`），
 再带上 `--model-context <json>` 跑同一条命令生成 `草稿/业务理解.md/json`。
+
+**读码预算（硬规则）**：判断业务以 `业务理解证据.md` 和 README 为主；源码只读
+**入口、路由、核心模块，合计 ≤8 个文件、每个 ≤200 行**（用 `sed -n` 截取），
+**禁止全量通读整个项目**——大项目通读会把上下文读爆，触发压缩后失忆重来。
+后续的代码鉴别材料以 `extract_code_material.py` 的确定性输出为准，不需要你逐行读。
 
 `manual_modules` 必须按真实页面/流程逐条填写（title / evidence / purpose /
 usage / entry / visible_elements / operation_steps / validation_rules / feedback /
@@ -138,6 +154,13 @@ python3 "$SKILL_DIR/scripts/generate_application_info.py" \
 生成后停下，逐字段和用户确认：软件全称、简称、版本号、著作权人、开发完成日期、
 首次发表日期、开发方式、权利取得方式、软件分类、开发环境、运行环境、源程序量、
 页数、主要功能、技术特点。字段口径见 `references/application_fields.md`。
+
+**一次性问全，不要分几轮追问**：凡带「待用户确认」的字段，一条消息里列全
+（尤其开发完成日期、发表状态、首次发表日期、著作权人及其类型），并明确告诉用户
+「可以一句话全部回复，也可以说『用默认』——默认按未发表、著作权人沿用占位」。
+实测：分成两轮追问会白等一整轮（用户只回了软件名，门禁过不去，正式资料生成不了）。
+**「开发的硬件环境 / 运行的硬件环境」默认取自当前运行机器，只是占位**——
+逐字段确认时必须单独提醒用户替换成自己实际的开发/使用机器配置。
 确认后记录 `application-fields` 门禁。
 
 ### 5. 操作手册
@@ -195,6 +218,9 @@ python3 "$SKILL_DIR/scripts/build_docx_from_md.py" \
 
 - 页数由 LibreOffice 实测。前 30 页/后 30 页必须正好 30 页；脚本默认因此失败退出，
   这是对的——按 `正式资料/生成报告.md` 的提示调整选材量后重跑。
+- **取不到页数（转换失败）同样算失败**：脚本会直接报错，不要改用 `--allow-page-mismatch`
+  把未验证页数的文档当正式资料。若怀疑并发的 soffice 抢了转换（页数忽大忽小），
+  先 `pkill -f soffice` 再重跑一次 `build_docx_from_md.py`。
 - 只有在用户明确说「先出一版看看」时才加 `--allow-page-mismatch`，并在回复里
   明确告知「页数未达标，不可直接提交」。
 
@@ -217,7 +243,7 @@ python3 "$SKILL_DIR/scripts/build_docx_from_md.py" \
 | `开始软著办理` | 第 0 步：环境检查 + 项目分析，报告框架/文件数/总行数 |
 | `确认项目，生成业务理解` | 第 1 步 |
 | `确认业务理解，生成代码选材` | 记录 business 门禁 + 第 2 步 |
-| `确认选材，抽取代码` | 记录 code-selection 门禁 + 第 3 步 |
+| `确认选材，抽取代码` / `确认选材并抽取` / `选材偏重 XX，确认选材并抽取` | 先按用户意见改 `代码文件选择.json`，**接着记录 code-selection 门禁并直接执行第 3 步抽取**；不要在「改完选材」处再停一次问用户确认（用户这句话本身就是确认）
 | `确认代码材料，生成申请表信息` | 第 4 步 |
 | `确认申请表，生成操作手册` | 记录 application-fields 门禁 + 第 5 步 |
 | `截图跳过` / `已上传截图` | 第 6 步，method=skip / user-supplied |

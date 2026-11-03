@@ -48,6 +48,8 @@ import {
   COPYRIGHT_PERSIST_KEY,
   PROMPTS,
   SHOT_PROMPTS,
+  deriveStepMarks,
+  mergeStepMarks,
   nextStep,
   readSoftwareInfo,
   readStepMarks,
@@ -305,6 +307,13 @@ export function CopyrightWorkspace({
     }
   };
 
+  /* 进度 = 磁盘产物推导（事实） ∪ localStorage 点击记录（即时反馈）。
+     对话里一口气跑完或换浏览器打开时，文件清单照样能点亮进度。 */
+  const effectiveMarks = useMemo(
+    () => mergeStepMarks(deriveStepMarks(files), marks),
+    [files, marks],
+  );
+
   const materialsBySlot = useMemo(() => {
     const result = { source: [], requirements: [], screens: [], other: [] } as Record<
       CopyrightSlot,
@@ -445,7 +454,7 @@ export function CopyrightWorkspace({
 
   if (restoring) return <div className="h-full bg-white" />;
 
-  const current = started ? nextStep(marks) : null;
+  const current = started ? nextStep(effectiveMarks) : null;
   const shotsReady = materialsBySlot.screens.length > 0;
 
   return (
@@ -498,7 +507,7 @@ export function CopyrightWorkspace({
               project={project}
               materialsBySlot={materialsBySlot}
               shotsReady={shotsReady}
-              marks={marks}
+              marks={effectiveMarks}
               current={current}
               busy={busy}
               ready={Boolean(chat.sessionId)}

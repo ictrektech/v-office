@@ -28,6 +28,8 @@ import {
   STAGES,
   baseName,
   fittedChatWidth,
+  isDeliverable,
+  isDraftFile,
   isOfficePath,
   persistKeyFor,
   type OutputRow,
@@ -108,7 +110,24 @@ export function StageWorkspace({
     };
   }, [chat.sessionId, chat.artifacts.length, chat.streaming]);
 
+  /** 成品：技能落盘的交付件（docx / 图片 / 成稿 md），默认展示 */
   const rows = useMemo<OutputRow[]>(() => {
+    const stage = config.label;
+    return files
+      .filter((file) => isDeliverable(file.path))
+      .map((file) => ({
+        id: `file:${file.path}`,
+        name: baseName(file.path),
+        stage,
+        time: file.mtime ?? null,
+        kind: "file" as const,
+        path: file.path,
+      }))
+      .sort((a, b) => (b.time ?? 0) - (a.time ?? 0));
+  }, [files, config.label]);
+
+  /** 草稿：对话成稿 artifact + 旁路 md（问题清单、对照表等），收进折叠区 */
+  const draftRows = useMemo<OutputRow[]>(() => {
     const stage = config.label;
     const artifactRows: OutputRow[] = chat.artifacts.map((artifact) => ({
       id: `artifact:${artifact.key}`,
@@ -118,15 +137,17 @@ export function StageWorkspace({
       kind: "artifact",
       artifactKey: artifact.key,
     }));
-    const fileRows: OutputRow[] = files.map((file) => ({
-      id: `file:${file.path}`,
-      name: baseName(file.path),
-      stage,
-      time: file.mtime ?? null,
-      kind: "file",
-      path: file.path,
-    }));
-    return [...artifactRows, ...fileRows].sort((a, b) => (b.time ?? 0) - (a.time ?? 0));
+    const draftFileRows: OutputRow[] = files
+      .filter((file) => isDraftFile(file.path))
+      .map((file) => ({
+        id: `file:${file.path}`,
+        name: baseName(file.path),
+        stage,
+        time: file.mtime ?? null,
+        kind: "file",
+        path: file.path,
+      }));
+    return [...artifactRows, ...draftFileRows].sort((a, b) => (b.time ?? 0) - (a.time ?? 0));
   }, [chat.artifacts, files, config.label]);
 
   /**
@@ -342,6 +363,7 @@ export function StageWorkspace({
               materials={chat.materials}
               docket={visibleDocket}
               rows={rows}
+              draftRows={draftRows}
               onModeChange={onModeChange}
               onUpload={uploadToSlot}
               onRemoveMaterial={removeMaterial}

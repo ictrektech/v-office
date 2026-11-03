@@ -65,7 +65,10 @@ interface CaseOverviewProps {
   materials: AiMaterial[];
   /** 全流程阶段的案卷进度；其他阶段为 null */
   docket?: DocketState | null;
+  /** 成品行：交付件，默认展开 */
   rows: OutputRow[];
+  /** 草稿行：对话成稿 artifact + 旁路 md，收进折叠区 */
+  draftRows?: OutputRow[];
   onModeChange: (next: StageKey) => void;
   onUpload: (slot: SlotKey, files: File[]) => void;
   onRemoveMaterial: (name: string) => void;
@@ -101,6 +104,7 @@ export function CaseOverview({
   materials,
   docket,
   rows,
+  draftRows = [],
   onModeChange,
   onUpload,
   onRemoveMaterial,
@@ -110,6 +114,7 @@ export function CaseOverview({
 }: CaseOverviewProps) {
   const router = useRouter();
   const [modeOpen, setModeOpen] = useState(false);
+  const [draftOpen, setDraftOpen] = useState(false);
   const [pendingSlot, setPendingSlot] = useState<SlotKey>("other");
   const [dragSlot, setDragSlot] = useState<SlotKey | null>(null);
   const [openingRow, setOpeningRow] = useState<string | null>(null);
@@ -133,6 +138,11 @@ export function CaseOverview({
 
   const slotFiles = (slot: SlotKey) =>
     materials.filter((material) => slotOf(material.name) === slot);
+
+  const toTarget = (row: OutputRow): PreviewTarget =>
+    row.kind === "artifact"
+      ? { kind: "artifact", key: row.artifactKey ?? "", name: row.name }
+      : { kind: "file", path: row.path ?? "", name: row.name };
 
   const missing = slots.filter(
     (slot) => slot.required && slotFiles(slot.key).length === 0,
@@ -489,6 +499,70 @@ export function CaseOverview({
           Word / Excel / PPT 可直接在线编辑；其余格式先下载。
         </p>
       </section>
+
+      {draftRows.length > 0 ? (
+        <section className="mt-9">
+          <button
+            type="button"
+            onClick={() => setDraftOpen((value) => !value)}
+            className="mb-3 flex w-full items-center justify-between text-left"
+          >
+            <h2 className="flex items-center gap-2 text-[17px] font-semibold tracking-[-0.01em] text-[#0E0E10]">
+              草稿
+              <span className="rounded-full bg-[#F1F1F4] px-2 py-0.5 text-[12px] font-medium text-[#5F6066]">
+                {draftRows.length}
+              </span>
+            </h2>
+            <span className="flex items-center gap-1.5 text-[12.5px] text-[#8E8E93]">
+              {draftOpen ? "收起" : "展开"}
+              <ChevronDown
+                className={`h-4 w-4 transition-transform ${draftOpen ? "rotate-180" : ""}`}
+              />
+            </span>
+          </button>
+
+          {draftOpen ? (
+            <div className="overflow-hidden rounded-[22px] border border-[#ECECEF] bg-white">
+              {draftRows.map((row) => {
+                const target = toTarget(row);
+                const Icon = rowFileIcon(row.name, row.kind);
+                return (
+                  <div
+                    key={row.id}
+                    onClick={() => onOpenPreview(target)}
+                    className="flex cursor-pointer items-center gap-3 border-t border-[#F2F2F4] px-5 py-3 transition first:border-t-0 hover:bg-[#FAFAFB]"
+                  >
+                    <span className="flex h-8 w-8 flex-none items-center justify-center rounded-[10px] bg-[#F4F4F7]">
+                      <Icon className="h-4 w-4 text-[#8E8E93]" strokeWidth={1.8} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[13.5px] text-[#3C3C43]">{row.name}</p>
+                      <p className="mt-0.5 text-[12px] text-[#8E8E93]">
+                        草稿 · {formatClock(row.time)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      title="下载"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onDownload(row);
+                      }}
+                      className="flex h-8 w-8 flex-none items-center justify-center rounded-[10px] text-[#8E8E93] transition hover:bg-[#F2F2F4] hover:text-[#1C1C1E]"
+                    >
+                      <Download className="h-4 w-4" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="rounded-[18px] border border-dashed border-[#E4E4E8] px-4 py-3 text-[12.5px] text-[#8E8E93]">
+              对话成稿与问题清单等旁路文档在这里，不算正式产出。
+            </p>
+          )}
+        </section>
+      ) : null}
     </div>
   );
 }

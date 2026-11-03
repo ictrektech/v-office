@@ -91,28 +91,41 @@ def libreoffice_page_count(docx: Path) -> int | None:
     为什么必须自己数：OfficeCLI 只在 Windows 通过 Word 重新分页，其它平台的
     `--page-count` 是它自己的估算，不能当成 Word 的自动分页结果——而软著要求
     前 30 页/后 30 页材料**正好** 30 页，估错一页就要被补正。
+
+    实测坑（2026-11-03）：只设 `HOME` 还不够。同一台机器上如果已经有 soffice
+    在跑（agent 自己也会转 PDF 校页数），新进程会**把转换请求转交给那个实例**，
+    拿到的是上一次的旧 PDF 或者干脆没输出——同一份 30 页的 docx 会被数成 29 页，
+    模型于是反复「校准」，白烧十几分钟。这里改成每次用独立的 UserInstallation
+    （profile），并在没出 PDF 时重试一次。
     """
     binary = _soffice_binary()
     if not binary:
         return None
     docx = docx.resolve()
-    with tempfile.TemporaryDirectory(prefix=".soffice-pages-", dir=str(docx.parent)) as tmp:
-        env = os.environ.copy()
-        env["HOME"] = tmp
-        env.setdefault("SAL_USE_VCLPLUGIN", "svp")
-        try:
-            subprocess.run(
-                [binary, "--headless", "--norestore", "--nologo",
-                 "--convert-to", "pdf", "--outdir", tmp, str(docx)],
-                text=True, encoding="utf-8", errors="replace",
-                capture_output=True, timeout=600, env=env,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None
-        pdf = Path(tmp) / f"{docx.stem}.pdf"
-        if not pdf.is_file():
-            return None
-        return _count_pdf_pages(pdf)
+    for attempt in range(2):
+        with tempfile.TemporaryDirectory(prefix="soffice-pages-") as tmp:
+            env = os.environ.copy()
+            env["HOME"] = tmp
+            env.setdefault("SAL_USE_VCLPLUGIN", "svp")
+            profile = Path(tmp) / "profile"
+            profile.mkdir(exist_ok=True)
+            try:
+                subprocess.run(
+                    [binary, "--headless", "--norestore", "--nologo",
+                     f"-env:UserInstallation={profile.as_uri()}",
+                     "--convert-to", "pdf", "--outdir", tmp, str(docx)],
+                    text=True, encoding="utf-8", errors="replace",
+                    capture_output=True, timeout=600, env=env,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+            pdf = Path(tmp) / f"{docx.stem}.pdf"
+            if not pdf.is_file() or pdf.stat().st_size < 1024:
+                continue
+            pages = _count_pdf_pages(pdf)
+            if pages:
+                return pages
+    return None
 
 
 def _parse_json_output(output: str) -> dict[str, Any]:

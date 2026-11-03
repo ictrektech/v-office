@@ -58,3 +58,18 @@ python skills/patent-application/tools/render_invention_figures.py \
 3. 看 `APPLICATION_FIG:`。SVG 必有；PNG 供 Word。PNG 失败记问题清单。
 
 不做 TIFF。
+
+## 收口（硬性，发明 / 实用新型同口径）
+
+画完图不算完。figures/ 下每张申请附图 PNG 出来后，**必须**写产出目录 `说明书附图.md`，每图一行：
+
+```markdown
+# 说明书附图
+
+![图1](figures/图1.png)
+![图2](figures/图2.png)
+```
+
+然后**必须**跑 `emit_application_docx.py` 出 Word——转换器按 `![图N](figures/图N.png)` 把 PNG 嵌进 `说明书附图.docx`。没有这份 md，图只会散在 figures/ 目录，进不了任何 Word。
+
+判定：`figures/` 有 PNG 但产出目录无 `说明书附图.md` → **按未完成处理**，不得交付；说明书「附图说明」写了「如图N所示」而 md 缺图，同样未完成。
