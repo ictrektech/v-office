@@ -170,6 +170,20 @@ USERNAME_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
 async def lifespan(_app: FastAPI):
     """启动 Collabora 冷启动探活后台任务，停机时回收。"""
     _warn_if_single_process()
+    # 技能副本里的命令/Read 路径是构建期写死的绝对路径。仓库被拷到别的服务器、
+    # 或换了挂载目录直接起服务时这些路径会失效（agent 会去瞎找、甚至跑到写作者的
+    # 家目录去执行另一份脚本）。这里做一次幂等自检，就地改写成当前机器的真实路径；
+    # 失败只记日志，不影响服务启动。
+    try:
+        from tools.rewrite_skills import ensure_skills_root
+
+        from ai import SKILLS_DIR as _skills_dir
+
+        rewritten = ensure_skills_root(Path(_skills_dir))
+        if rewritten:
+            logging.getLogger(__name__).warning("技能路径已按当前环境重写：%s 处", rewritten)
+    except Exception:  # noqa: BLE001  自检失败不能拖垮启动
+        logging.getLogger(__name__).exception("技能路径自检失败（忽略）")
     # agent 出网闸门：把 pi 的出口收敛到模型网关（详见 egress_guard 的模块说明）。
     # 缺 NET_ADMIN / 没装 iptables 时只记日志，绝不阻塞服务启动。
     egress_guard.install()
