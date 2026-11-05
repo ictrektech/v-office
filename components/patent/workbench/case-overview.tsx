@@ -57,7 +57,7 @@ import {
   type StageKey,
 } from "./config";
 import { CopyrightInfoCard, CopyrightProgressCard } from "./copyright-cards";
-import type { CopyrightPair } from "./copyright";
+import type { CopyrightPair, StepKey } from "./copyright";
 
 interface CaseOverviewProps {
   config: StageConfig;
@@ -82,7 +82,12 @@ interface CaseOverviewProps {
     sessionId: string;
     files: ReadonlyArray<{ path: string; mtime?: number }>;
     streaming: boolean;
-    onSend: (prompt: string) => Promise<boolean>;
+    /** 把这一步指令放进对话框（用户在对话栏补充后自己发送） */
+    onStage: (key: StepKey, title: string, prompt: string) => void;
+    /** 已放进对话框、还没发出去的那一步 */
+    stagedKey?: StepKey | null;
+    /** 发送成功后递增，进度卡据此重读点击记录 */
+    marksVersion?: number;
     /** 草稿 md 比 正式资料 成品新（mtime 比较，不维护额外状态） */
     stale?: boolean;
     /** 重建正式资料；返回错误信息（null = 成功） */
@@ -456,7 +461,9 @@ export function CaseOverview({
           sessionId={copyright.sessionId}
           files={copyright.files}
           streaming={copyright.streaming}
-          onSend={copyright.onSend}
+          onStage={copyright.onStage}
+          stagedKey={copyright.stagedKey}
+          marksVersion={copyright.marksVersion}
         />
       ) : null}
 

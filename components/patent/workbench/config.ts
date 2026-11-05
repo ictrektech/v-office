@@ -69,14 +69,29 @@ export const STAGES: Record<StageKey, StageConfig> = {
 
 export const STAGE_LIST = Object.values(STAGES);
 
-/** 对话栏宽度：随窗口留出更合理的左右比例，拖动范围保持可用 */
-export const CHAT_MIN_WIDTH = 340;
-export const CHAT_MAX_WIDTH = 700;
-export const CHAT_DEFAULT_WIDTH = 408;
+/** 对话栏宽度：桌面端给到 2/5，窄屏保底，超宽屏不无限膨胀 */
+export const CHAT_MIN_WIDTH = 440;
+export const CHAT_MAX_WIDTH = 1000;
+export const CHAT_DEFAULT_WIDTH = 560;
 
+function viewportWidth(): number {
+  return typeof window === "undefined" ? 1440 : window.innerWidth;
+}
+
+/** 首次进入的默认宽度：约 40%，窄屏至少 460，超宽屏封顶 */
 export function fittedChatWidth(): number {
-  const viewport = typeof window === "undefined" ? 1440 : window.innerWidth;
-  return Math.min(560, Math.max(CHAT_MIN_WIDTH, Math.round(viewport * 0.29)));
+  return Math.min(CHAT_MAX_WIDTH, Math.max(460, Math.round(viewportWidth() * 0.4)));
+}
+
+/** 点「展开」时的宽版：约一半多一点，读长回复/长文档更舒服 */
+export function wideChatWidth(): number {
+  return Math.min(CHAT_MAX_WIDTH, Math.max(680, Math.round(viewportWidth() * 0.55)));
+}
+
+/** 拖动上限：右边再宽，左栏也至少留 560，避免在小窗口里把案件区挤没 */
+export function maxChatWidth(): number {
+  const viewport = viewportWidth();
+  return Math.min(CHAT_MAX_WIDTH, Math.max(CHAT_MIN_WIDTH, viewport - 560));
 }
 
 export function isStageKey(value: string): value is StageKey {

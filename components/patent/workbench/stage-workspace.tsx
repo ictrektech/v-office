@@ -23,16 +23,19 @@ import {
 import {
   buildCopyrightPairs,
   copyrightProcessFiles,
+  writeStepMark,
+  type StepKey,
 } from "./copyright";
 import { useAppStore } from "@/store";
 import { openStoredFile } from "@/utils/vos/storage";
 import {
   CHAT_DEFAULT_WIDTH,
-  CHAT_MAX_WIDTH,
   CHAT_MIN_WIDTH,
   STAGES,
   baseName,
   fittedChatWidth,
+  maxChatWidth,
+  wideChatWidth,
   isDeliverable,
   isDraftFile,
   isOfficePath,
@@ -83,6 +86,14 @@ export function StageWorkspace({
   const [docket, setDocket] = useState<DocketState | null>(null);
   const [width, setWidth] = useState(DEFAULT_CHAT_WIDTH);
   const [preview, setPreview] = useState<PreviewTarget | null>(null);
+  /** 从 8 步进度卡放进对话框的那一步：一次只保留一条，再点会替换 */
+  const [stagedStep, setStagedStep] = useState<{
+    key: StepKey;
+    title: string;
+    prompt: string;
+  } | null>(null);
+  /** 进度点击记录的版本号：这一步真正发成功后才推进 */
+  const [marksVersion, setMarksVersion] = useState(0);
   const [notice, setNotice] = useState("");
   const noticeTimer = useRef<number | null>(null);
 
@@ -93,10 +104,16 @@ export function StageWorkspace({
       .catch(() => setFiles([]));
   }, [chat.sessionId]);
 
-  /* 大屏别让对话栏一直固定 408，首次进入按窗口比例给一个更均衡的宽度 */
+  /* 大屏按窗口比例给初始宽度；窗口缩小时只收紧，不重置用户手动拖过的宽度 */
   useEffect(() => {
     const frame = requestAnimationFrame(() => setWidth(fittedChatWidth()));
-    return () => cancelAnimationFrame(frame);
+    const onResize = () =>
+      setWidth((current) => Math.min(maxChatWidth(), Math.max(CHAT_MIN_WIDTH, current)));
+    window.addEventListener("resize", onResize);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", onResize);
+    };
   }, []);
 
   const say = (message: string) => {
@@ -273,6 +290,16 @@ export function StageWorkspace({
       ? docket
       : null;
 
+  /** 带步骤的消息真正发成功后才推进进度：放进对话框、没发出去的都不算 */
+  const markStepSent = useCallback(
+    (key: StepKey) => {
+      if (!chat.sessionId) return;
+      writeStepMark(chat.sessionId, key);
+      setMarksVersion((value) => value + 1);
+    },
+    [chat.sessionId],
+  );
+
   const uploadToSlot = (slot: SlotKey, picked: File[] | FileList) => {
     const list = Array.from(picked);
     void (async () => {
@@ -378,7 +405,7 @@ export function StageWorkspace({
     document.body.style.userSelect = "none";
     const move = (moveEvent: globalThis.PointerEvent) => {
       const next = startWidth - (moveEvent.clientX - startX);
-      setWidth(Math.min(CHAT_MAX_WIDTH, Math.max(CHAT_MIN_WIDTH, next)));
+      setWidth(Math.min(maxChatWidth(), Math.max(CHAT_MIN_WIDTH, next)));
     };
     const stop = () => {
       window.removeEventListener("pointermove", move);
@@ -442,7 +469,9 @@ export function StageWorkspace({
                       sessionId: chat.sessionId ?? "",
                       files,
                       streaming: chat.streaming,
-                      onSend: (prompt) => chat.send(prompt),
+                      onStage: (key, title, prompt) => setStagedStep({ key, title, prompt }),
+                      stagedKey: stagedStep?.key ?? null,
+                      marksVersion,
                       stale: copyrightStale,
                       onRebuild: rebuildFinal,
                       pairs: copyrightPairs,
@@ -479,14 +508,18 @@ export function StageWorkspace({
         <div className="flex-none" style={{ width }}>
           <ChatPanel
             chat={chat}
+            staged={stagedStep}
+            onClearStaged={() => setStagedStep(null)}
+            onStagedSent={markStepSent}
+            contextFile={
+              preview?.kind === "file" ? { path: preview.path, name: preview.name } : null
+            }
             modelLabel={
               chat.health?.pi.version ? `pi ${chat.health.pi.version}` : "pi"
             }
             onToggleWidth={() =>
               setWidth((current) =>
-                current > (CHAT_MIN_WIDTH + CHAT_MAX_WIDTH) / 2
-                  ? DEFAULT_CHAT_WIDTH
-                  : 700,
+                current >= wideChatWidth() - 40 ? fittedChatWidth() : wideChatWidth(),
               )
             }
           />

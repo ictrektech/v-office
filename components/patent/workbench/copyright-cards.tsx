@@ -5,11 +5,12 @@
  *
  * 从原 `components/patent/software-copyright/copyright-overview.tsx` 搬过来，
  * 只保留工作台左栏用得上的两块，样式对齐工作台（圆角 22、17px 标题）。
- * 进度事实来自磁盘产物（deriveStepMarks），点击记录只做即时反馈。
+ * 进度事实来自磁盘产物（deriveStepMarks）；按钮只把指令放进对话框，用户发送并
+ * 成功后才写点击记录，所以「放进去了但没发」不会推进进度。
  */
 
-import { useCallback, useMemo, useState } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Check } from "lucide-react";
 import {
   EMPTY_INFO,
   PROMPTS,
@@ -22,7 +23,6 @@ import {
   readSoftwareInfo,
   readStepMarks,
   writeSoftwareInfo,
-  writeStepMark,
   type SoftwareInfo,
   type StepKey,
 } from "./copyright";
@@ -91,21 +91,33 @@ interface ProgressProps {
   sessionId: string;
   files: ReadonlyArray<{ path: string }>;
   streaming: boolean;
-  onSend: (prompt: string) => Promise<boolean>;
+  /** 把这一步的系统指令放进对话框；真正的发送由用户在对话栏确认 */
+  onStage: (key: StepKey, title: string, prompt: string) => void;
+  /** 已经放进对话框、还没发出去的那一步 */
+  stagedKey?: StepKey | null;
+  /** 进度记录的刷新信号：父级在发送成功后 +1，这里重读 localStorage */
+  marksVersion?: number;
 }
 
 export function CopyrightProgressCard({
   sessionId,
   files,
   streaming,
-  onSend,
+  onStage,
+  stagedKey = null,
+  marksVersion = 0,
 }: ProgressProps) {
-  const [busy, setBusy] = useState<StepKey | null>(null);
-  const [error, setError] = useState("");
-  /* 点击记录同样在挂载时读一次；父级按 sessionId 设 key，换案件会重挂 */
-  const [clicked, setClicked] = useState<
+  /* 点击记录按「会话 + 版本号」读取：这一步真正发出并成功后才算数，父级写盘后
+     递增版本号，这里跟着重读一次（不必再用 effect 同步，省一轮渲染） */
+  const clicked = useMemo<
     Partial<Record<StepKey, { done: boolean; at: number }>>
-  >(() => (typeof window === "undefined" || !sessionId ? {} : readStepMarks(sessionId)));
+  >(
+    () => {
+      void marksVersion; // 仅作失效信号：父级写盘后递增，这里跟着重读
+      return typeof window === "undefined" || !sessionId ? {} : readStepMarks(sessionId);
+    },
+    [sessionId, marksVersion],
+  );
 
   const marks = useMemo(
     () => mergeStepMarks(deriveStepMarks(files), clicked),
@@ -113,29 +125,6 @@ export function CopyrightProgressCard({
   );
   const current = nextStep(marks);
   const doneCount = STEPS.filter((step) => marks[step.key]?.done).length;
-
-  const run = useCallback(
-    async (key: StepKey, prompt: string) => {
-      if (busy) return;
-      if (streaming) {
-        setError("助手还在回复，等本轮结束再执行下一步");
-        return;
-      }
-      setBusy(key);
-      setError("");
-      try {
-        const ok = await onSend(prompt);
-        if (!ok) throw new Error("本轮没有完成，进度未推进，可重试当前步骤");
-        if (sessionId) writeStepMark(sessionId, key);
-        setClicked((value) => ({ ...value, [key]: { done: true, at: Date.now() } }));
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setBusy(null);
-      }
-    },
-    [busy, onSend, sessionId, streaming],
-  );
 
   /** shots 有自己的两条指令（跳过 / 已传），其余走 PROMPTS */
   const promptFor = (key: StepKey): string => {
@@ -154,14 +143,18 @@ export function CopyrightProgressCard({
             {doneCount}/{STEPS.length}
           </span>
         </h2>
-        <span className="text-[12.5px] text-[#8E8E93]">按顺序点，每一步都等你确认</span>
+        <span className="text-[12.5px] text-[#8E8E93]">
+          {streaming
+            ? "助手还在回复，发送会排队等本轮结束"
+            : "点一下把指令放进对话框，可补充要求再发送"}
+        </span>
       </div>
 
       <div className="overflow-hidden rounded-[22px] border border-[#ECECEF] bg-white">
         {STEPS.map((step, index) => {
           const done = Boolean(marks[step.key]?.done);
           const active = current === step.key;
-          const working = busy === step.key;
+          const staged = stagedKey === step.key;
           return (
             <div
               key={step.key}
@@ -185,7 +178,15 @@ export function CopyrightProgressCard({
               </span>
 
               <div className="min-w-0 flex-1">
-                <p className="text-[14px] font-medium text-[#1C1C1E]">{step.title}</p>
+                <p className="flex flex-wrap items-center gap-2 text-[14px] font-medium text-[#1C1C1E]">
+                  {step.title}
+                  {/* 截图有两个按钮，靠徽章说明已放入；其余步骤按钮自己就是状态 */}
+                  {staged && step.key === "shots" ? (
+                    <span className="rounded-full bg-[#EAF6EF] px-2 py-0.5 text-[11.5px] font-medium text-[#2E8B4F]">
+                      已放入对话框
+                    </span>
+                  ) : null}
+                </p>
                 <p className="mt-0.5 text-[12.5px] leading-[1.6] text-[#6E6E73]">{step.desc}</p>
               </div>
 
@@ -193,42 +194,33 @@ export function CopyrightProgressCard({
                 <div className="mt-0.5 flex flex-none items-center gap-1.5">
                   <button
                     type="button"
-                    disabled={Boolean(busy) || streaming}
-                    onClick={() => void run("shots", SHOT_PROMPTS.upload)}
-                    className="h-8 rounded-full border border-[#E4E4E8] px-3 text-[12.5px] font-medium text-[#3C3C43] transition hover:border-[#D2D2D8] hover:bg-[#F5F5F7] disabled:opacity-40"
+                    onClick={() => onStage("shots", step.title, SHOT_PROMPTS.upload)}
+                    className="h-8 rounded-full border border-[#E4E4E8] px-3 text-[12.5px] font-medium text-[#3C3C43] transition hover:border-[#D2D2D8] hover:bg-[#F5F5F7]"
                   >
                     已传截图
                   </button>
                   <button
                     type="button"
-                    disabled={Boolean(busy) || streaming}
-                    onClick={() => void run("shots", SHOT_PROMPTS.skip)}
-                    className="h-8 rounded-full bg-[#111113] px-3 text-[12.5px] font-medium text-white transition hover:bg-black disabled:opacity-40"
+                    onClick={() => onStage("shots", step.title, SHOT_PROMPTS.skip)}
+                    className="h-8 rounded-full bg-[#111113] px-3 text-[12.5px] font-medium text-white transition hover:bg-black"
                   >
-                    {working ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : "跳过截图"}
+                    跳过截图
                   </button>
                 </div>
               ) : (
                 <button
                   type="button"
-                  disabled={Boolean(busy) || streaming}
-                  onClick={() => void run(step.key, promptFor(step.key))}
+                  onClick={() => onStage(step.key, step.title, promptFor(step.key))}
                   className={[
-                    "mt-0.5 flex h-8 flex-none items-center rounded-full px-3 text-[12.5px] font-medium transition disabled:opacity-40",
-                    done
+                    "mt-0.5 flex h-8 flex-none items-center rounded-full px-3 text-[12.5px] font-medium transition",
+                    done && !staged
                       ? "border border-[#E4E4E8] text-[#3C3C43] hover:border-[#D2D2D8] hover:bg-[#F5F5F7]"
-                      : active
+                      : active || staged
                         ? "bg-[#111113] text-white hover:bg-black"
                         : "border border-[#E4E4E8] text-[#6E6E73] hover:border-[#D2D2D8] hover:bg-[#F5F5F7]",
                   ].join(" ")}
                 >
-                  {working ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : done ? (
-                    "重跑"
-                  ) : (
-                    "执行"
-                  )}
+                  {staged ? "已放入对话框" : done ? "重新发送" : "发送到对话框"}
                 </button>
               )}
             </div>
@@ -236,7 +228,6 @@ export function CopyrightProgressCard({
         })}
       </div>
 
-      {error ? <p className="mt-3 text-[12.5px] leading-relaxed text-[#C0392B]">{error}</p> : null}
     </section>
   );
 }
