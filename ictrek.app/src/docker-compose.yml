@@ -120,6 +120,11 @@ x-v-office-storage-base: &v-office-storage-base
     # 全局并发上限与默认网关；模型/密钥由用户在「设置 → AI 模型」里自己配
     V_OFFICE_AI_CONCURRENCY: ${V_OFFICE_AI_CONCURRENCY:-3}
     V_OFFICE_AI_BASE_URL: ${V_OFFICE_AI_BASE_URL:-https://ai.ictrek.com/v1}
+    # 线上模型托管：设了 V_SCHEDULER_URL 就自动走 V-Scheduler（模型目录 +
+    # 推理地址都由它提供，凭证用当前用户的 VOS 令牌）；本地不设则沿用上面
+    # 手填的网关。V_OFFICE_AI_MODEL_SOURCE=manual 可强制回到手填模式。
+    V_SCHEDULER_URL: ${V_SCHEDULER_URL:-http://v-scheduler:8080}
+    V_OFFICE_AI_MODEL_SOURCE: ${V_OFFICE_AI_MODEL_SOURCE:-auto}
   volumes:
     # 应用私有存储：每个用户读写自己名下的 documents/<用户名>/
     - ${VOS_APP_STORAGE_PATH}/documents:/data

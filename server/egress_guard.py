@@ -84,6 +84,11 @@ def _collect_targets() -> list[tuple[str, int]]:
     与 V_OFFICE_AI_BASE_URL 完全不是一回事。漏掉它 = 把用户的 AI 断掉。
     """
     urls: list[str] = [DEFAULT_BASE_URL]
+    # 线上走 V-Scheduler 时，agent 直接请求 {V_SCHEDULER_URL}/v1 —— 不放行就是
+    # 「设置没问题但模型连不上」。
+    scheduler_url = (os.environ.get("V_SCHEDULER_URL") or "").strip()
+    if scheduler_url:
+        urls.append(scheduler_url)
     try:
         for path in sorted((AI_HOME / "settings").glob("*.json")):
             try:

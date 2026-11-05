@@ -54,6 +54,7 @@ from project_zip import (
     read_project_summary,
 )
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -176,6 +177,25 @@ def _resolve_skills_dir() -> Path:
 # 也会进日志与 pi 的 `--skill` 参数。
 SKILLS_DIR = str(_resolve_skills_dir())
 DEFAULT_BASE_URL = os.environ.get("V_OFFICE_AI_BASE_URL", "https://ai.ictrek.com/v1")
+
+# ── 模型来源开关 ───────────────────────────────────────────────────────────
+# 线上部署设 V_SCHEDULER_URL（v-scheduler 的 origin，如 http://v-scheduler:8080）
+# 就自动走 V-Scheduler；本地不设则完全沿用设置页里手填的网关 / 密钥 / 模型。
+# 两种路径的代码都保留，V_OFFICE_AI_MODEL_SOURCE=manual 可强制回到手填模式。
+SCHEDULER_URL = (os.environ.get("V_SCHEDULER_URL") or "").strip().rstrip("/")
+AI_MODEL_SOURCE = (os.environ.get("V_OFFICE_AI_MODEL_SOURCE") or "auto").strip().lower()
+SCHEDULER_TIMEOUT_S = float(os.environ.get("V_OFFICE_AI_SCHEDULER_TIMEOUT", "15"))
+
+
+def scheduler_enabled() -> bool:
+    """是否走 V-Scheduler：有 origin 且没被显式指定 manual。"""
+    return bool(SCHEDULER_URL) and AI_MODEL_SOURCE != "manual"
+
+
+def _model_source() -> str:
+    return "scheduler" if scheduler_enabled() else "manual"
+
+
 # 读 pi 输出用的行缓冲上限（asyncio 默认 64KiB，长文必爆）
 STDOUT_LIMIT_BYTES = int(os.environ.get("V_OFFICE_AI_STDOUT_LIMIT", 8 * 1024 * 1024))
 
@@ -421,12 +441,120 @@ def public_settings(data: dict) -> dict:
     """
     out = {k: v for k, v in data.items() if k != "api_key"}
     out["has_api_key"] = bool(data.get("api_key"))
-    out["effective_base_url"] = data.get("base_url") or DEFAULT_BASE_URL
+    out["model_source"] = _model_source()
+    out["effective_base_url"] = (
+        f"{SCHEDULER_URL}/v1"
+        if scheduler_enabled()
+        else data.get("base_url") or DEFAULT_BASE_URL
+    )
     out["effective_tools"] = (
         TOOLS_WITH_SHELL if data.get("allow_shell") else TOOLS_NO_SHELL
     )
     out["policy_text"] = _policy_prompt(data.get("system_prompt") or "")
     return out
+
+
+# ── V-Scheduler 模型目录 ───────────────────────────────────────────────────
+#
+# 线上模型由 v-scheduler 托管：直接带当前用户的 VOS Bearer 令牌请求它的
+# `/api/v1/models`（v-harness 网关转发给 v-scheduler 的也是同一个用户令牌），
+# 拿到当前用户可见、且能走 OpenAI chat completions 的模型。推理仍走
+# `{origin}/v1/chat/completions`，model 用目录里的 qualified/id。
+
+_CHAT_ENDPOINTS = {"chat", "chat/completions", "chat_completions"}
+_CHAT_CAPABILITIES = {
+    "chat", "completion", "completions",
+    "generate", "generation", "tools", "thinking",
+}
+_CHAT_KINDS = {"chat", "completion", "completions"}
+
+
+def _normalize_token(raw: object) -> str:
+    text = str(raw or "").strip().lower().lstrip("/")
+    if text.startswith("v1/"):
+        text = text[3:]
+    return text.replace("-", "_")
+
+
+def _is_chat_model(row: dict) -> bool:
+    """目录行能否走 OpenAI chat completions（口径与 v-harness 一致）。
+
+    端点声明优先；没有端点时看 capabilities，再看 kind；上游路由的
+    unknown 模型只要带 upstream_id 也算聊天模型。
+    """
+    endpoints = [_normalize_token(e) for e in (row.get("endpoints") or [])]
+    if endpoints:
+        return any(e in _CHAT_ENDPOINTS for e in endpoints)
+    caps = [_normalize_token(c) for c in (row.get("capabilities") or [])]
+    if caps:
+        return any(c in _CHAT_CAPABILITIES for c in caps)
+    kind = _normalize_token(row.get("kind"))
+    if kind in _CHAT_KINDS:
+        return True
+    return kind == "unknown" and bool(row.get("upstream_id"))
+
+
+def _scheduler_model_rows(payload: object) -> list[dict]:
+    rows = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        raise RuntimeError("V-Scheduler 返回的模型目录格式不正确（缺少 models 数组）")
+    out: list[dict] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict) or not _is_chat_model(row):
+            continue
+        mid = str(row.get("qualified") or row.get("id") or "").strip()
+        if not mid or mid in seen:
+            continue
+        seen.add(mid)
+        out.append({"id": mid, "name": str(row.get("name") or mid)})
+    return out
+
+
+async def _fetch_scheduler_models(token: str) -> list[dict]:
+    """拉当前用户可见的聊天模型；失败抛 RuntimeError（带用户能看懂的说明）。"""
+    if not token:
+        raise RuntimeError(
+            "V-Scheduler 需要登录令牌，但当前请求没有携带 VOS Bearer 令牌"
+        )
+    url = f"{SCHEDULER_URL}/api/v1/models"
+    try:
+        # trust_env=False：内网 v-scheduler 不能被服务进程的 HTTP(S)_PROXY 劫持
+        async with httpx.AsyncClient(
+            timeout=SCHEDULER_TIMEOUT_S, trust_env=False
+        ) as client:
+            resp = await client.get(url, headers={"Authorization": f"Bearer {token}"})
+            if resp.status_code == 401:
+                raise RuntimeError(
+                    "V-Scheduler 拒绝了当前登录令牌（可能已过期，请刷新页面重试）"
+                )
+            if resp.status_code >= 400:
+                raise RuntimeError(
+                    f"V-Scheduler 模型目录请求失败（HTTP {resp.status_code}）"
+                )
+            payload = resp.json()
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"连不上 V-Scheduler（{SCHEDULER_URL}）：{exc}") from exc
+    except ValueError as exc:
+        raise RuntimeError("V-Scheduler 模型目录返回的不是合法 JSON") from exc
+    models = _scheduler_model_rows(payload)
+    if not models:
+        raise RuntimeError("V-Scheduler 中没有可用的聊天模型")
+    return models
+
+
+def _pick_model(settings: dict, catalog: list[dict]) -> str:
+    """设置里的模型在目录里就优先用，否则回退到目录第一个。"""
+    configured = (settings.get("model") or "").strip()
+    ids = [row["id"] for row in catalog]
+    if configured and configured in ids:
+        return configured
+    return ids[0] if ids else ""
+
+
+def _bearer_token(request: Request) -> str:
+    raw = (request.headers.get("authorization") or "").strip()
+    return raw[7:].strip() if raw[:7].lower() == "bearer " else ""
 
 
 # ── 会话目录 ───────────────────────────────────────────────────────────────
@@ -1655,11 +1783,13 @@ def _kill_tree(proc: Optional[asyncio.subprocess.Process]) -> None:
             pass
 
 
-def _pi_env(settings: dict, root: Path) -> dict:
+def _pi_env(settings: dict, root: Path, runtime_key: str | None = None) -> dict:
     """给 pi 子进程的环境：只放行必需项 + 我们自己的 PI_* 与 PATENT_* 配置。
 
     pi 的工具里带 bash，透传整个服务端环境等于把 VOS_* 一起交出去；
     密钥也只经环境变量传（不进命令行，避免出现在 ps 里）。
+    runtime_key：V-Scheduler 模式下传当前用户的 VOS 令牌（只在本回合环境里，
+    不落盘）；不传则用手填模式的 api_key。
 
     白名单里额外放行 PATENT_*：那是技能包自己的约定（技能目录、OA/地图/
     解读库位置），不给的话技能内部找不到自己的库。VOS_* 继续挡在外面。
@@ -1697,7 +1827,8 @@ def _pi_env(settings: dict, root: Path) -> dict:
             "HOME": str(root / ".home"),
             # 密钥只经环境变量传入（models.json 里用 $VOFFICE_AI_KEY 插值），
             # 不进命令行参数，ps 里看不到
-            "VOFFICE_AI_KEY": settings.get("api_key") or "",
+            "VOFFICE_AI_KEY": runtime_key if runtime_key is not None
+            else settings.get("api_key") or "",
             # 技能里偶尔需要自己定位技能根（而不是靠 cwd 下的 skills 软链）
             "PATENT_SKILLS_DIR": SKILLS_DIR,
         }
@@ -1755,10 +1886,17 @@ def _prepare_workdir(root: Path, uid: int = 0, gid: int = 0) -> None:
             pass
 
 
-def _write_models_json(root: Path, settings: dict) -> None:
-    """把用户在设置里填的网关写成 Pi 的自定义 provider。
+def _write_models_json(
+    root: Path,
+    settings: dict,
+    scheduler_models: list[dict] | None = None,
+) -> None:
+    """把当前生效的网关写成 Pi 的自定义 provider。
 
-    apiKey 用 `$VOFFICE_AI_KEY` 插值：密钥只经环境变量进入 pi，不落盘。
+    两条路径共用同一个 provider 名 `voffice`：
+      - 手填模式（本地）：baseUrl / 模型取设置页的值；
+      - V-Scheduler 模式（线上）：baseUrl 固定为 `{origin}/v1`，模型取实时目录。
+    apiKey 都是 `$VOFFICE_AI_KEY` 插值：密钥只经环境变量进入 pi，不落盘。
 
     为什么要显式声明 `reasoning` 与 `thinkingFormat`（不是可选装饰）：
       pi 只有在 `model.reasoning === true` 时才会去处理思考档位，否则一个
@@ -1770,14 +1908,32 @@ def _write_models_json(root: Path, settings: dict) -> None:
       这才是「不思考」该有的速度。
     """
     model = settings.get("model") or ""
-    provider = {
-        "baseUrl": settings.get("base_url") or DEFAULT_BASE_URL,
-        "api": "openai-completions",
-        "apiKey": "$VOFFICE_AI_KEY",
-        "models": [{"id": model, "reasoning": True, "compat": {"thinkingFormat": "deepseek"}}]
-        if model
-        else [],
-    }
+    if scheduler_models is not None:
+        # 目录里的模型不一定都是 DeepSeek：只有已知支持 thinking 参数的才声明
+        # compat，避免给别的上游发它不认识的 thinking 字段。
+        models = []
+        for row in scheduler_models:
+            entry = {"id": row["id"], "name": row.get("name") or row["id"]}
+            hint = f"{row['id']} {row.get('name') or ''}".lower()
+            if any(tag in hint for tag in ("deepseek", "mimo")):
+                entry["reasoning"] = True
+                entry["compat"] = {"thinkingFormat": "deepseek"}
+            models.append(entry)
+        provider = {
+            "baseUrl": f"{SCHEDULER_URL}/v1",
+            "api": "openai-completions",
+            "apiKey": "$VOFFICE_AI_KEY",
+            "models": models,
+        }
+    else:
+        provider = {
+            "baseUrl": settings.get("base_url") or DEFAULT_BASE_URL,
+            "api": "openai-completions",
+            "apiKey": "$VOFFICE_AI_KEY",
+            "models": [{"id": model, "reasoning": True, "compat": {"thinkingFormat": "deepseek"}}]
+            if model
+            else [],
+        }
     payload = {"providers": {"voffice": provider}}
     target = root / ".pi-agent" / "models.json"
     target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1979,23 +2135,37 @@ async def _run_turn(
     prompt: str,
     *,
     resume: bool,
+    auth_token: str = "",
 ) -> AsyncIterator[dict]:
     """跑一个回合，产出前端事件。调用方负责 SSE 包装。"""
     settings = load_settings(username)
-    if not (settings.get("api_key") or "").strip():
-        yield {
-            "type": "stop",
-            "kind": "preflight",
-            "message": "尚未配置模型密钥：请在「设置 → AI」里填写网关地址、模型与 API Key",
-        }
-        return
-    if not (settings.get("model") or "").strip():
-        yield {
-            "type": "stop",
-            "kind": "preflight",
-            "message": "尚未配置模型：请在「设置 → AI」里填写模型 ID",
-        }
-        return
+    scheduler_models: list[dict] | None = None
+    runtime_key: str | None = None
+    if scheduler_enabled():
+        # 线上：模型目录与推理地址都由 V-Scheduler 托管，密钥用当前用户令牌。
+        try:
+            scheduler_models = await _fetch_scheduler_models(auth_token)
+        except RuntimeError as exc:
+            yield {"type": "stop", "kind": "preflight", "message": str(exc)}
+            return
+        settings = {**settings, "model": _pick_model(settings, scheduler_models)}
+        runtime_key = auth_token
+    else:
+        # 本地：保持原来的手填网关校验，一行没删。
+        if not (settings.get("api_key") or "").strip():
+            yield {
+                "type": "stop",
+                "kind": "preflight",
+                "message": "尚未配置模型密钥：请在「设置 → AI」里填写网关地址、模型与 API Key",
+            }
+            return
+        if not (settings.get("model") or "").strip():
+            yield {
+                "type": "stop",
+                "kind": "preflight",
+                "message": "尚未配置模型：请在「设置 → AI」里填写模型 ID",
+            }
+            return
 
     root = session_dir(username, sid)
     # cwd 就用会话目录本身：里面只有 pi 自己的配置与会话文件，
@@ -2005,7 +2175,7 @@ async def _run_turn(
     # 目录属主也各不相同 —— 这是「A 扫不到 B」的根，不靠路径猜。
     uid, gid = await user_ids(username)
     _prepare_workdir(root, uid, gid)
-    _write_models_json(root, settings)
+    _write_models_json(root, settings, scheduler_models)
     if uid > 0 and os.geteuid() == 0:
         # pi 要读 models.json：降权后仍可读（里面只有 $VOFFICE_AI_KEY 占位）
         try:
@@ -2014,7 +2184,7 @@ async def _run_turn(
         except OSError:
             pass
     argv = _build_argv(settings, root, prompt, resume)
-    env = _pi_env(settings, root)
+    env = _pi_env(settings, root, runtime_key)
 
     turn_timeout = float(settings.get("turn_timeout_s") or 900)
     idle_timeout = float(settings.get("idle_timeout_s") or 240)
@@ -2590,6 +2760,7 @@ async def stream_turn(
     save: bool = False,
     autosave: bool = True,
     resume: bool = True,
+    auth_token: str = "",
 ) -> AsyncIterator[dict]:
     """带并发闸门 + 一次性兜底重试 + 落地（草稿/变更/落盘）的回合流。"""
     settings = load_settings(username)
@@ -2626,7 +2797,8 @@ async def stream_turn(
                     include_materials=True,
                 )
                 async for item in _run_turn(username, sid, prompt,
-                                            resume=resume and attempt == 0):
+                                            resume=resume and attempt == 0,
+                                            auth_token=auth_token):
                     if item["type"] == "final":
                         final = item
                     elif item["type"] == "failed":
@@ -2689,6 +2861,7 @@ async def sse_turn(
     save: bool = False,
     autosave: bool = True,
     resume: bool = True,
+    auth_token: str = "",
 ) -> AsyncIterator[str]:
     """SSE 包装：始终以一个终止事件收尾，前端不用猜。"""
     yield _sse({"type": "ready", "session": sid})
@@ -2696,7 +2869,7 @@ async def sse_turn(
         async for item in stream_turn(
             username, sid, instruction,
             anchor=anchor, selection=selection, save=save,
-            autosave=autosave, resume=resume,
+            autosave=autosave, resume=resume, auth_token=auth_token,
         ):
             if item["type"] == "final":
                 # 注意顺序：type 放最后，否则会被 item 里的 "final" 覆盖
@@ -2807,6 +2980,24 @@ async def put_settings(request: Request, patch: SettingsPatch) -> JSONResponse:
     # 现象是「设置一改，AI 立刻连不上」。异步跑，别拖慢这次请求。
     egress_guard.refresh_soon()
     return JSONResponse(public_settings(data))
+
+
+@router.get("/models")
+async def list_models(request: Request) -> JSONResponse:
+    """当前可选的模型列表：V-Scheduler 模式下拉用；本地手填模式返回空。"""
+    username = await _user(request)
+    if not scheduler_enabled():
+        return JSONResponse({"source": "manual", "models": [], "selected": ""})
+    try:
+        rows = await _fetch_scheduler_models(_bearer_token(request))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    selected = _pick_model(load_settings(username), rows)
+    return JSONResponse({
+        "source": "scheduler",
+        "models": rows,
+        "selected": selected,
+    })
 
 
 @router.get("/sessions")
@@ -3358,6 +3549,7 @@ async def stop_session(request: Request, sid: str) -> JSONResponse:
 @router.post("/sessions/{sid}/chat")
 async def chat(request: Request, sid: str, body: ChatRequest) -> StreamingResponse:
     username = await _user(request)
+    auth_token = _bearer_token(request)
     root = session_dir(username, sid)
     prompt = (body.prompt or "").strip()
     if not prompt:
@@ -3379,6 +3571,7 @@ async def chat(request: Request, sid: str, body: ChatRequest) -> StreamingRespon
             save=body.save,
             autosave=body.autosave,
             resume=resume,
+            auth_token=auth_token,
         ),
         media_type="text/event-stream",
         headers={

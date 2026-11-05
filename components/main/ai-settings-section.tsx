@@ -7,8 +7,10 @@ import { cn } from "@/lib/utils";
 import {
   aiHealth,
   getAiSettings,
+  listAiModels,
   putAiSettings,
   type AiHealth,
+  type AiModelOption,
   type AiSettings,
 } from "@/utils/ai/client";
 
@@ -38,6 +40,8 @@ export function AiSettingsSection() {
   const [idleTimeout, setIdleTimeout] = useState("240");
   const [state, setState] = useState<"idle" | "loading" | "saving" | "saved" | "error">("loading");
   const [message, setMessage] = useState<string | null>(null);
+  // V-Scheduler 模式下的可选模型（线上由它托管；本地手填模式为空）
+  const [modelOptions, setModelOptions] = useState<AiModelOption[]>([]);
 
   const apply = useCallback((data: AiSettings) => {
     setSettings(data);
@@ -61,6 +65,27 @@ export function AiSettingsSection() {
         if (!alive) return;
         apply(data);
         setState("idle");
+        if (data.model_source === "scheduler") {
+          // 目录里没有当前保存的模型时，服务端会回退到第一个；界面同步展示它，
+          // 避免输入框里显示一个实际没在用的 ID。
+          try {
+            const list = await listAiModels();
+            if (!alive) return;
+            setModelOptions(list.models);
+            if (list.models.length === 0) {
+              setModel("");
+            } else if (list.selected) {
+              setModel((current) =>
+                list.models.some((item) => item.id === current)
+                  ? current
+                  : list.selected,
+              );
+            }
+          } catch (err) {
+            if (!alive) return;
+            setMessage(String(err));
+          }
+        }
         void aiHealth()
           .then((h) => alive && setHealth(h))
           .catch(() => alive && setHealth(null));
@@ -75,12 +100,13 @@ export function AiSettingsSection() {
     };
   }, [apply]);
 
+  const scheduler = settings?.model_source === "scheduler";
+
   const save = async () => {
     setState("saving");
     setMessage(null);
     try {
       const patch: Record<string, unknown> = {
-        base_url: baseUrl.trim(),
         model: model.trim(),
         thinking,
         allow_shell: allowShell,
@@ -88,8 +114,12 @@ export function AiSettingsSection() {
         turn_timeout_s: Math.max(30, Math.min(7200, Number(turnTimeout) || 900)),
         idle_timeout_s: Math.max(15, Math.min(3600, Number(idleTimeout) || 240)),
       };
-      // 留空 = 不改密钥（服务端只回「配没配」，拿不到明文）
-      if (apiKey.trim()) patch.api_key = apiKey.trim();
+      if (!scheduler) {
+        // 手填模式才落网关与密钥；V-Scheduler 模式的地址/凭证由服务端托管。
+        patch.base_url = baseUrl.trim();
+        // 留空 = 不改密钥（服务端只回「配没配」，拿不到明文）
+        if (apiKey.trim()) patch.api_key = apiKey.trim();
+      }
       apply(await putAiSettings(patch));
       setState("saved");
       setMessage(t({ id: "Saved", message: "Saved" }));
@@ -132,6 +162,16 @@ export function AiSettingsSection() {
         })}
       </p>
 
+      {scheduler ? (
+        <div className="rounded-xl border border-primary/20 bg-primary/5 px-3.5 py-2.5 text-xs text-text-secondary">
+          {t({
+            id: "Scheduler managed hint",
+            message:
+              "Models are managed by V-Scheduler for this account. Pick one below; the gateway address and credentials are provided by the platform.",
+          })}
+        </div>
+      ) : null}
+
       {state === "loading" && !settings ? (
         <div className="flex items-center gap-2 text-sm text-text-secondary">
           <Loader2 className="h-4 w-4 animate-spin" />
@@ -140,57 +180,80 @@ export function AiSettingsSection() {
       ) : (
         <div className="space-y-4 rounded-2xl border border-border bg-card p-4">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <label className="space-y-1.5">
-              <span className="text-xs font-medium text-text-secondary">
-                {t({ id: "Gateway base URL", message: "Gateway base URL" })}
-              </span>
-              <input
-                className={FIELD}
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder={
-                  settings?.effective_base_url || "https://api.deepseek.com/v1"
-                }
-                spellCheck={false}
-              />
-            </label>
+            {!scheduler ? (
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-text-secondary">
+                  {t({ id: "Gateway base URL", message: "Gateway base URL" })}
+                </span>
+                <input
+                  className={FIELD}
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                  placeholder={
+                    settings?.effective_base_url || "https://api.deepseek.com/v1"
+                  }
+                  spellCheck={false}
+                />
+              </label>
+            ) : null}
 
             <label className="space-y-1.5">
               <span className="text-xs font-medium text-text-secondary">
                 {t({ id: "Model ID", message: "Model ID" })}
               </span>
-              <input
-                className={FIELD}
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder="deepseek-chat"
-                spellCheck={false}
-              />
+              {scheduler ? (
+                <select
+                  className={FIELD}
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                >
+                  {modelOptions.length === 0 ? (
+                    <option value="">
+                      {t({ id: "No models", message: "No models available" })}
+                    </option>
+                  ) : null}
+                  {modelOptions.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name === item.id ? item.id : `${item.name} · ${item.id}`}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  className={FIELD}
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  placeholder="deepseek-chat"
+                  spellCheck={false}
+                />
+              )}
             </label>
 
-            <label className="space-y-1.5">
-              <span className="text-xs font-medium text-text-secondary">
-                {t({ id: "API key", message: "API key" })}
-                {settings?.has_api_key ? (
-                  <span className="ml-2 inline-flex items-center gap-1 text-[11px] text-green-600">
-                    <Check className="h-3 w-3" />
-                    {t({ id: "Configured", message: "Configured" })}
-                  </span>
-                ) : null}
-              </span>
-              <input
-                className={FIELD}
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder={
-                  settings?.has_api_key
-                    ? t({ id: "Leave blank to keep", message: "Leave blank to keep" })
-                    : "sk-..."
-                }
-                autoComplete="off"
-              />
-            </label>
+            {!scheduler ? (
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-text-secondary">
+                  {t({ id: "API key", message: "API key" })}
+                  {settings?.has_api_key ? (
+                    <span className="ml-2 inline-flex items-center gap-1 text-[11px] text-green-600">
+                      <Check className="h-3 w-3" />
+                      {t({ id: "Configured", message: "Configured" })}
+                    </span>
+                  ) : null}
+                </span>
+                <input
+                  className={FIELD}
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={
+                    settings?.has_api_key
+                      ? t({ id: "Leave blank to keep", message: "Leave blank to keep" })
+                      : "sk-..."
+                  }
+                  autoComplete="off"
+                />
+              </label>
+            ) : null}
 
             <label className="space-y-1.5">
               <span className="text-xs font-medium text-text-secondary">

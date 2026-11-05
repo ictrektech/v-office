@@ -18,6 +18,14 @@ frontend:
 platform:
   version: ">=3.0.0"
 
+# 线上模型由 V-Scheduler 托管（见 docker-compose 的 V_SCHEDULER_URL）。
+# 本地独立部署不装这个应用也能用，只是走设置页手填的网关。
+dependencies:
+  apps:
+    - id: com.ictrek.v-scheduler
+      version: latest
+      optional: false
+
 require-profiles: true
 
 storage:

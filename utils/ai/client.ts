@@ -78,6 +78,8 @@ export interface AiSettings {
   system_prompt: string;
   /** 服务端只回「配没配」，不回明文密钥 */
   has_api_key: boolean;
+  /** 线上 = scheduler（模型由 V-Scheduler 托管）；本地 = manual（手填网关） */
+  model_source: "scheduler" | "manual";
   effective_base_url: string;
   /** 当前实际生效的工具白名单（服务端回传，避免两边口径不一致） */
   effective_tools: string;
@@ -104,6 +106,24 @@ export async function putAiSettings(
     body: JSON.stringify(patch),
   });
   return jsonOrThrow<AiSettings>(resp);
+}
+
+export interface AiModelOption {
+  id: string;
+  name: string;
+}
+
+/**
+ * 当前可选模型：V-Scheduler 模式拉实时目录（按当前登录用户可见），
+ * 本地手填模式返回空列表（继续用输入框）。
+ */
+export async function listAiModels(): Promise<{
+  source: "scheduler" | "manual";
+  models: AiModelOption[];
+  selected: string;
+}> {
+  const resp = await aiFetch("/models", { cache: "no-store" });
+  return jsonOrThrow(resp);
 }
 
 // ── 会话 ───────────────────────────────────────────────────────────────────
