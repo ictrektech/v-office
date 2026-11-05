@@ -16,8 +16,9 @@ import { DEFAULT_ENGINE, type Engine } from "@/utils/editor/engine";
  * 把语言设置解析成真正生效的语言。
  *
  * `auto`（设置里的"跟随 VOS"）的优先级是：**VOS 门户的语言 → 浏览器语言**。
- * 应用跑在门户的同域 iframe 里，门户选的语言写在共享的 localStorage 中（读取
- * 见 utils/vos/locale.ts）；独立部署没有门户，就读不到、回落浏览器语言。
+ * 应用跑在门户的同域 iframe 里：VOS 1.1+ 通过 `window.vos_platform` 的
+ * `getState()` / `locale-change` 提供当前语言，老门户写在共享 localStorage 中
+ * （读取与订阅见 utils/vos/locale.ts）；独立部署没有门户，就回落浏览器语言。
  */
 function resolveLanguage(language: Language, vosLanguage: Locale | null): Locale {
   if (language !== LocaleExtend.Auto) return language as Locale;

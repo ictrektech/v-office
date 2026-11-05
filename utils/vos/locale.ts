@@ -21,10 +21,10 @@
  *
  *   1. 读不到就返回 null，**不要**自己猜一个语言：独立部署（非 VOS）下没有门户，
  *      回落浏览器语言才是对的。调用方负责回落。
- *   2. 门户的语言 API（`window.vos_platform.getState()` /
- *      `broadcast.on('locale-change')`）是新版本才有的能力——**当前部署的门户
- *      注入的对象只有 oauth2，没有语言相关方法**。所以这里把它当锦上添花：有就
- *      用来拿即时通知，没有就靠同源 storage 事件，两条路互不依赖。
+ *   2. VOS 1.1+ 会向同域 iframe 注入 `window.vos_platform`，语言走
+ *      `getState()` + `broadcast.on('locale-change')`（与 V-ChatCut 的做法一致）。
+ *      注入时机可能**晚于本模块执行**，所以内嵌时最多等 1.5s；平台 API 在线时以
+ *      它为准，同源 storage 事件只作老门户的兜底。
  *   3. 多个候选键时优先"明确写了语言"的键，再按版本号新的优先（门户升级后旧键
  *      会残留，取到旧键就会一直跟随旧语言）。
  */
@@ -186,7 +186,7 @@ export function readVOSLocale(storage: Storage | null = defaultStorage()): Local
   return null;
 }
 
-/** 新版本门户可能注入的语言 API（当前部署没有，故整体可选）。 */
+/** 门户注入的语言 API（VOS 1.1+；老门户没有，故整体可选）。 */
 interface VOSLocaleBridge {
   getState?: () => Promise<{ locale?: unknown }>;
   broadcast?: {
@@ -210,48 +210,84 @@ function localeBridge(): VOSLocaleBridge | null {
 /**
  * 订阅门户语言的变化。
  *
- * 主力是**同源 storage 事件**：门户改了语言会写 localStorage，同源的其它标签/
- * iframe 会收到事件（当前标签不会，所以补一个 focus 兜底：用户从门户切回来时
- * 重新读一次）。新版本门户若提供语言 API，再用它拿即时通知——两条路各自独立，
- * 谁在都能工作。
+ * 与 V-ChatCut `alignWithPlatformLocale` 同一套顺序：
+ *
+ *   1. 内嵌时先等 `window.vos_platform` 注入（VOS 在 iframe 加载后才挂这个对象，
+ *      模块执行时读太早会永远拿不到）；
+ *   2. 先订阅 `locale-change`、再取 `getState()` 快照，启动期间的切换不会丢；
+ *   3. 平台 API 在线后以平台为准，同源 storage / focus 只作老门户的兜底——否则
+ *      门户升级残留的旧键会把平台语言又盖回去。
+ *
+ * 读不到语言（或语言码认不出）时**不 apply(null)**：那会把已知语言打回浏览器
+ * 语言，用户从门户切回来时界面会闪一下。
  */
-export function watchVOSLocale(apply: (locale: Locale | null) => void): () => void {
+export function watchVOSLocale(apply: (locale: Locale) => void): () => void {
   if (typeof window === "undefined") return () => {};
 
-  const readAndApply = () => apply(readVOSLocale());
+  let bridgeActive = false;
+  let stopBridge: (() => void) | undefined;
+  let stopWaiting: (() => void) | undefined;
+
+  const applyBridgeState = (state: { locale?: unknown } | null | undefined) => {
+    const locale = normalizeVOSLocale(state?.locale);
+    if (locale) apply(locale);
+  };
+
+  const attachBridge = (bridge: VOSLocaleBridge) => {
+    if (bridgeActive) return;
+    bridgeActive = true;
+    let revision = 0;
+    try {
+      // 先订阅、再取快照：启动期间发生的变更才不会被迟到的快照盖掉
+      const stop = bridge.broadcast?.on?.("locale-change", (state) => {
+        revision += 1;
+        applyBridgeState(state);
+      });
+      stopBridge = typeof stop === "function" ? stop : undefined;
+    } catch {
+      // 没有事件通道不影响下面取快照（老桥可能只实现了 getState）
+    }
+    const snapshotRevision = revision;
+    void bridge
+      .getState?.()
+      .then((state) => {
+        if (revision === snapshotRevision) applyBridgeState(state);
+      })
+      .catch(() => {
+        // 快照失败时放开 storage 兜底，别让 Auto 一直停在浏览器语言
+        bridgeActive = false;
+      });
+  };
+
+  const readAndApply = () => {
+    if (bridgeActive) return; // 平台在线时以平台为准，旧键不许回盖
+    const locale = readVOSLocale();
+    if (locale) apply(locale);
+  };
 
   window.addEventListener("storage", readAndApply);
   window.addEventListener("focus", readAndApply);
 
   const bridge = localeBridge();
-  let stopBridge: (() => void) | undefined;
   if (bridge) {
-    let revision = 0;
-    const applySnapshot = (state: { locale?: unknown }) => {
-      const locale = normalizeVOSLocale(state?.locale);
-      // 门户 API 给了个认不出的值时不清理已有结果，避免把已知语言打回浏览器语言
-      if (locale) apply(locale);
-    };
-    try {
-      // 先订阅、再取快照：启动期间发生的变更才不会被迟到的快照盖掉
-      const stop = bridge.broadcast?.on?.("locale-change", (state) => {
-        revision += 1;
-        applySnapshot(state);
-      });
-      stopBridge = typeof stop === "function" ? stop : undefined;
-      const snapshotRevision = revision;
-      void bridge
-        .getState?.()
-        .then((state) => {
-          if (revision === snapshotRevision) applySnapshot(state);
-        })
-        .catch(() => undefined);
-    } catch {
-      // 门户 API 行为不稳定时静默降级到 storage 事件
-    }
+    attachBridge(bridge);
+  } else if (window.parent !== window) {
+    // 内嵌在门户里但对象还没挂上：等最多 1.5s，别把「还没注入」当成没有
+    const started = Date.now();
+    const timer = window.setInterval(() => {
+      const next = localeBridge();
+      if (next) {
+        window.clearInterval(timer);
+        attachBridge(next);
+      } else if (Date.now() - started >= 1_500) {
+        window.clearInterval(timer);
+      }
+    }, 50);
+    stopWaiting = () => window.clearInterval(timer);
   }
 
   return () => {
+    stopWaiting?.();
     window.removeEventListener("storage", readAndApply);
     window.removeEventListener("focus", readAndApply);
     stopBridge?.();
