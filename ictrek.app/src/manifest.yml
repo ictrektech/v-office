@@ -23,7 +23,8 @@ platform:
 dependencies:
   apps:
     - id: com.ictrek.v-scheduler
-      version: latest
+      # 应用商店用 Rust semver 解析版本范围，不认 "latest"；"*" 表示任意已发布版本
+      version: "*"
       optional: false
 
 require-profiles: true
