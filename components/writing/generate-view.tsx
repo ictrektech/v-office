@@ -25,6 +25,7 @@ import { API_BASE, authHeaders } from "@/utils/writing/client";
 import { isVOSMode } from "@/utils/vos/fastpath";
 import { exportAiDocx, importAiDraft } from "@/utils/ai/client";
 import { openStoredFile } from "@/utils/vos/storage";
+import { useIsChineseUI } from "@/store";
 
 export type StreamKind =
   | "parse"
@@ -69,12 +70,13 @@ interface StagePill {
   key: StreamKind;
   icon: string;
   label: string;
+  labelEn: string;
 }
 
 const STAGES: StagePill[] = [
-  { key: "draft", icon: "✍️", label: "写手起草" },
-  { key: "reviewfix", icon: "🔍", label: "审查改稿" },
-  { key: "signoff", icon: "🏛️", label: "审批定稿" },
+  { key: "draft", icon: "✍️", label: "写手起草", labelEn: "Drafting" },
+  { key: "reviewfix", icon: "🔍", label: "审查改稿", labelEn: "Review & Revise" },
+  { key: "signoff", icon: "🏛️", label: "审批定稿", labelEn: "Approval & Finalize" },
 ];
 
 interface GenerateViewProps {
@@ -123,6 +125,7 @@ export function GenerateView({
   onSaveToMyDocs,
   onReset,
 }: GenerateViewProps) {
+  const zh = useIsChineseUI();
   const [historyOpen, setHistoryOpen] = useState(false);
   const streamRef = useRef<HTMLDivElement>(null);
   const [reviseDraft, setReviseDraft] = useState("");
@@ -163,7 +166,7 @@ export function GenerateView({
                   }
                 >
                   <span className="text-[13px]">{s.icon}</span>
-                  {s.label}
+                  {zh ? s.label : s.labelEn}
                   {state === "done" && <span className="text-[11px]">✓</span>}
                 </span>
               </div>
@@ -174,7 +177,9 @@ export function GenerateView({
           <div className="mt-3 flex items-center gap-3">
             <span className="inline-flex items-center gap-2 rounded-lg bg-[#2C2C2E] text-white/90 text-[13px] px-3 py-1.5">
               <span className={"inline-block w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white " + (exporting ? "" : "animate-spin")} />
-              {exporting ? "正在生成文档并上传…" : "三阶段协作中"}
+              {exporting
+                ? zh ? "正在生成文档并上传…" : "Generating and uploading the document…"
+                : zh ? "三阶段协作中" : "Three stages in progress"}
             </span>
             {stageLabel && (
               <span className="text-[13px] text-[#D93025] font-medium">{stageLabel}</span>
@@ -183,7 +188,7 @@ export function GenerateView({
               onClick={onStop}
               className="ml-auto text-[13px] text-gray-500 hover:text-[#D93025] transition-colors"
             >
-              停止生成
+              {zh ? "停止生成" : "Stop"}
             </button>
           </div>
         )}
@@ -192,13 +197,13 @@ export function GenerateView({
       {/* 错误提示 */}
       {error && !result && (
         <div className="bg-white rounded-2xl border border-[#FFD5CC] bg-[#FFF5F3] p-5">
-          <div className="text-[14px] text-[#D93025] font-medium">生成失败</div>
+          <div className="text-[14px] text-[#D93025] font-medium">{zh ? "生成失败" : "Generation failed"}</div>
           <div className="mt-1 text-[14px] text-gray-600 break-all">{error}</div>
           <button
             onClick={onBackToConfig}
             className="mt-3 rounded-full bg-[#007AFF] text-white text-[14px] font-medium px-5 py-2 hover:bg-[#0071EB] active:scale-[0.98] transition"
           >
-            返回修改
+            {zh ? "返回修改" : "Back to settings"}
           </button>
         </div>
       )}
@@ -208,8 +213,10 @@ export function GenerateView({
         {materialChars !== null && (
           <div className="text-[13px] text-gray-400 px-1">
             {materialChars > 0
-              ? `📄 已解析参考材料，共 ${materialChars} 字`
-              : "📄 参考材料已送入助手工作目录"}
+              ? zh
+                ? `📄 已解析参考材料，共 ${materialChars} 字`
+                : `📄 Reference materials parsed: ${materialChars} characters`
+              : zh ? "📄 参考材料已送入助手工作目录" : "📄 Reference materials sent to the assistant workspace"}
           </div>
         )}
         {items.map((item) => (
@@ -226,13 +233,13 @@ export function GenerateView({
                     <Sparkles className="w-5 h-5" strokeWidth={1.5} />
                   </span>
                   <div>
-                    <h2 className="text-[16px] font-semibold text-[#1D1D1F]">文档导出</h2>
-                    <p className="text-[12px] text-gray-400 mt-0.5">选择导出格式，开始下载您的文档</p>
+                    <h2 className="text-[16px] font-semibold text-[#1D1D1F]">{zh ? "文档导出" : "Export document"}</h2>
+                    <p className="text-[12px] text-gray-400 mt-0.5">{zh ? "选择导出格式，开始下载您的文档" : "Choose a format to download your document"}</p>
                   </div>
                 </div>
                 <span className="text-[12px] text-gray-400 flex items-center gap-1.5 shrink-0">
                   <span className="w-1.5 h-1.5 rounded-full bg-gray-300" />
-                  导出后自动同步至稿内库
+                  {zh ? "导出后自动同步至稿内库" : "Synced to My Documents after export"}
                 </span>
               </div>
               <div className="mt-5 flex flex-wrap items-center gap-3">
@@ -251,12 +258,12 @@ export function GenerateView({
                   <button
                     onClick={() => setHistoryOpen(true)}
                     className="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-4 py-2 text-[14px] font-medium text-gray-600 hover:border-gray-300 hover:text-gray-900 active:scale-[0.98] transition"
-                    title="回放五阶段修订过程"
+                    title={zh ? "回放五阶段修订过程" : "Replay the five-stage revision process"}
                   >
                     <span className="flex w-6 h-6 rounded-lg bg-gray-100 items-center justify-center text-gray-500">
                       <ScrollText className="w-3.5 h-3.5" strokeWidth={2} />
                     </span>
-                    修订过程
+                    {zh ? "修订过程" : "Revision history"}
                   </button>
                 )}
               </div>
@@ -264,7 +271,7 @@ export function GenerateView({
                 onClick={onBackToConfig}
                 className="mt-5 text-[13px] text-[#007AFF] hover:underline flex items-center gap-1"
               >
-                <span className="inline-block rotate-180">←</span> 调整设置重新生成
+                <span className="inline-block rotate-180">←</span> {zh ? "调整设置重新生成" : "Adjust settings and regenerate"}
               </button>
             </div>
 
@@ -277,10 +284,10 @@ export function GenerateView({
             <div className="bg-white rounded-2xl border border-black/6 shadow-sm p-5">
               <div className="flex items-baseline justify-between">
                 <h3 className="text-[15px] font-semibold text-[#1D1D1F]">
-                  局部微调
+                  {zh ? "局部微调" : "Fine-tune"}
                 </h3>
                 <span className="text-[12px] text-gray-300">
-                  AI 按指令修订全文，其余内容保持原样
+                  {zh ? "AI 按指令修订全文，其余内容保持原样" : "AI revises the whole draft as instructed and keeps everything else unchanged"}
                 </span>
               </div>
               <div className="mt-3 flex gap-2">
@@ -290,7 +297,7 @@ export function GenerateView({
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.nativeEvent.isComposing) submitRevise();
                   }}
-                  placeholder="如：把落款改为「市政务服务和数据局」；第二段补充数据来源"
+                  placeholder={zh ? "如：把落款改为「市政务服务和数据局」；第二段补充数据来源" : "e.g. change the signature to “Municipal Government Services and Data Bureau”; add a data source to paragraph 2"}
                   className="flex-1 rounded-xl border border-gray-200 px-4 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-primary transition placeholder:text-gray-300"
                 />
                 <button
@@ -303,7 +310,7 @@ export function GenerateView({
                       : "bg-gray-100 text-gray-300 cursor-not-allowed")
                   }
                 >
-                  {revising ? "修订中…" : "发送"}
+                  {revising ? (zh ? "修订中…" : "Revising…") : (zh ? "发送" : "Send")}
                 </button>
               </div>
               {onOpenStudio ? (
@@ -312,9 +319,9 @@ export function GenerateView({
                   className="mt-2.5 inline-flex items-center gap-1.5 rounded-xl border border-gray-200 px-3.5 py-2 text-[13px] font-medium text-[#1D1D1F] transition hover:border-primary hover:text-primary"
                 >
                   <FileText className="h-3.5 w-3.5" />
-                  在工作台里微调
+                  {zh ? "在工作台里微调" : "Fine-tune in the workspace"}
                   <span className="text-[11.5px] text-gray-400">
-                    当前成稿带进 AI 工作台，接着和 AI 对话
+                    {zh ? "当前成稿带进 AI 工作台，接着和 AI 对话" : "Bring the current draft into the AI workspace and continue the conversation"}
                   </span>
                 </button>
               ) : null}
@@ -327,28 +334,30 @@ export function GenerateView({
                 {(revising || exporting) && (
                   <span className="flex items-center gap-2 text-[12.5px] text-gray-400">
                     <span className="inline-block w-3 h-3 rounded-full border-2 border-gray-200 border-t-primary animate-spin" />
-                    {exporting ? "正在回退并重新导出文档…" : "正在按指令修订，完成后自动更新成稿与导出文件"}
+                    {exporting
+                      ? zh ? "正在回退并重新导出文档…" : "Rolling back and re-exporting the document…"
+                      : zh ? "正在按指令修订，完成后自动更新成稿与导出文件" : "Revising as instructed; the final draft and exports will update automatically"}
                   </span>
                 )}
                 {(result.revisions ?? 0) > 0 && !revising && !exporting && (
                   <button
                     onClick={onUndo}
                     className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[12.5px] text-gray-500 hover:text-[#D93025] hover:border-[#FFD5CC] active:scale-[0.97] transition"
-                    title="回退到上一版成稿，并重新导出文件"
+                    title={zh ? "回退到上一版成稿，并重新导出文件" : "Revert to the previous final draft and re-export the files"}
                   >
-                    ↩ 撤销本次修改
+                    ↩ {zh ? "撤销本次修改" : "Undo this change"}
                   </button>
                 )}
                 <button
                   onClick={() => {
-                    if (confirm("重置后将从 0 开始重新生成（材料与写作设置保留）。确定重置？")) {
+                    if (confirm(zh ? "重置后将从 0 开始重新生成（材料与写作设置保留）。确定重置？" : "Regenerating will start from scratch. Materials and writing settings are kept. Reset?")) {
                       onReset();
                     }
                   }}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-[12.5px] text-gray-400 hover:text-gray-700 hover:border-gray-300 active:scale-[0.97] transition"
-                  title="从 0 开始：清空生成过程与成稿（材料与写作设置保留）"
+                  title={zh ? "从 0 开始：清空生成过程与成稿（材料与写作设置保留）" : "Start over: clear the process and final draft (materials and writing settings are kept)"}
                 >
-                  ⟲ 重置
+                  ⟲ {zh ? "重置" : "Reset"}
                 </button>
               </div>
             </div>
@@ -378,21 +387,22 @@ function stageState(items: StreamItem[], key: StreamKind): "active" | "done" | "
 // ── 单张流式卡片（仿网页版大模型消息：角色头像 + 思考折叠 + markdown 正文）──
 
 /** 阶段 → 头像（渐变底 + 单字）与点缀色 */
-const KIND_META: Record<StreamKind, { char: string; grad: string }> = {
-  parse: { char: "析", grad: "from-[#A6ADB8] to-[#7C838E]" },
-  draft: { char: "写", grad: "from-[#5CA1FA] to-[#2E6FE5]" },
+const KIND_META: Record<StreamKind, { char: string; charEn: string; grad: string }> = {
+  parse: { char: "析", charEn: "A", grad: "from-[#A6ADB8] to-[#7C838E]" },
+  draft: { char: "写", charEn: "W", grad: "from-[#5CA1FA] to-[#2E6FE5]" },
   // 三阶段新管线
-  reviewfix: { char: "改", grad: "from-[#FF6A61] to-[#E5452F]" },
-  signoff: { char: "定", grad: "from-[#4A4A4E] to-[#1D1D1F]" },
+  reviewfix: { char: "改", charEn: "R", grad: "from-[#FF6A61] to-[#E5452F]" },
+  signoff: { char: "定", charEn: "F", grad: "from-[#4A4A4E] to-[#1D1D1F]" },
   // 旧五阶段（历史会话恢复）
-  review: { char: "审", grad: "from-[#FF6A61] to-[#E5452F]" },
-  rewrite: { char: "推", grad: "from-[#FF8F4D] to-[#EC5B22]" },
-  audit: { char: "核", grad: "from-[#F2B33D] to-[#D98E0B]" },
-  finalize: { char: "定", grad: "from-[#4A4A4E] to-[#1D1D1F]" },
-  revise: { char: "调", grad: "from-[#38C6B9] to-[#0FA396]" },
+  review: { char: "审", charEn: "R", grad: "from-[#FF6A61] to-[#E5452F]" },
+  rewrite: { char: "推", charEn: "P", grad: "from-[#FF8F4D] to-[#EC5B22]" },
+  audit: { char: "核", charEn: "C", grad: "from-[#F2B33D] to-[#D98E0B]" },
+  finalize: { char: "定", charEn: "F", grad: "from-[#4A4A4E] to-[#1D1D1F]" },
+  revise: { char: "调", charEn: "T", grad: "from-[#38C6B9] to-[#0FA396]" },
 };
 
 function StreamCard({ item }: { item: StreamItem }) {
+  const zh = useIsChineseUI();
   const meta = KIND_META[item.kind] ?? KIND_META.parse;
   /** 只有最终输出（审批定稿 / 局部微调的正文）才作为正文展示，其余阶段产出一律算思考过程 */
   const isFinalOutput = item.kind === "signoff" || item.kind === "revise";
@@ -451,16 +461,16 @@ function StreamCard({ item }: { item: StreamItem }) {
             meta.grad
           }
         >
-          {meta.char}
+          {zh ? meta.char : meta.charEn}
         </span>
         <span className="text-[14px] font-semibold text-gray-900">{item.title}</span>
         {item.status === "active" ? (
           <span className="flex items-center gap-1.5 text-[12px] text-gray-400">
             <Loader2 className="w-3 h-3 animate-spin" />
-            工作中…
+            {zh ? "工作中…" : "Working…"}
           </span>
         ) : (
-          <span className="text-[12px] text-gray-300">已完成</span>
+          <span className="text-[12px] text-gray-300">{zh ? "已完成" : "Done"}</span>
         )}
       </div>
 
@@ -486,10 +496,14 @@ function StreamCard({ item }: { item: StreamItem }) {
               <Sparkles className="w-3.5 h-3.5 animate-pulse" />
             )}
             {thinkingDone
-              ? `已深度思考${
-                  (item.elapsed ?? elapsed) ? `（用时 ${item.elapsed ?? elapsed} 秒）` : ""
-                }`
-              : "思考中…"}
+              ? zh
+                ? `已深度思考${
+                    (item.elapsed ?? elapsed) ? `（用时 ${item.elapsed ?? elapsed} 秒）` : ""
+                  }`
+                : `Thought deeply${
+                    (item.elapsed ?? elapsed) ? ` (${item.elapsed ?? elapsed}s)` : ""
+                  }`
+              : zh ? "思考中…" : "Thinking…"}
           </button>
           {open && (thinkingAll || item.tools.length > 0) && (
             <div
@@ -752,6 +766,7 @@ function SaveToMyDocsButton({
 }: {
   onSave: () => Promise<{ ok: boolean; message: string }>;
 }) {
+  const zh = useIsChineseUI();
   const [vos, setVos] = useState(false);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
@@ -772,10 +787,10 @@ function SaveToMyDocsButton({
         setDone(true);
         window.setTimeout(() => setDone(false), 2500);
       } else {
-        setFailed(r.message || "保存失败");
+        setFailed(r.message || (zh ? "保存失败" : "Save failed"));
       }
     } catch (err) {
-      setFailed(err instanceof Error ? err.message : "保存失败");
+      setFailed(err instanceof Error ? err.message : (zh ? "保存失败" : "Save failed"));
     } finally {
       setBusy(false);
     }
@@ -792,12 +807,18 @@ function SaveToMyDocsButton({
             ? "border-gray-200 bg-gray-50 text-gray-500"
             : "border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:text-gray-900"
       }`}
-      title="把当前成稿导出并保存到「我的文档」"
+      title={zh ? "把当前成稿导出并保存到「我的文档」" : "Export the current final draft to My Documents"}
     >
       <span className="flex w-6 h-6 rounded-lg bg-indigo-100 items-center justify-center text-indigo-500">
         <HardDrive className="w-3.5 h-3.5" strokeWidth={2} />
       </span>
-      {busy ? "保存中…" : done ? "已保存" : failed ? "保存失败，点击重试" : "保存到我的文档"}
+      {busy
+        ? zh ? "保存中…" : "Saving…"
+        : done
+          ? zh ? "已保存" : "Saved"
+          : failed
+            ? zh ? "保存失败，点击重试" : "Save failed — click to retry"
+            : zh ? "保存到我的文档" : "Save to My Documents"}
     </button>
   );
 }
@@ -819,6 +840,7 @@ function ExportWord({
   title?: string;
   content?: string;
 }) {
+  const zh = useIsChineseUI();
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const ready = Boolean(sessionId && content && content.trim());
@@ -847,7 +869,7 @@ function ExportWord({
         <span className="flex w-6 h-6 rounded-lg bg-blue-100 items-center justify-center text-blue-500">
           <FileText className="w-3.5 h-3.5" strokeWidth={2} />
         </span>
-        下载 Word
+        {zh ? "下载 Word" : "Download Word"}
       </button>
     );
   }
@@ -865,7 +887,11 @@ function ExportWord({
       <span className="flex w-6 h-6 rounded-lg bg-white/20 items-center justify-center text-white">
         <FileText className="w-3.5 h-3.5" strokeWidth={2} />
       </span>
-      {busy ? "下载中…" : failed ? "下载失败，点击重试" : "下载 Word"}
+      {busy
+        ? zh ? "下载中…" : "Downloading…"
+        : failed
+          ? zh ? "下载失败，点击重试" : "Download failed — click to retry"
+          : zh ? "下载 Word" : "Download Word"}
       {!busy && !failed && <Check className="w-4 h-4" strokeWidth={2.5} />}
     </button>
   );
@@ -887,6 +913,7 @@ function ExportPdf({
   title?: string;
   content?: string;
 }) {
+  const zh = useIsChineseUI();
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const ready = Boolean(sessionId && content && content.trim());
@@ -909,7 +936,7 @@ function ExportPdf({
         formatFrom: AvsFileType.AVS_FILE_DOCUMENT_DOCX,
         formatTo: AvsFileType.AVS_FILE_CROSSPLATFORM_PDF,
       });
-      if (!result.output) throw new Error("转换失败");
+      if (!result.output) throw new Error(zh ? "转换失败" : "Conversion failed");
       downloadBlob(
         new Blob([result.output as BlobPart], {
           type: "application/pdf",
@@ -922,7 +949,7 @@ function ExportPdf({
     } finally {
       setBusy(false);
     }
-  }, [ready, busy, sessionId, content, title]);
+  }, [ready, busy, sessionId, content, title, zh]);
 
   if (!ready) {
     return (
@@ -933,7 +960,7 @@ function ExportPdf({
         <span className="flex w-6 h-6 rounded-lg bg-red-100 items-center justify-center text-red-500">
           <FileText className="w-3.5 h-3.5" strokeWidth={2} />
         </span>
-        下载 PDF
+        {zh ? "下载 PDF" : "Download PDF"}
       </button>
     );
   }
@@ -941,7 +968,7 @@ function ExportPdf({
     <button
       onClick={onClick}
       disabled={busy}
-      title={failed ? "PDF 转换失败，请重试" : undefined}
+      title={failed ? (zh ? "PDF 转换失败，请重试" : "PDF conversion failed — please retry") : undefined}
       className={
         "inline-flex items-center gap-2 rounded-full border px-4 py-2 text-[14px] font-medium transition active:scale-[0.98] " +
         (failed
@@ -952,7 +979,11 @@ function ExportPdf({
       <span className="flex w-6 h-6 rounded-lg bg-red-100 items-center justify-center text-red-500">
         <FileText className="w-3.5 h-3.5" strokeWidth={2} />
       </span>
-      {busy ? "转换中…" : failed ? "重试 PDF" : "下载 PDF"}
+      {busy
+        ? zh ? "转换中…" : "Converting…"
+        : failed
+          ? zh ? "重试 PDF" : "Retry PDF"
+          : zh ? "下载 PDF" : "Download PDF"}
     </button>
   );
 }
@@ -1085,6 +1116,7 @@ function HistorySheet({
   sessionId: string;
   onClose: () => void;
 }) {
+  const zh = useIsChineseUI();
   const [groups, setGroups] = useState<HistoryGroup[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [openIdx, setOpenIdx] = useState<number | null>(null);
@@ -1097,7 +1129,7 @@ function HistorySheet({
           `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/messages`,
           { headers, signal: AbortSignal.timeout(20_000) },
         );
-        if (!res.ok) throw new Error(`加载失败 (${res.status})`);
+        if (!res.ok) throw new Error(zh ? `加载失败 (${res.status})` : `Load failed (${res.status})`);
         const data = (await res.json()) as {
           messages?: { role: string; content: string; blocks?: string }[];
         };
@@ -1108,27 +1140,30 @@ function HistorySheet({
               content: m.content ?? "",
               blocks: safeParseBlocks(m.blocks),
             })),
+            zh,
           ),
         );
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       }
     })();
-  }, [sessionId]);
+  }, [sessionId, zh]);
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <button
         className="absolute inset-0 bg-black/25"
         onClick={onClose}
-        aria-label="关闭"
+        aria-label={zh ? "关闭" : "Close"}
       />
       <div className="relative h-full w-full max-w-2xl bg-[#F6F6F7] shadow-2xl flex flex-col animate-in slide-in-from-right">
         <div className="h-14 shrink-0 flex items-center px-5 border-b border-black/5 bg-white">
           <ScrollText className="w-4.5 h-4.5 text-gray-400 mr-2.5" strokeWidth={1.75} />
-          <div className="text-[15px] font-semibold text-gray-900">修订过程</div>
+          <div className="text-[15px] font-semibold text-gray-900">{zh ? "修订过程" : "Revision history"}</div>
           <div className="ml-2 text-[12px] text-gray-400">
-            五阶段协作的完整记录（草稿 / 审查 / 推稿 / 审核 / 定稿 / 微调）
+            {zh
+              ? "五阶段协作的完整记录（草稿 / 审查 / 推稿 / 审核 / 定稿 / 微调）"
+              : "The full five-stage record (draft / review / rewrite / audit / finalize / fine-tune)"}
           </div>
           <button
             onClick={onClose}
@@ -1147,12 +1182,12 @@ function HistorySheet({
           {!error && groups === null && (
             <div className="flex items-center justify-center gap-2 py-16 text-[13px] text-gray-400">
               <Loader2 className="w-4 h-4 animate-spin" />
-              正在加载修订记录…
+              {zh ? "正在加载修订记录…" : "Loading revision history…"}
             </div>
           )}
           {groups?.length === 0 && (
             <div className="text-center py-16 text-[13px] text-gray-400">
-              该会话暂无修订记录
+              {zh ? "该会话暂无修订记录" : "No revision history for this session"}
             </div>
           )}
           {groups?.map((g, i) => (
@@ -1168,10 +1203,12 @@ function HistorySheet({
                   {i + 1}
                 </span>
                 <span className="text-[13.5px] font-medium text-gray-900 flex-1 truncate">
-                  {g.stage}
+                  {zh ? g.stage : STAGE_NAME_EN[g.stage] ?? g.stage}
                 </span>
                 <span className="text-[11.5px] text-gray-300 shrink-0">
-                  {g.answer ? `${g.answer.length} 字` : "无输出"}
+                  {g.answer
+                    ? zh ? `${g.answer.length} 字` : `${g.answer.length} chars`
+                    : zh ? "无输出" : "No output"}
                 </span>
                 <span
                   className={
@@ -1187,7 +1224,7 @@ function HistorySheet({
                   {g.thinking && (
                     <details className="group">
                       <summary className="cursor-pointer select-none text-[12px] text-gray-400 hover:text-gray-600 transition-colors">
-                        思考过程（{g.thinking.length} 字）
+                        {zh ? `思考过程（${g.thinking.length} 字）` : `Thinking (${g.thinking.length} chars)`}
                       </summary>
                       <div className="mt-2 rounded-xl bg-gray-50 px-3.5 py-3 text-[12.5px] leading-6 text-gray-500 whitespace-pre-wrap">
                         {g.thinking}
@@ -1209,7 +1246,7 @@ function HistorySheet({
                   {g.prompt && (
                     <details>
                       <summary className="cursor-pointer select-none text-[12px] text-gray-400 hover:text-gray-600 transition-colors">
-                        阶段指令
+                        {zh ? "阶段指令" : "Stage instructions"}
                       </summary>
                       <div className="mt-2 rounded-xl bg-gray-50 px-3.5 py-3 text-[12.5px] leading-6 text-gray-500 whitespace-pre-wrap max-h-60 overflow-y-auto">
                         {g.prompt}
@@ -1221,7 +1258,7 @@ function HistorySheet({
                       {g.answer}
                     </div>
                   ) : (
-                    <div className="text-[12px] text-gray-300">（该阶段无文本输出）</div>
+                    <div className="text-[12px] text-gray-300">{zh ? "（该阶段无文本输出）" : "(No text output for this stage)"}</div>
                   )}
                 </div>
               )}
@@ -1245,8 +1282,17 @@ function safeParseBlocks(raw: unknown): { type?: string; text?: string; thinking
 }
 
 /** 消息序列 → 阶段分组：user 消息以【阶段名】开头，其后 assistant 即该阶段产物 */
+const STAGE_NAME_EN: Record<string, string> = {
+  "写手起草": "Drafting",
+  "审查改稿": "Review & Revise",
+  "审批定稿": "Approval & Finalize",
+  "局部微调": "Fine-tune",
+  "其他输出": "Other output",
+};
+
 function buildHistoryGroups(
   messages: { role: string; content: string; blocks: { type?: string; text?: string; thinking?: string; name?: string }[] }[],
+  zh: boolean,
 ): HistoryGroup[] {
   const groups: HistoryGroup[] = [];
   let cur: HistoryGroup | null = null;
@@ -1270,7 +1316,7 @@ function buildHistoryGroups(
     }
     if (m.role !== "assistant") continue;
     if (!cur) {
-      cur = { stage: "其他输出", prompt: "", answer: "", thinking: "", tools: [] };
+      cur = { stage: zh ? "其他输出" : "Other output", prompt: "", answer: "", thinking: "", tools: [] };
       groups.push(cur);
     }
     for (const b of m.blocks) {

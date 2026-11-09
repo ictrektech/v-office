@@ -27,7 +27,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { useExtracted } from "next-intl";
+import { useIsChineseUI } from "@/store";
 import { useAiChat } from "@/hooks/use-ai-chat";
 import { usePageTitle } from "@/hooks/use-page-title";
 import type { ArtifactSpec } from "@/components/studio/artifact-board";
@@ -51,14 +51,126 @@ const ACCENT = "#1D1D1F";
 /** 栏目首页交接成稿用的 sessionStorage 键（沿用旧撰写室的键，别让那边改） */
 const HANDOFF_KEY = "ai-studio:handoff";
 
+/** 模板显示名英文（id 为稳定值，模板数据里的中文名不参与逻辑） */
+const TEMPLATE_NAME_EN: Record<string, string> = {
+  "redhead-file": "Red-head Document",
+  notice: "Notice",
+  request: "Request for Instructions",
+  reply: "Official Reply",
+  "work-report": "Work Report",
+  "research-report": "Research Report",
+  speech: "Leadership Speech",
+  minutes: "Meeting Minutes",
+  feasibility: "Feasibility Study",
+  "project-proposal": "Project Proposal",
+  implementation: "Work/Implementation Plan",
+  "work-summary": "Work Summary",
+  debriefing: "Performance Report",
+  briefing: "Briefing Materials",
+  rules: "Policies & Measures",
+  bulletin: "Work Bulletin",
+  "policy-brief": "Policy Interpretation",
+  press: "Press Release",
+  chronicle: "Chronicle",
+  "open-letter": "Proposal/Open Letter",
+  "stats-report": "Statistical Report",
+  "meeting-plan": "Meeting Plan",
+  experience: "Experience Exchange",
+};
+
+/** 模板字段标签英文（只用于渲染；表单提交仍用 f.label 的中文值） */
+const FIELD_LABEL_EN: Record<string, string> = {
+  "发文机关标志": "Issuing Authority Mark",
+  "发文字号": "Document Number",
+  "标题": "Title",
+  "主送机关": "Recipient",
+  "正文（缘由/事项/要求）": "Body (background / items / requirements)",
+  "落款与成文日期": "Signature and Date",
+  "缘由": "Background",
+  "事项（分条：谁/做什么/时限）": "Items (by line: who / what / deadline)",
+  "执行要求": "Implementation Requirements",
+  "落款": "Signature",
+  "请示缘由": "Reason for the Request",
+  "请求事项（一文一事）": "Request (one matter per document)",
+  "结语（妥否，请批示）": "Closing (seek approval)",
+  "引叙（来文标题+文号）": "Reference (incoming title + number)",
+  "答复意见": "Reply",
+  "工作情况": "Work Overview",
+  "成效与数据": "Results and Data",
+  "问题": "Issues",
+  "下一步安排": "Next Steps",
+  "基本情况": "Basic Information",
+  "分析（问题+原因）": "Analysis (issues + causes)",
+  "对策建议": "Recommendations",
+  "称谓": "Salutation",
+  "开场（缘起）": "Opening (context)",
+  "主体（一/二/三分点）": "Body (points 1/2/3)",
+  "结尾（号召/要求）": "Closing (call to action / requirements)",
+  "概览（时间/地点/主持/出席）": "Overview (time / place / host / attendees)",
+  "议定事项（分条：责任方+时限）": "Agreed Items (by line: owner + deadline)",
+  "其他事项": "Other Matters",
+  "概述": "Summary",
+  "必要性": "Necessity",
+  "技术方案比选": "Technical Options Comparison",
+  "投资与效益": "Investment and Benefits",
+  "风险": "Risks",
+  "结论": "Conclusion",
+  "项目概况": "Project Overview",
+  "建设内容": "Scope of Construction",
+  "投资估算": "Investment Estimate",
+  "预期效益": "Expected Benefits",
+  "总体要求（指导思想+目标）": "Overall Requirements (guiding principles + goals)",
+  "主要任务（分条：责任单位+时限）": "Key Tasks (by line: owner + deadline)",
+  "保障措施": "Safeguards",
+  "工作回顾": "Work Review",
+  "成效数据": "Results Data",
+  "不足": "Shortcomings",
+  "下一步": "Next Steps",
+  "履职情况": "Duties Performed",
+  "成效": "Results",
+  "问题与原因": "Issues and Causes",
+  "改进打算": "Improvement Plans",
+  "结论先行": "Conclusion First",
+  "展开（数据+事例）": "Elaboration (data + examples)",
+  "需决策/支持事项": "Decisions / Support Needed",
+  "总则（目的/依据/适用范围）": "General Provisions (purpose / basis / scope)",
+  "分则（第×条管理要求）": "Specific Provisions (requirements by article)",
+  "附则": "Supplementary Provisions",
+  "标题（概括）": "Title (summary)",
+  "正文（何时/何地/何事/结果）": "Body (when / where / what / result)",
+  "出台背景": "Background",
+  "主要内容（对照原文条款）": "Main Content (against the original clauses)",
+  "影响与执行口径": "Impact and Implementation Rules",
+  "标题（实题）": "Title (event title)",
+  "导语（5W）": "Lead (5W)",
+  "主体": "Body",
+  "背景": "Background",
+  "时间": "Time",
+  "事项（一条一行，正序）": "Events (one per line, chronological)",
+  "对象称谓": "Audience",
+  "倡议事项（分条，号召式）": "Proposals (by line, call to action)",
+  "表题": "Table Title",
+  "表头（指标/单位/口径）": "Header (metric / unit / basis)",
+  "数据行": "Data Rows",
+  "表注": "Table Notes",
+  "会议名称": "Meeting Name",
+  "时间地点": "Time and Place",
+  "议程": "Agenda",
+  "参加范围": "Participants",
+  "材料保障": "Materials Support",
+  "会务分工": "Logistics Roles",
+  "做法（可复制）": "Practices (replicable)",
+  "体会": "Takeaways",
+};
+
 /** 待办：交接成稿（灌草稿）或发材料 + 起手话术 */
 type Pending =
   | { kind: "handoff"; markdown: string; title: string }
   | { kind: "start"; brief: File; files: File[]; kickoff: string };
 
 export function WritingTask() {
-  const t = useExtracted();
-  usePageTitle(t({ id: "Writing task title", message: "Official Document" }));
+  const zh = useIsChineseUI();
+  usePageTitle(zh ? "公文写作" : "Official Document");
 
   const searchParams = useSearchParams();
   const [templateId, setTemplateId] = useState(
@@ -104,43 +216,37 @@ export function WritingTask() {
   const steps: TaskStep[] = [
     {
       key: "config",
-      label: t({ id: "Step pick type", message: "Document type" }),
-      hint: t({ id: "Step pick type hint", message: "23 types" }),
+      label: zh ? "选文种" : "Document type",
+      hint: zh ? "共 23 种" : "23 types",
     },
     {
       key: "facts",
-      label: t({ id: "Step fill in", message: "Fill in" }),
+      label: zh ? "填写信息" : "Fill in",
       // 不用「Step fill in hint」：申请页那条的中文是「专利基本信息」，串到写作页会读着别扭
-      hint: t({ id: "Step fill in writing hint", message: "Essentials and sources" }),
+      hint: zh ? "要件与素材" : "Essentials and sources",
     },
     {
       key: "draft",
-      label: t({ id: "Step draft doc", message: "Draft" }),
-      hint: t({ id: "Step draft doc hint", message: "Five-section draft" }),
+      label: zh ? "起草" : "Draft",
+      hint: zh ? "五阶段成文" : "Five-section draft",
     },
     {
       key: "final",
-      label: t({ id: "Step finalize doc", message: "Finalize" }),
-      hint: t({ id: "Step finalize doc hint", message: "Store or export Word" }),
+      label: zh ? "定稿" : "Finalize",
+      hint: zh ? "存稿或导出 Word" : "Store or export Word",
     },
   ];
 
   const specs: ArtifactSpec[] = [
     {
       key: "deliverable",
-      title: t({ id: "Artifact deliverable", message: "正稿" }),
-      hint: t({
-        id: "Artifact deliverable hint",
-        message: "The finished text, ready for Word",
-      }),
+      title: zh ? "正稿" : "Final draft",
+      hint: zh ? "定稿正文，可直接进 Word" : "The finished text, ready for Word",
     },
     {
       key: "selfcheck",
-      title: t({ id: "Artifact self check", message: "Self-check" }),
-      hint: t({
-        id: "Artifact self check hint",
-        message: "Compliance, format and wording to confirm",
-      }),
+      title: zh ? "自查清单" : "Self-check",
+      hint: zh ? "合规、格式与用语上待确认的点" : "Compliance, format and wording to confirm",
       kind: "extra",
     },
   ];
@@ -150,10 +256,10 @@ export function WritingTask() {
 
   const kindLabel = (kind: WritingKind) =>
     kind === "redhead"
-      ? t({ id: "Writing kind redhead", message: "Red-head documents" })
+      ? zh ? "红头文种" : "Red-head documents"
       : kind === "report"
-        ? t({ id: "Writing kind report", message: "Reports" })
-        : t({ id: "Writing kind misc", message: "Other documents" });
+        ? zh ? "报告类" : "Reports"
+        : zh ? "事务文书" : "Other documents";
 
   const grouped = useMemo(() => {
     const order: WritingKind[] = ["redhead", "report", "misc"];
@@ -165,19 +271,13 @@ export function WritingTask() {
   const planned = [
     {
       icon: FileText,
-      title: t({ id: "Artifact deliverable", message: "正稿" }),
-      desc: t({
-        id: "Planned deliverable desc",
-        message: "Full text in the structure this document type requires",
-      }),
+      title: zh ? "正稿" : "Final draft",
+      desc: zh ? "按该文种要求的结构要素成文" : "Full text in the structure this document type requires",
     },
     {
       icon: Sparkles,
-      title: t({ id: "Artifact self check", message: "Self-check" }),
-      desc: t({
-        id: "Planned self check desc",
-        message: "What still needs a human decision before it goes out",
-      }),
+      title: zh ? "自查清单" : "Self-check",
+      desc: zh ? "发出前还需要人来定的点" : "What still needs a human decision before it goes out",
     },
   ];
 
@@ -245,7 +345,9 @@ export function WritingTask() {
     ]
       .filter(Boolean)
       .join("\n");
-    setCaseTitle(docTitle || tpl?.name || "");
+    setCaseTitle(
+      docTitle || (zh ? tpl?.name ?? "" : (tpl && TEMPLATE_NAME_EN[tpl.id]) || tpl?.name || ""),
+    );
     setPending({
       kind: "start",
       brief: new File([brief], "写作要件.md", { type: "text/markdown" }),
@@ -273,7 +375,7 @@ export function WritingTask() {
     <>
       <AsideCard
         icon={Sparkles}
-        title={t({ id: "Planned outputs title", message: "What gets generated" })}
+        title={zh ? "预计生成内容" : "What gets generated"}
       >
         <ul className="space-y-3">
           {planned.map((p) => (
@@ -291,20 +393,18 @@ export function WritingTask() {
           ))}
         </ul>
       </AsideCard>
-      <AsideCard icon={Info} title={t({ id: "Usage title", message: "How it works" })}>
+      <AsideCard icon={Info} title={zh ? "使用说明" : "How it works"}>
         <ol className="space-y-2 text-[13.5px] leading-relaxed text-[#6E6E73] dark:text-slate-400">
-          <li>1. {t({ id: "Usage writing 1", message: "Pick the document type" })}</li>
-          <li>2. {t({ id: "Usage writing 2", message: "Fill in the essentials and upload any source files" })}</li>
-          <li>3. {t({ id: "Usage writing 3", message: "Draft it, then review the self-check list" })}</li>
-          <li>4. {t({ id: "Usage writing 4", message: "Store it, or export Word" })}</li>
+          <li>1. {zh ? "先选文种" : "Pick the document type"}</li>
+          <li>2. {zh ? "填要件并上传素材文件" : "Fill in the essentials and upload any source files"}</li>
+          <li>3. {zh ? "起草完成后看自查清单" : "Draft it, then review the self-check list"}</li>
+          <li>4. {zh ? "存到我的文档，或导出 Word" : "Store it, or export Word"}</li>
         </ol>
         <p className="mt-3 flex items-start gap-2 rounded-2xl bg-[#F2F2F7] px-3 py-2.5 text-[13px] leading-relaxed text-[#6E6E73] dark:bg-white/5 dark:text-slate-400">
           <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-[#007AFF]" />
-          {t({
-            id: "Tip writing",
-            message:
-              "Blank fields are left for the AI to infer from your materials; a missing document number stays 「待编号」.",
-          })}
+          {zh
+            ? "留空的要件由 AI 从素材推断；发文字号未知就写「待编号」。"
+            : "Blank fields are left for the AI to infer from your materials; a missing document number stays 「待编号」."}
         </p>
       </AsideCard>
     </>
@@ -313,28 +413,26 @@ export function WritingTask() {
   return (
     <TaskShell
       accent={ACCENT}
-      badge={t({ id: "Writing badge", message: "New official document" })}
-      title={t({ id: "Writing task title", message: "Official Document" })}
-      subtitle={t({
-        id: "Writing task subtitle",
-        message:
-          "23 document types, red-head layout included — draft, self-check and finalize.",
-      })}
+      badge={zh ? "新建公文" : "New official document"}
+      title={zh ? "公文写作" : "Official Document"}
+      subtitle={zh
+        ? "23 个文种，含红头版式：起草、自查、定稿一条龙。"
+        : "23 document types, red-head layout included — draft, self-check and finalize."}
       icon={PenLine}
       steps={steps}
       activeStep={activeStep}
       backHref="/writing"
-      backLabel={t({ id: "Back", message: "Back" })}
-      assistantLabel={t({ id: "AI assistant", message: "AI assistant" })}
+      backLabel={zh ? "返回" : "Back"}
+      assistantLabel={zh ? "AI 助手" : "AI assistant"}
       aside={step === "form" ? aside : undefined}
     >
       {step === "form" ? (
         <div>
           <FormSection
             index={1}
-            title={t({ id: "Section doc type", message: "Document type" })}
+            title={zh ? "文种" : "Document type"}
           >
-            <Field label={t({ id: "Field doc type", message: "Type" })} required>
+            <Field label={zh ? "选择文种" : "Type"} required>
               <select
                 className={inputClass("appearance-none")}
                 value={tpl?.id ?? ""}
@@ -347,7 +445,7 @@ export function WritingTask() {
                   <optgroup key={g.kind} label={kindLabel(g.kind)}>
                     {g.items.map((tpl) => (
                       <option key={tpl.id} value={tpl.id}>
-                        {tpl.name}
+                        {zh ? tpl.name : TEMPLATE_NAME_EN[tpl.id] ?? tpl.name}
                       </option>
                     ))}
                   </optgroup>
@@ -356,27 +454,27 @@ export function WritingTask() {
             </Field>
             {tpl?.description ? (
               <p className="-mt-2 text-[13px] leading-relaxed text-[#6E6E73] dark:text-slate-400">
-                {tpl.description}
+                {zh
+                  ? tpl.description
+                  : `${TEMPLATE_NAME_EN[tpl.id] ?? tpl.name}${tpl.redhead ? ": red-head layout (GB/T 9704-2012)" : ""}, drafted, reviewed and finalized through the official-document workflow.`}
               </p>
             ) : null}
           </FormSection>
 
           <FormSection
             index={2}
-            title={t({ id: "Section doc facts", message: "Essentials" })}
+            title={zh ? "要件" : "Essentials"}
           >
             <p className="mb-5 text-[13.5px] leading-relaxed text-[#6E6E73] dark:text-slate-400">
-              {t({
-                id: "Section doc facts hint",
-                message:
-                  "Fill in what you know. Anything left blank is inferred from your materials, never invented.",
-              })}
+              {zh
+                ? "知道多少填多少；留空的部分由 AI 从你的素材推断，不会编造。"
+                : "Fill in what you know. Anything left blank is inferred from your materials, never invented."}
             </p>
             {fields.map((f) => (
               <Field
                 key={f.key}
-                label={f.label}
-                hint={f.hint || undefined}
+                label={zh ? f.label : FIELD_LABEL_EN[f.label] ?? f.label}
+                hint={f.hint ? (zh ? f.hint : FIELD_LABEL_EN[f.hint] ?? f.hint) : undefined}
                 counter={`${(values[f.key] ?? "").length}/800`}
               >
                 <textarea
@@ -394,14 +492,13 @@ export function WritingTask() {
 
           <FormSection
             index={3}
-            title={t({ id: "Section materials", message: "Materials" })}
+            title={zh ? "材料" : "Materials"}
           >
             <Field
-              label={t({ id: "Upload materials", message: "Upload materials" })}
-              hint={t({
-                id: "Upload writing materials hint",
-                message: "Policy documents, minutes, data sheets or an earlier draft",
-              })}
+              label={zh ? "上传材料" : "Upload materials"}
+              hint={zh
+                ? "政策文件、会议记录、数据报表或旧稿"
+                : "Policy documents, minutes, data sheets or an earlier draft"}
             >
               <div className="space-y-3">
                 <button
@@ -411,16 +508,12 @@ export function WritingTask() {
                 >
                   <Upload className="h-6 w-6 text-[#007AFF]" />
                   <span className="text-[14.5px] font-medium text-[#0F172A] dark:text-white">
-                    {t({
-                      id: "Upload materials cta",
-                      message: "Drop source files or an earlier draft here",
-                    })}
+                    {zh ? "把设计文档、代码、汇报稿或照片拖到这里" : "Drop source files or an earlier draft here"}
                   </span>
                   <span className="text-[13px] text-[#94A3B8]">
-                    {t({
-                      id: "Upload writing materials hint",
-                      message: "Policy documents, minutes, data sheets or an earlier draft",
-                    })}
+                    {zh
+                      ? "政策文件、会议记录、数据报表或旧稿"
+                      : "Policy documents, minutes, data sheets or an earlier draft"}
                   </span>
                 </button>
                 <input
@@ -477,17 +570,16 @@ export function WritingTask() {
             style={{ backgroundColor: ACCENT }}
           >
             {busy
-              ? t({ id: "Submitting", message: "Submitting…" })
-              : t({ id: "Next writing", message: "Next: draft it" })}
+              ? zh ? "正在提交…" : "Submitting…"
+              : zh ? "下一步：开始起草" : "Next: draft it"}
             <span aria-hidden="true">→</span>
           </button>
           {!ready ? (
             <p className="mt-2 flex items-center gap-1.5 text-[13px] text-[#94A3B8]">
               <CircleHelp className="h-3.5 w-3.5" />
-              {t({
-                id: "Required writing",
-                message: "Fill in at least one field, or upload a source file",
-              })}
+              {zh
+                ? "至少填一项要件，或上传一个素材文件"
+                : "Fill in at least one field, or upload a source file"}
             </p>
           ) : null}
         </div>
@@ -495,9 +587,9 @@ export function WritingTask() {
         <TaskWorkbench
           chat={chat}
           specs={specs}
-          title={t({ id: "Writing task title", message: "Official Document" })}
+          title={zh ? "公文写作" : "Official Document"}
           onGenerate={generate}
-          extraTitle={t({ id: "Process drafts", message: "Process drafts" })}
+          extraTitle={zh ? "过程稿" : "Process drafts"}
         />
       )}
     </TaskShell>

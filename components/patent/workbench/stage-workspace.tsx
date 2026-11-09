@@ -18,6 +18,7 @@ import {
   fetchAiFile,
   listAiFiles,
   rebuildFinalDocx,
+  rebuildPatentDocx,
   type AiFile,
 } from "@/utils/ai/client";
 import {
@@ -26,7 +27,7 @@ import {
   writeStepMark,
   type StepKey,
 } from "./copyright";
-import { useAppStore } from "@/store";
+import { useAppStore, useIsChineseUI } from "@/store";
 import { openStoredFile } from "@/utils/vos/storage";
 import {
   CHAT_DEFAULT_WIDTH,
@@ -70,13 +71,16 @@ export function StageWorkspace({
   onNewCase,
 }: StageWorkspaceProps) {
   const config = STAGES[mode];
+  const zh = useIsChineseUI();
+  const stageLabel = zh ? config.label : config.labelEn;
+  const sessionTitle = zh ? config.sessionTitle : config.sessionTitleEn;
   const router = useRouter();
   const server = useAppStore((store) => store.server);
   /** 没有指定案件、也没有上次的会话时先不建，避免历史里多出一条空记录 */
   const [paused] = useState(() => !caseId && !readPersistedSession(persistKeyFor(mode)));
   const chat = useAiChat({
     skill: config.skill,
-    title: config.sessionTitle,
+    title: sessionTitle,
     persistKey: persistKeyFor(mode),
     resumeFrom: caseId,
     paused,
@@ -167,21 +171,67 @@ export function StageWorkspace({
 
   /** 重建正式资料：返回错误信息（null = 成功），按钮据此内联展示 */
   const rebuildFinal = useCallback(async (): Promise<string | null> => {
-    if (!chat.sessionId) return "会话还没就绪";
-    if (chat.streaming) return "助手还在回复，等本轮结束再重建";
+    if (!chat.sessionId) return zh ? "会话还没就绪" : "Session is not ready yet";
+    if (chat.streaming)
+      return zh
+        ? "助手还在回复，等本轮结束再重建"
+        : "The assistant is still replying; rebuild after this round ends";
     try {
       await rebuildFinalDocx(chat.sessionId);
       await refreshFiles();
-      say("正式资料已重新生成");
+      say(zh ? "正式资料已重新生成" : "Final documents regenerated");
       return null;
     } catch (error) {
       return error instanceof Error ? error.message : String(error);
     }
-  }, [chat.sessionId, chat.streaming, refreshFiles]);
+  }, [chat.sessionId, chat.streaming, refreshFiles, zh]);
+
+  /**
+   * 专利「局部重建」：只把用户改过的那一份 md 重建成同名 Word。
+   *
+   * 与软著的整案重建不同——专利改的是权利要求的一条、说明书的一段，
+   * 按文件重建才不用整案重跑。
+   */
+  const rebuildSource = useCallback(
+    async (path: string): Promise<string | null> => {
+      if (!chat.sessionId) return zh ? "会话还没就绪" : "Session is not ready yet";
+      if (chat.streaming)
+        return zh
+          ? "助手还在回复，等本轮结束再重建"
+          : "The assistant is still replying; rebuild after this round ends";
+      try {
+        await rebuildPatentDocx(chat.sessionId, path);
+        await refreshFiles();
+        say(
+          zh
+            ? `已重建 ${baseName(path).replace(/\.md$/i, "")}.docx`
+            : `Rebuilt ${baseName(path).replace(/\.md$/i, "")}.docx`,
+        );
+        return null;
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    },
+    [chat.sessionId, chat.streaming, refreshFiles, zh],
+  );
+
+  /** 专利：md 源比同名 docx 新 → 该行亮「源已更新」 */
+  const patentStaleSources = useMemo(() => {
+    if (mode === "copyright") return new Set<string>();
+    const byPath = new Map(files.map((file) => [file.path, file]));
+    const stale = new Set<string>();
+    for (const file of files) {
+      if (!file.path.endsWith(".md") || file.path.endsWith("_draft.md")) continue;
+      if (!isDeliverable(file.path) || isDraftFile(file.path)) continue;
+      const docx = byPath.get(file.path.slice(0, -3) + ".docx");
+      if (docx && (file.mtime ?? 0) > (docx.mtime ?? 0)) stale.add(file.path);
+    }
+    return stale;
+  }, [mode, files]);
 
   /** 成品：技能落盘的交付件（docx / 图片 / 成稿 md），默认展示 */
   const rows = useMemo<OutputRow[]>(() => {
-    const stage = config.label;
+    const stage = stageLabel;
     return files
       .filter((file) => isDeliverable(file.path))
       .map((file) => ({
@@ -193,7 +243,7 @@ export function StageWorkspace({
         path: file.path,
       }))
       .sort((a, b) => (b.time ?? 0) - (a.time ?? 0));
-  }, [files, config.label]);
+  }, [files, stageLabel]);
 
   /**
    * 软著申请材料：md 源 ↔ 正式资料成品配对，另有专属面板展示（通用表格对
@@ -205,7 +255,7 @@ export function StageWorkspace({
   );
   const copyrightProcessRows = useMemo<OutputRow[]>(() => {
     if (mode !== "copyright") return [];
-    const stage = config.label;
+    const stage = stageLabel;
     return copyrightProcessFiles(files, copyrightPairs).map((file) => ({
       id: `file:${file.path}`,
       name: baseName(file.path),
@@ -214,11 +264,11 @@ export function StageWorkspace({
       kind: "file" as const,
       path: file.path,
     }));
-  }, [mode, files, copyrightPairs, config.label]);
+  }, [mode, files, copyrightPairs, stageLabel]);
 
   /** 草稿：对话成稿 artifact + 旁路 md（问题清单、对照表等），收进折叠区 */
   const draftRows = useMemo<OutputRow[]>(() => {
-    const stage = config.label;
+    const stage = stageLabel;
     const artifactRows: OutputRow[] = chat.artifacts.map((artifact) => ({
       id: `artifact:${artifact.key}`,
       name: artifact.title || artifact.key,
@@ -238,7 +288,7 @@ export function StageWorkspace({
         path: file.path,
       }));
     return [...artifactRows, ...draftFileRows].sort((a, b) => (b.time ?? 0) - (a.time ?? 0));
-  }, [chat.artifacts, files, config.label]);
+  }, [chat.artifacts, files, stageLabel]);
 
   /**
    * 全流程阶段的案卷进度：只认 `outputs/docket/<case>/docket.yaml`，取最新一份。
@@ -309,7 +359,7 @@ export function StageWorkspace({
           await chat.upload(file);
         } catch (error) {
           removeSlot(file.name);
-          say(error instanceof Error ? error.message : "上传失败");
+          say(error instanceof Error ? error.message : zh ? "上传失败" : "Upload failed");
         }
       }
     })();
@@ -338,8 +388,11 @@ export function StageWorkspace({
         const { file } = await openStoredFile(saved);
         await server.open(file);
       } else {
-        if (!chat.sessionId) throw new Error("会话还没就绪");
-        if (!isOfficePath(target.path)) throw new Error("这种格式不能在线编辑");
+        if (!chat.sessionId) throw new Error(zh ? "会话还没就绪" : "Session is not ready yet");
+        if (!isOfficePath(target.path))
+          throw new Error(
+            zh ? "这种格式不能在线编辑" : "This format cannot be edited online",
+          );
         const blob = await fetchAiFile(chat.sessionId, target.path);
         const ext = target.path.match(/\.[a-z0-9]{2,5}$/i)?.[0] ?? ".docx";
         const name = `${target.name.replace(/\.[^.]+$/, "")}-${chat.sessionId.slice(-6)}${ext}`;
@@ -350,7 +403,9 @@ export function StageWorkspace({
       }
       router.push("/editor");
     } catch (error) {
-      say(error instanceof Error ? error.message : "在线打开失败");
+      say(
+        error instanceof Error ? error.message : zh ? "在线打开失败" : "Failed to open online",
+      );
     }
   };
 
@@ -376,25 +431,25 @@ export function StageWorkspace({
       anchor.click();
       URL.revokeObjectURL(url);
     } catch (error) {
-      say(error instanceof Error ? error.message : "下载失败");
+      say(error instanceof Error ? error.message : zh ? "下载失败" : "Download failed");
     }
   };
 
   const save = async () => {
     try {
       await chat.saveNow();
-      say("已保存到我的文档");
+      say(zh ? "已保存到我的文档" : "Saved to My Documents");
     } catch (error) {
-      say(error instanceof Error ? error.message : "保存失败");
+      say(error instanceof Error ? error.message : zh ? "保存失败" : "Save failed");
     }
   };
 
   const exportDocx = async () => {
     try {
       const name = await chat.exportDocx(false);
-      say(`已导出 ${name}`);
+      say(zh ? `已导出 ${name}` : `Exported ${name}`);
     } catch (error) {
-      say(error instanceof Error ? error.message : "导出失败");
+      say(error instanceof Error ? error.message : zh ? "导出失败" : "Export failed");
     }
   };
 
@@ -419,7 +474,7 @@ export function StageWorkspace({
   return (
     <div className="flex h-[100dvh] w-full flex-col overflow-hidden bg-white">
       <WorkbenchHeader
-        title={chat.draft?.title || config.sessionTitle}
+        title={chat.draft?.title || sessionTitle}
         skill={config.skill}
         currentSessionId={chat.sessionId}
         onBack={() => {
@@ -453,13 +508,19 @@ export function StageWorkspace({
           ) : (
             <CaseOverview
               config={config}
-              title={chat.draft?.title || config.sessionTitle}
+              title={chat.draft?.title || sessionTitle}
               meta={
                 chat.sessionId
-                  ? `本地会话 ${chat.sessionId.slice(0, 8)}`
+                  ? zh
+                    ? `本地会话 ${chat.sessionId.slice(0, 8)}`
+                    : `Local session ${chat.sessionId.slice(0, 8)}`
                   : paused
-                    ? "发送第一条消息后自动存档"
-                    : "正在创建会话"
+                    ? zh
+                      ? "发送第一条消息后自动存档"
+                      : "Automatically saved after the first message is sent"
+                    : zh
+                      ? "正在创建会话"
+                      : "Creating session"
               }
               materials={chat.materials}
               docket={visibleDocket}
@@ -478,6 +539,15 @@ export function StageWorkspace({
                       processRows: copyrightProcessRows,
                     }
                   : undefined
+              }
+              docxRebuild={
+                mode === "copyright"
+                  ? undefined
+                  : {
+                      stale: patentStaleSources,
+                      onRebuild: rebuildSource,
+                      disabled: chat.streaming,
+                    }
               }
               rows={rows}
               draftRows={draftRows}
@@ -499,7 +569,7 @@ export function StageWorkspace({
 
         <div
           onPointerDown={startDrag}
-          title="拖动调整对话宽度"
+          title={zh ? "拖动调整对话宽度" : "Drag to resize the chat width"}
           className="group relative w-2 flex-none cursor-col-resize"
         >
           <span className="absolute inset-y-0 left-[3px] w-px bg-transparent transition group-hover:bg-[#CFCFD4]" />

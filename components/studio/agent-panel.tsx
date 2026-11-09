@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useExtracted } from "next-intl";
+import { useIsChineseUI } from "@/store";
 import {
   AlertTriangle,
   Brain,
@@ -43,14 +43,14 @@ const OP_CLS: Record<string, string> = {
 };
 
 function OperationLabel({ operation }: { operation: ChangeLike["operation"] }) {
-  const t = useExtracted();
+  const zh = useIsChineseUI();
   switch (operation) {
     case "insert":
-      return <>{t({ id: "Insert", message: "Insert" })}</>;
+      return <>{zh ? "新增" : "Insert"}</>;
     case "delete":
-      return <>{t({ id: "Delete", message: "Delete" })}</>;
+      return <>{zh ? "删除" : "Delete"}</>;
     default:
-      return <>{t({ id: "Replace", message: "Replace" })}</>;
+      return <>{zh ? "替换" : "Replace"}</>;
   }
 }
 
@@ -62,7 +62,7 @@ function OperationLabel({ operation }: { operation: ChangeLike["operation"] }) {
  * 只有这一块东西可看（实测：首段正文 1.3s 就到，但中间读技能包要 10s）。
  */
 function Elapsed({ since }: { since?: number }) {
-  const t = useExtracted();
+  const zh = useIsChineseUI();
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -72,7 +72,7 @@ function Elapsed({ since }: { since?: number }) {
   const secs = Math.max(0, Math.round((now - since) / 1000));
   return (
     <span className="ml-1.5 text-[12.5px] text-[#B4BDC9]">
-      {t({ id: "Elapsed seconds", message: "{count}s", values: { count: String(secs) } })}
+      {zh ? `已 ${secs} 秒` : `${secs}s`}
     </span>
   );
 }
@@ -81,18 +81,18 @@ function Elapsed({ since }: { since?: number }) {
  * 工具名的中文动词（静态分支：next-intl 的提取器要求消息可静态分析）。
  */
 function ToolVerb({ name }: { name: string }) {
-  const t = useExtracted();
+  const zh = useIsChineseUI();
   switch (name) {
     case "read":
-      return <>{t({ id: "Tool read", message: "reading" })}</>;
+      return <>{zh ? "正在读取" : "reading"}</>;
     case "write":
-      return <>{t({ id: "Tool write", message: "writing" })}</>;
+      return <>{zh ? "正在写入" : "writing"}</>;
     case "edit":
-      return <>{t({ id: "Tool edit", message: "editing" })}</>;
+      return <>{zh ? "正在修改" : "editing"}</>;
     case "bash":
-      return <>{t({ id: "Tool bash", message: "running" })}</>;
+      return <>{zh ? "正在执行" : "running"}</>;
     default:
-      return <>{t({ id: "Tool other", message: "calling" })}</>;
+      return <>{zh ? "正在调用" : "calling"}</>;
   }
 }
 
@@ -104,7 +104,7 @@ function ToolVerb({ name }: { name: string }) {
  * 「正在读取 SKILL.md · 第 7 步」。
  */
 function ActivityLine({ activity }: { activity: NonNullable<ChatMessage["activity"]> }) {
-  const t = useExtracted();
+  const zh = useIsChineseUI();
   // 路径只留文件名：全路径又长又占地方，同名在技能包内可以忽略
   const base = activity.target.split(/[\\/]/).filter(Boolean).pop() || "";
   return (
@@ -113,7 +113,7 @@ function ActivityLine({ activity }: { activity: NonNullable<ChatMessage["activit
       <span className="truncate">
         <ToolVerb name={activity.name} /> {base || activity.name}
         <span className="ml-1.5 text-[#B4BDC9]">
-          {t({ id: "Step N", message: "step {count}", values: { count: String(activity.steps) } })}
+          {zh ? `第 ${activity.steps} 步` : `step ${activity.steps}`}
         </span>
       </span>
     </div>
@@ -130,7 +130,7 @@ function ActivityLine({ activity }: { activity: NonNullable<ChatMessage["activit
  * 思考**不是正文**：它只在这里显示，绝不进草稿、不落盘。
  */
 function ThinkingBlock({ text, live }: { text: string; live: boolean }) {
-  const t = useExtracted();
+  const zh = useIsChineseUI();
   const [open, setOpen] = useState(live);
   const pinned = useRef(false);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -160,8 +160,8 @@ function ThinkingBlock({ text, live }: { text: string; live: boolean }) {
         <Brain className="h-3.5 w-3.5 shrink-0 text-[#D4542F]" />
         <span className="font-medium">
           {live
-            ? t({ id: "Thinking…", message: "Thinking…" })
-            : t({ id: "Reasoning", message: "Reasoning" })}
+            ? zh ? "思考中…" : "Thinking…"
+            : zh ? "思考过程" : "Reasoning"}
         </span>
         <ChevronDown
           className={cn("ml-auto h-3.5 w-3.5 shrink-0 transition", open ? "rotate-180" : "")}
@@ -259,7 +259,7 @@ export function AgentPanel({
   panelWidth?: string;
   className?: string;
 }) {
-  const t = useExtracted();
+  const zh = useIsChineseUI();
   const [tab, setTab] = useState<"agent" | "analysis">("agent");
   const [draft, setDraft] = useState("");
   const [uploading, setUploading] = useState<string | null>(null);
@@ -334,19 +334,22 @@ export function AgentPanel({
       if (kind === "template") {
         if (!onUploadTemplate) return;
         const uploaded = await onUploadTemplate(file);
-        setNotice(`模板已生效：之后每轮都按《${uploaded.name}》的栏目成文`);
+        setNotice(
+          zh
+            ? `模板已生效：之后每轮都按《${uploaded.name}》的栏目成文`
+            : `Template applied: every later round will follow the sections of “${uploaded.name}”`,
+        );
       } else {
         if (!onUpload) return;
         const parsed = await onUpload(file);
         setNotice(
-          `${parsed.name}：${t({
-            id: "In workspace",
-            message: "原件已送入助手工作目录",
-          })}${parsed.size ? ` · ${humanSize(parsed.size)}` : ""}`,
+          zh
+            ? `${parsed.name}：原件已送入助手工作目录${parsed.size ? ` · ${humanSize(parsed.size)}` : ""}`
+            : `${parsed.name}: file sent to the assistant workspace${parsed.size ? ` · ${humanSize(parsed.size)}` : ""}`,
         );
       }
     } catch (err) {
-      setNotice(`上传失败：${String(err)}`);
+      setNotice(zh ? `上传失败：${String(err)}` : `Upload failed: ${String(err)}`);
     } finally {
       setUploading(null);
       resetInput(kind === "template" ? templateRef.current : fileRef.current);
@@ -370,7 +373,7 @@ export function AgentPanel({
             className={cn("px-3.5 py-1.5 text-[12.5px]", tab === "agent" ? vp.segOn : vp.segOff)}
           >
             <span className={tab === "agent" ? "text-[#E2562B]" : undefined}>
-              {t({ id: "Agent", message: "Agent" })}
+              {zh ? "智能体" : "Agent"}
             </span>
           </button>
           <button
@@ -379,7 +382,7 @@ export function AgentPanel({
             className={cn("px-3.5 py-1.5 text-[12.5px]", tab === "analysis" ? vp.segOn : vp.segOff)}
           >
             <span className={tab === "analysis" ? "text-[#E2562B]" : undefined}>
-              {t({ id: "Analysis", message: "Analysis" })}
+              {zh ? "分析" : "Analysis"}
             </span>
           </button>
         </div>
@@ -391,7 +394,7 @@ export function AgentPanel({
           <div className="min-w-0 flex-1">
             <p className="text-[14px] leading-relaxed text-[#8A5A12]">{blocked}</p>
             <Link href="/settings" className={cn(vp.btnText, "mt-1.5 text-[#8A5A12] underline")}>
-              {t({ id: "Go to settings", message: "Go to settings" })}
+              {zh ? "去设置" : "Go to settings"}
             </Link>
           </div>
         </div>
@@ -412,14 +415,12 @@ export function AgentPanel({
                   <Sparkles className="h-5 w-5 text-[#E2562B]" />
                 </span>
                 <p className="mt-3 text-[13.5px] font-medium text-[#0F172A] dark:text-white">
-                  {t({ id: "Assistant idle title", message: "还没有对话" })}
+                  {zh ? "还没有对话" : "No conversation yet"}
                 </p>
                 <p className="mt-1 max-w-[260px] text-[12px] leading-relaxed text-[#9A9AA0]">
-                  {t({
-                    id: "Assistant idle hint",
-                    message:
-                      "在下面输入框描述需求，助手会按技能包逐条执行，产物会写回这里。",
-                  })}
+                  {zh
+                    ? "在下面输入框描述需求，助手会按技能包逐条执行，产物会写回这里。"
+                    : "Describe what you need in the box below; the assistant will follow the skill steps and write the output back here."}
                 </p>
               </div>
             ) : null}
@@ -428,7 +429,7 @@ export function AgentPanel({
                 <div key={m.id} className="flex flex-col items-end gap-1">
                   {m.anchor ? (
                     <span className={cn(vp.chip, "text-[12.5px]")}>
-                      {t({ id: "Clause", message: "Clause" })} {m.anchor}
+                      {zh ? "条款" : "Clause"} {m.anchor}
                     </span>
                   ) : null}
                   <div className="max-w-[85%] rounded-2xl rounded-br-md bg-[#D4542F] px-3.5 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap text-white">
@@ -443,14 +444,14 @@ export function AgentPanel({
                       <Sparkles className="h-3.5 w-3.5 text-[#D4542F]" />
                     </span>
                     <span className="text-[14px] font-medium text-[#0F172A] dark:text-white">
-                      {t({ id: "Patent Agent", message: "Patent Agent" })}
+                      {zh ? "专利智能体" : "Patent Agent"}
                     </span>
                     {m.streaming ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin text-[#D4542F]" />
                     ) : null}
                     {m.error ? (
                       <span className="rounded-full bg-[#FEF2F2] px-1.5 py-0.5 text-[12px] font-medium text-[#DC2626]">
-                        {t({ id: "Error", message: "Error" })}
+                        {zh ? "出错" : "Error"}
                       </span>
                     ) : null}
                   </div>
@@ -481,7 +482,7 @@ export function AgentPanel({
                     // 既没有正文、也没有思考流（思考关掉时就一直是这样）：
                     // 不给一句静止的「思考中…」，而是会走字的「正在处理 … 8s」
                     <div className="flex items-center rounded-2xl rounded-tl-md border border-[#E7EAF0] bg-[#F9FAFC] px-3.5 py-2.5 text-[15px] text-[#94A3B8]">
-                      {t({ id: "Working…", message: "Working…" })}
+                      {zh ? "正在处理…" : "Working…"}
                       <Elapsed since={m.startedAt} />
                     </div>
                   ) : null}
@@ -500,11 +501,9 @@ export function AgentPanel({
                     <div className="space-y-2 rounded-2xl border border-[#E7EAF0] bg-white p-3 dark:border-white/10 dark:bg-white/[0.03]">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-[14px] font-medium text-[#0F172A] dark:text-white">
-                          {t({
-                            id: "N Proposed Changes",
-                            message: "{count} Proposed Changes",
-                            values: { count: String(m.changes.length) },
-                          })}
+                          {zh
+                            ? `${m.changes.length} 处建议修改`
+                            : `${m.changes.length} proposed change${m.changes.length === 1 ? "" : "s"}`}
                         </span>
                         {m.changes.some((c) => c.status === "proposed") ? (
                           <button
@@ -512,7 +511,7 @@ export function AgentPanel({
                             onClick={onAcceptAll}
                             className="rounded-lg bg-[#16A34A] px-2.5 py-1.5 text-[13.5px] font-medium text-white transition hover:bg-[#15803D] active:scale-[0.98]"
                           >
-                            {t({ id: "Accept All", message: "Accept All" })}
+                            {zh ? "全部接受" : "Accept All"}
                           </button>
                         ) : null}
                       </div>
@@ -541,7 +540,7 @@ export function AgentPanel({
                                 <OperationLabel operation={c.operation} />
                               </span>
                               <span className="text-[13px] text-[#94A3B8]">
-                                {t({ id: "Clause", message: "Clause" })} {c.anchor}
+                                {zh ? "条款" : "Clause"} {c.anchor}
                               </span>
                               {c.status === "accepted" ? (
                                 <Check className="ml-auto h-3.5 w-3.5 text-[#16A34A]" />
@@ -565,7 +564,7 @@ export function AgentPanel({
                                   className="inline-flex items-center gap-1 rounded-lg bg-[#D4542F] px-2.5 py-1.5 text-[13.5px] font-medium text-white transition hover:bg-[#B8441F] active:scale-[0.98]"
                                 >
                                   <Check className="h-3 w-3" />
-                                  {t({ id: "Accept", message: "Accept" })}
+                                  {zh ? "接受" : "Accept"}
                                 </button>
                                 <button
                                   type="button"
@@ -573,7 +572,7 @@ export function AgentPanel({
                                   className={cn(vp.btnGhost, "px-2.5 py-1.5 text-[13.5px]")}
                                 >
                                   <X className="h-3 w-3" />
-                                  {t({ id: "Reject", message: "Reject" })}
+                                  {zh ? "拒绝" : "Reject"}
                                 </button>
                               </div>
                             ) : null}
@@ -592,9 +591,9 @@ export function AgentPanel({
                 type="button"
                 onClick={jumpToBottom}
                 className="sticky bottom-2 ml-auto flex w-8 items-center justify-end gap-1 rounded-full bg-white/95 px-2.5 py-1.5 text-[12px] font-medium text-[#475569] shadow-[0_2px_8px_rgba(0,0,0,0.14)] ring-1 ring-black/[0.06] backdrop-blur transition hover:bg-white dark:bg-[#2C2C2E]/95 dark:text-slate-200"
-                title={t({ id: "Jump to latest", message: "Jump to latest" })}
+                title={zh ? "回到最新" : "Jump to latest"}
               >
-                {t({ id: "Latest", message: "Latest" })}
+                {zh ? "最新" : "Latest"}
                 <ChevronDown className="h-3.5 w-3.5" />
               </button>
             ) : null}
@@ -618,11 +617,7 @@ export function AgentPanel({
 
             {lastSaved ? (
               <p className="mb-2 truncate text-[13px] text-[#16A34A]" title={lastSaved}>
-                {t({
-                  id: "Saved to my documents",
-                  message: "Saved to My Documents: {name}",
-                  values: { name: lastSaved },
-                })}
+                {zh ? `已保存到我的文档：${lastSaved}` : `Saved to My Documents: ${lastSaved}`}
               </p>
             ) : null}
             {notice ? (
@@ -638,10 +633,10 @@ export function AgentPanel({
                 <Target className="mt-0.5 h-4 w-4 shrink-0 text-[#D4542F]" />
                 <div className="min-w-0 flex-1">
                   <p className="text-[13px] font-semibold text-[#D4542F]">
-                    {t({ id: "Edit here only", message: "Editing here only" })}
+                    {zh ? "只改这里" : "Editing here only"}
                     {selection.anchor ? (
                       <span className="ml-1.5 font-normal text-[#D4542F]/80">
-                        {t({ id: "Clause", message: "Clause" })} {selection.anchor}
+                        {zh ? "条款" : "Clause"} {selection.anchor}
                       </span>
                     ) : null}
                   </p>
@@ -653,17 +648,16 @@ export function AgentPanel({
                   type="button"
                   onClick={onClearSelection}
                   className="-mr-1 -mt-0.5 shrink-0 rounded-lg p-1 text-[#D4542F]/60 transition hover:bg-[#D4542F]/10 hover:text-[#D4542F]"
-                  aria-label={t({ id: "Clear scope", message: "Clear scope" })}
+                  aria-label={zh ? "取消范围" : "Clear scope"}
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
               </div>
             ) : selectionHint ? (
               <p className="mb-2 text-[13px] text-[#B45309]">
-                {t({
-                  id: "No selection hint",
-                  message: "No text is selected in the document — select first, then tap Edit here.",
-                })}
+                {zh
+                  ? "文档里还没选中文字：先选中，再点「改这里」"
+                  : "No text is selected in the document — select first, then tap Edit here."}
               </p>
             ) : null}
 
@@ -679,10 +673,7 @@ export function AgentPanel({
                     }
                   }}
                   rows={2}
-                  placeholder={t({
-                    id: "Ask for changes, or describe the next step…",
-                    message: "Ask for changes, or describe the next step…",
-                  })}
+                  placeholder={zh ? "让 AI 改稿，或描述下一步…" : "Ask for changes, or describe the next step…"}
                   className={cn(vp.input, "resize-none")}
                 />
                 <div className="mt-2 flex items-center gap-2">
@@ -720,8 +711,8 @@ export function AgentPanel({
                           <Paperclip className="h-4 w-4" />
                         )}
                         {uploading
-                          ? t({ id: "Uploading…", message: "Uploading…" })
-                          : t({ id: "References", message: "References" })}
+                          ? zh ? "上传中…" : "Uploading…"
+                          : zh ? "参考资料" : "References"}
                         {/* 有多少东西就直接写在按钮上，不用点开才知道 */}
                         {template || materials.length ? (
                           <span className="rounded-full bg-[#D4542F]/12 px-1.5 text-[12px] font-semibold text-[#D4542F]">
@@ -744,21 +735,20 @@ export function AgentPanel({
                         selection && "text-[#D4542F]",
                         (capturingSelection || !sessionReady) && "opacity-50",
                       )}
-                      title={t({
-                        id: "Edit here hint",
-                        message: "Select text in the document first — the AI will only change that part",
-                      })}
+                      title={zh
+                        ? "先在文档里选中要改的文字——AI 就只动这一处"
+                        : "Select text in the document first — the AI will only change that part"}
                     >
                       {capturingSelection ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       ) : (
                         <Target className="h-3.5 w-3.5" />
                       )}
-                      {t({ id: "Edit here", message: "Edit here" })}
+                      {zh ? "改这里" : "Edit here"}
                     </button>
                   ) : null}
                   <button type="button" onClick={onSave} className={cn(vp.btnText, "gap-1")}>
-                    {t({ id: "Save to my documents", message: "Save to My Documents" })}
+                    {zh ? "保存到我的文档" : "Save to My Documents"}
                   </button>
                   <span className={cn(vp.meta, "ml-auto truncate text-[12.5px]")}>
                     {modelLabel || ""}
@@ -771,7 +761,7 @@ export function AgentPanel({
                   type="button"
                   onClick={onStop}
                   className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-[#E7EAF0] text-[#475569] transition hover:bg-[#F5F7FB] dark:border-white/10 dark:hover:bg-white/10"
-                  title={t({ id: "Stop", message: "Stop" })}
+                  title={zh ? "停止" : "Stop"}
                 >
                   <Square className="h-3.5 w-3.5 fill-current" />
                 </button>
@@ -786,7 +776,7 @@ export function AgentPanel({
                       ? "bg-[#E2562B] hover:bg-[#C64A1E] active:scale-[0.97]"
                       : "bg-[#CBD5E1] dark:bg-white/10",
                   )}
-                  title={t({ id: "Send", message: "Send" })}
+                  title={zh ? "发送" : "Send"}
                 >
                   <CornerDownLeft className="h-4 w-4" />
                 </button>
@@ -837,7 +827,7 @@ function ReferenceSheet({
   onRemoveTemplate?: () => void;
   onClose: () => void;
 }) {
-  const t = useExtracted();
+  const zh = useIsChineseUI();
 
   /** 一栏（模板 / 材料共用的骨架）：图标 + 标题 + 说明 + 内容 */
   const column = (
@@ -879,13 +869,13 @@ function ReferenceSheet({
 
         <div className="mb-3 flex items-center justify-between gap-2">
           <h2 className="text-[17px] font-semibold tracking-[-0.01em] text-[#0F172A] dark:text-white">
-            {t({ id: "References", message: "References" })}
+            {zh ? "参考资料" : "References"}
           </h2>
           <button
             type="button"
             onClick={onClose}
             className="flex h-7 w-7 items-center justify-center rounded-full bg-black/[0.05] text-[#64748B] transition hover:bg-black/[0.08] dark:bg-white/10 dark:text-slate-300"
-            title={t({ id: "Close", message: "Close" })}
+            title={zh ? "关闭" : "Close"}
           >
             <X className="h-4 w-4" />
           </button>
@@ -895,11 +885,8 @@ function ReferenceSheet({
           {column(
             "template",
             <FileText className="h-4.5 w-4.5" strokeWidth={1.9} />,
-            t({ id: "Patent template", message: "Patent template" }),
-            t({
-              id: "Template column hint",
-              message: "The agent writes by its clauses.",
-            }),
+            zh ? "专利模板" : "Patent template",
+            zh ? "AI 按它的栏目成文" : "The agent writes by its clauses.",
             <>
               {template ? (
                 <div className="mb-2 rounded-xl border border-[#BBF7D0] bg-[#F6FEF9] px-2.5 py-2 dark:border-[#16A34A]/30 dark:bg-[#16A34A]/10">
@@ -908,7 +895,7 @@ function ReferenceSheet({
                   </p>
                   <div className="mt-0.5 flex items-center justify-between gap-2">
                     <p className="truncate text-[12.5px] text-[#94A3B8]">
-                      {t({ id: "In workspace", message: "原件已送入工作目录" })}
+                      {zh ? "原件已送入工作目录" : "File sent to the workspace"}
                     </p>
                     {onRemoveTemplate ? (
                       <button
@@ -916,7 +903,7 @@ function ReferenceSheet({
                         onClick={() => onRemoveTemplate()}
                         className="shrink-0 text-[12.5px] font-medium text-[#D4542F]"
                       >
-                        {t({ id: "Remove", message: "Remove" })}
+                        {zh ? "移除" : "Remove"}
                       </button>
                     ) : null}
                   </div>
@@ -929,7 +916,7 @@ function ReferenceSheet({
                 className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-black/[0.07] bg-white px-3 py-2.5 text-[14px] font-medium text-[#D4542F] transition hover:bg-[#D4542F]/5 active:scale-[0.98] disabled:opacity-50 dark:border-white/10 dark:bg-white/5"
               >
                 {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                {t({ id: "Upload template", message: "Upload template" })}
+                {zh ? "上传模板" : "Upload template"}
               </button>
             </>,
           )}
@@ -937,11 +924,8 @@ function ReferenceSheet({
           {column(
             "material",
             <Paperclip className="h-4.5 w-4.5" strokeWidth={1.9} />,
-            t({ id: "Materials", message: "Materials" }),
-            t({
-              id: "Material column hint",
-              message: "Anything the agent should read.",
-            }),
+            zh ? "材料" : "Materials",
+            zh ? "写什么、依据什么，都放这里" : "Anything the agent should read.",
             <>
               {materials.length ? (
                 <ul className="mb-2 space-y-1.5">
@@ -955,7 +939,7 @@ function ReferenceSheet({
                           {m.name}
                         </p>
                         <p className="truncate text-[12px] text-[#94A3B8]">
-                          {t({ id: "In workspace", message: "原件已送入工作目录" })}
+                          {zh ? "原件已送入工作目录" : "File sent to the workspace"}
                           {m.size ? ` · ${humanSize(m.size)}` : ""}
                         </p>
                       </div>
@@ -965,7 +949,7 @@ function ReferenceSheet({
                           onClick={() => onRemoveMaterial(m.name)}
                           className="shrink-0 text-[12.5px] font-medium text-[#D4542F]"
                         >
-                          {t({ id: "Remove", message: "Remove" })}
+                          {zh ? "移除" : "Remove"}
                         </button>
                       ) : null}
                     </li>
@@ -979,7 +963,7 @@ function ReferenceSheet({
                 className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-black/[0.07] bg-white px-3 py-2.5 text-[14px] font-medium text-[#D4542F] transition hover:bg-[#D4542F]/5 active:scale-[0.98] disabled:opacity-50 dark:border-white/10 dark:bg-white/5"
               >
                 {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                {t({ id: "Upload material", message: "Upload material" })}
+                {zh ? "上传材料" : "Upload material"}
               </button>
             </>,
           )}
@@ -987,10 +971,9 @@ function ReferenceSheet({
 
         {/* 两块都可空：把「不是必须」说清楚，免得用户以为漏了一步 */}
         <p className="mt-3 text-center text-[12.5px] text-[#94A3B8]">
-          {t({
-            id: "References optional hint",
-            message: "Both are optional — the agent can start without them.",
-          })}
+          {zh
+            ? "两项都不是必须的——不传也能直接开写。"
+            : "Both are optional — the agent can start without them."}
         </p>
       </div>
     </>
@@ -1012,7 +995,7 @@ function AnalysisTab({
   onRemoveMaterial?: (name: string) => void;
   onRemoveTemplate?: () => void;
 }) {
-  const t = useExtracted();
+  const zh = useIsChineseUI();
   // 工具调用不再从 notes 里捞字符串（那种「调用工具：read」的堆积已经去掉了），
   // 直接读每条消息上的活动摘要：总共几步 + 最后一步在读什么。
   const toolSteps = messages.reduce((n, m) => n + (m.activity?.steps ?? 0), 0);
@@ -1022,22 +1005,21 @@ function AnalysisTab({
   return (
     <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4 custom-scrollbar">
       <p className={vp.body}>
-        {t({
-          id: "Analysis intro",
-          message: "Analysis tracks stage progress, tool calls and materials used by the skill.",
-        })}
+        {zh
+          ? "分析页展示阶段进度、工具调用与技能用到的材料。"
+          : "Analysis tracks stage progress, tool calls and materials used by the skill."}
       </p>
 
       <div className={cn(vp.subCard, "p-3")}>
-        <span className={vp.label}>{t({ id: "Materials", message: "Materials" })}</span>
+        <span className={vp.label}>{zh ? "材料" : "Materials"}</span>
         {template ? (
           <div className="mt-1.5 flex items-start gap-2 rounded-lg border border-[#BBF7D0] bg-[#F6FEF9] px-2.5 py-2">
             <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#16A34A]" />
             <div className="min-w-0 flex-1">
               <p className="truncate text-[13.5px] font-medium text-[#15803D]">{template.name}</p>
               <p className="text-[12.5px] text-[#94A3B8]">
-                {t({ id: "Draft template", message: "Draft template" })} ·{" "}
-                {t({ id: "In workspace", message: "原件已送入工作目录" })}
+                {zh ? "成稿模板" : "Draft template"} ·{" "}
+                {zh ? "原件已送入工作目录" : "File sent to the workspace"}
               </p>
             </div>
             {onRemoveTemplate ? (
@@ -1046,7 +1028,7 @@ function AnalysisTab({
                 onClick={() => onRemoveTemplate()}
                 className={vp.btnText}
               >
-                {t({ id: "Remove", message: "Remove" })}
+                {zh ? "移除" : "Remove"}
               </button>
             ) : null}
           </div>
@@ -1058,7 +1040,7 @@ function AnalysisTab({
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[13.5px] text-[#475569] dark:text-slate-300">{m.name}</p>
                   <p className="text-[12.5px] text-[#94A3B8]">
-                    {t({ id: "In workspace", message: "原件已送入工作目录" })}
+                    {zh ? "原件已送入工作目录" : "File sent to the workspace"}
                     {m.size ? ` · ${humanSize(m.size)}` : ""}
                   </p>
                 </div>
@@ -1068,7 +1050,7 @@ function AnalysisTab({
                     onClick={() => onRemoveMaterial(m.name)}
                     className={vp.btnText}
                   >
-                    {t({ id: "Remove", message: "Remove" })}
+                    {zh ? "移除" : "Remove"}
                   </button>
                 ) : null}
               </li>
@@ -1076,40 +1058,33 @@ function AnalysisTab({
           </ul>
         ) : (
           <p className={cn(vp.meta, "mt-1.5")}>
-            {t({ id: "No materials yet", message: "No materials yet" })}
+            {zh ? "还没有材料（可在下方「添加材料」上传）" : "No materials yet"}
           </p>
         )}
       </div>
 
       <div className={cn(vp.subCard, "p-3")}>
-        <span className={vp.label}>{t({ id: "Tools", message: "Tools" })}</span>
+        <span className={vp.label}>{zh ? "工具" : "Tools"}</span>
         {toolSteps ? (
           <ul className="mt-1.5 space-y-1">
             <li className="text-[13.5px] text-[#475569] dark:text-slate-300">
               ·{" "}
-              {t({
-                id: "Tool call count",
-                message: "{count} tool calls",
-                values: { count: String(toolSteps) },
-              })}
+              {zh ? `工具调用 ${toolSteps} 次` : `${toolSteps} tool calls`}
             </li>
             {lastTarget || lastActivity?.name ? (
               <li className="text-[13px] text-[#94A3B8]">
                 ·{" "}
-                {t({
-                  id: "Last tool target",
-                  message: "Latest: {what}",
-                  values: { what: lastTarget || String(lastActivity?.name) },
-                })}
+                {zh
+                  ? `最近一次：${lastTarget || String(lastActivity?.name)}`
+                  : `Latest: ${lastTarget || String(lastActivity?.name)}`}
               </li>
             ) : null}
           </ul>
         ) : (
           <p className={cn(vp.meta, "mt-1.5")}>
-            {t({
-              id: "No tool calls yet",
-              message: "No tool calls yet — the agent reads skills and writes text only.",
-            })}
+            {zh
+              ? "暂无工具调用——智能体将在此调用技能脚本。"
+              : "No tool calls yet — the agent reads skills and writes text only."}
           </p>
         )}
       </div>

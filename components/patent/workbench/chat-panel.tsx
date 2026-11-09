@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, Maximize2, Paperclip, Square, X } from "lucide-react";
+import { useIsChineseUI } from "@/store";
 import type { ChatMessage, UseAiChat } from "@/hooks/use-ai-chat";
 import type { StepKey } from "./copyright";
 
@@ -39,12 +40,18 @@ export function ChatPanel({
   modelLabel,
   onToggleWidth,
   disabled = false,
-  disabledHint = "填写信息并开始办理后，可在这里继续对话",
+  disabledHint,
   staged = null,
   onClearStaged,
   onStagedSent,
   contextFile = null,
 }: ChatPanelProps) {
+  const zh = useIsChineseUI();
+  const disabledHintText =
+    disabledHint ??
+    (zh
+      ? "填写信息并开始办理后，可在这里继续对话"
+      : "Fill in the information and start processing to continue chatting here");
   const [text, setText] = useState("");
   /** 执行中先排队的消息：本轮结束后按顺序自动发送，不打断当前步骤 */
   const [queued, setQueued] = useState<Array<{ text: string; stepKey?: StepKey }>>([]);
@@ -131,7 +138,7 @@ export function ChatPanel({
         await chat.upload(file);
       }
     } catch (error) {
-      setUploadError(error instanceof Error ? error.message : "上传失败");
+      setUploadError(error instanceof Error ? error.message : zh ? "上传失败" : "Upload failed");
     } finally {
       setUploading(false);
     }
@@ -143,12 +150,14 @@ export function ChatPanel({
         <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#111113] text-[11px] font-semibold text-white">
           P
         </span>
-        <span className="text-[14px] font-semibold text-[#111113]">PI 助手</span>
+        <span className="text-[14px] font-semibold text-[#111113]">
+          {zh ? "PI 助手" : "PI Assistant"}
+        </span>
         <span className="ml-0.5 flex items-center gap-1 text-[11.5px] text-[#8E8E93]">
           <span
             className={`h-1 w-1 rounded-full ${chat.blocked ? "bg-[#C9C9CF]" : "bg-[#3EA05C]"}`}
           />
-          {chat.blocked ? "未连接" : "在线"}
+          {chat.blocked ? (zh ? "未连接" : "Offline") : zh ? "在线" : "Online"}
         </span>
         <div className="ml-auto flex items-center gap-1">
           <span className="rounded border border-[#EAEAEC] px-1.5 py-0.5 text-[10px] text-[#9A9BA1]">
@@ -157,7 +166,7 @@ export function ChatPanel({
           <button
             type="button"
             onClick={onToggleWidth}
-            title="展开 / 收起"
+            title={zh ? "展开 / 收起" : "Expand / Collapse"}
             className="flex h-7 w-7 items-center justify-center rounded-md text-[#9A9BA1] transition hover:bg-[#F4F4F5] hover:text-[#151517]"
           >
             <Maximize2 className="h-3.5 w-3.5" />
@@ -169,7 +178,9 @@ export function ChatPanel({
         {chat.messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center text-center">
             <span className="text-[13px] font-medium text-[#8A8B91]">
-              上传材料，或直接说这一步要做什么
+              {zh
+                ? "上传材料，或直接说这一步要做什么"
+                : "Upload materials, or simply say what this step should do"}
             </span>
           </div>
         ) : (
@@ -195,11 +206,11 @@ export function ChatPanel({
               {activeFile ? (
                 <span className="flex h-7 max-w-full items-center gap-1 rounded-full bg-[#F2F2F5] pl-2.5 pr-1 text-[11.5px] text-[#3C3C43]">
                   <span className="truncate" title={activeFile.path}>
-                    当前文件 · {activeFile.name}
+                    {zh ? "当前文件" : "Current file"} · {activeFile.name}
                   </span>
                   <button
                     type="button"
-                    title="这条消息不再带上这个文件"
+                    title={zh ? "这条消息不再带上这个文件" : "Do not include this file in this message"}
                     onClick={() => setDismissedFile(activeFile.path)}
                     className="flex h-5 w-5 flex-none items-center justify-center rounded-full text-[#8E8E93] transition hover:bg-[#E2E2E7] hover:text-[#1C1C1E]"
                   >
@@ -210,10 +221,10 @@ export function ChatPanel({
               {staged ? (
                 <div className="flex items-start gap-1.5 rounded-lg border border-[#EAEAEC] bg-[#F7F7F9] px-2.5 py-1.5">
                   <div className="min-w-0 flex-1 text-[11.5px] leading-[1.6] text-[#5F6066]">
-                    系统指令 · {staged.title}
+                    {zh ? "系统指令" : "System instruction"} · {staged.title}
                     <details className="mt-0.5">
                       <summary className="cursor-pointer text-[10.5px] text-[#9A9BA1]">
-                        查看内容
+                        {zh ? "查看内容" : "View content"}
                       </summary>
                       <p className="mt-1 whitespace-pre-wrap text-[10.5px] leading-relaxed text-[#7A7B81]">
                         {staged.prompt}
@@ -223,7 +234,7 @@ export function ChatPanel({
                   <button
                     type="button"
                     onClick={onClearStaged}
-                    title="移除这一步"
+                    title={zh ? "移除这一步" : "Remove this step"}
                     className="flex h-5 w-5 flex-none items-center justify-center rounded-full text-[#8E8E93] transition hover:bg-[#E2E2E7] hover:text-[#1C1C1E]"
                   >
                     <X className="h-3.5 w-3.5" />
@@ -250,17 +261,21 @@ export function ChatPanel({
             rows={1}
             placeholder={
               disabled
-                ? disabledHint
+                ? disabledHintText
                 : staged
-                  ? "可以补充这一步的要求（可留空直接发送）"
-                  : "继续和 PI 说…"
+                  ? zh
+                    ? "可以补充这一步的要求（可留空直接发送）"
+                    : "You may add requirements for this step (leave blank to send directly)"
+                  : zh
+                    ? "继续和 PI 说…"
+                    : "Continue chatting with PI…"
             }
             className="max-h-32 w-full resize-none bg-transparent text-[13px] leading-relaxed text-[#111113] outline-none placeholder:text-[#A1A1A6] disabled:cursor-not-allowed"
           />
           <div className="mt-1.5 flex items-center gap-1">
             <button
               type="button"
-              title="上传材料"
+              title={zh ? "上传材料" : "Upload materials"}
               disabled={uploading || disabled}
               onClick={() => fileRef.current?.click()}
               className="flex h-6 w-6 items-center justify-center rounded text-[#9A9BA1] transition hover:bg-[#F4F4F5] hover:text-[#151517] disabled:opacity-50"
@@ -279,14 +294,24 @@ export function ChatPanel({
             />
             <span className="text-[10.5px] text-[#9A9BA1]">
               {uploading
-                ? "上传中…"
+                ? zh
+                  ? "上传中…"
+                  : "Uploading…"
                 : chat.streaming
                   ? queued.length
-                    ? `已排队 ${queued.length} 条，本轮结束后自动发送`
-                    : "Enter 排队，本轮结束后自动发送"
+                    ? zh
+                      ? `已排队 ${queued.length} 条，本轮结束后自动发送`
+                      : `${queued.length} queued; sent automatically when this round ends`
+                    : zh
+                      ? "Enter 排队，本轮结束后自动发送"
+                      : "Press Enter to queue; sent automatically when this round ends"
                   : staged
-                    ? "Enter 发送这一步 · Shift+Enter 换行"
-                    : "Enter 发送 · Shift+Enter 换行"}
+                    ? zh
+                      ? "Enter 发送这一步 · Shift+Enter 换行"
+                      : "Enter to send this step · Shift+Enter for a new line"
+                    : zh
+                      ? "Enter 发送 · Shift+Enter 换行"
+                      : "Enter to send · Shift+Enter for a new line"}
             </span>
             {queued.length > 0 ? (
               <button
@@ -294,7 +319,7 @@ export function ChatPanel({
                 onClick={() => setQueued([])}
                 className="text-[10.5px] text-[#8E8E93] underline-offset-2 hover:underline"
               >
-                取消排队
+                {zh ? "取消排队" : "Clear queue"}
               </button>
             ) : null}
             <div className="ml-auto flex items-center gap-1">
@@ -305,7 +330,7 @@ export function ChatPanel({
                       type="button"
                       onClick={send}
                       disabled={disabled}
-                      title="排队发送（本轮结束后自动发送）"
+                      title={zh ? "排队发送（本轮结束后自动发送）" : "Queue send (sent automatically when this round ends)"}
                       className="flex h-7 w-7 items-center justify-center rounded-md bg-[#151517] text-white transition hover:bg-black disabled:bg-[#D8D8DC]"
                     >
                       <ArrowUp className="h-3.5 w-3.5" />
@@ -314,7 +339,7 @@ export function ChatPanel({
                   <button
                     type="button"
                     onClick={chat.stop}
-                    title="停止生成"
+                    title={zh ? "停止生成" : "Stop generating"}
                     className="flex h-7 w-7 items-center justify-center rounded-md bg-[#151517] text-white transition hover:bg-black"
                   >
                     <Square className="h-3 w-3 fill-current" />
@@ -325,7 +350,7 @@ export function ChatPanel({
                   type="button"
                   onClick={send}
                   disabled={!canSend || disabled}
-                  title="发送"
+                  title={zh ? "发送" : "Send"}
                   className="flex h-7 w-7 items-center justify-center rounded-md bg-[#151517] text-white transition hover:bg-black disabled:bg-[#D8D8DC]"
                 >
                   <ArrowUp className="h-3.5 w-3.5" />
@@ -363,6 +388,7 @@ function parseUserText(raw: string) {
 }
 
 function Message({ message }: { message: ChatMessage }) {
+  const zh = useIsChineseUI();
   if (message.role === "user") {
     const parsed = parseUserText(message.text);
     if (!parsed.file && !parsed.step) {
@@ -380,7 +406,7 @@ function Message({ message }: { message: ChatMessage }) {
           {parsed.file ? (
             <p className="flex min-w-0 items-center gap-1.5 text-[11px] text-white/65">
               <span className="h-1 w-1 flex-none rounded-full bg-white/50" />
-              当前文件 ·
+              {zh ? "当前文件" : "Current file"} ·
               <span className="min-w-0 truncate" title={parsed.file}>
                 {parsed.file.split("/").pop() || parsed.file}
               </span>
@@ -389,7 +415,7 @@ function Message({ message }: { message: ChatMessage }) {
           {parsed.step ? (
             <details className="rounded-md bg-white/10 px-2 py-1">
               <summary className="cursor-pointer text-[11px] text-white/70">
-                系统指令 · {parsed.step.title}
+                {zh ? "系统指令" : "System instruction"} · {parsed.step.title}
               </summary>
               <p className="mt-1 whitespace-pre-wrap text-[11px] leading-relaxed text-white/60">
                 {parsed.step.prompt}
@@ -415,7 +441,11 @@ function Message({ message }: { message: ChatMessage }) {
             <span className="h-1 w-1 animate-pulse rounded-full bg-[#9A9BA1]" />
             {message.activity.name}
             {message.activity.target ? ` · ${message.activity.target}` : ""}
-            {message.activity.steps > 0 ? `（第 ${message.activity.steps} 步）` : ""}
+            {message.activity.steps > 0
+              ? zh
+                ? `（第 ${message.activity.steps} 步）`
+                : ` (step ${message.activity.steps})`
+              : ""}
           </p>
         ) : null}
 
@@ -442,7 +472,7 @@ function Message({ message }: { message: ChatMessage }) {
         {message.thinking ? (
           <details className="mt-2 rounded-md bg-[#F4F4F5] px-2.5 py-1.5">
             <summary className="cursor-pointer text-[10.5px] text-[#9A9BA1]">
-              思考过程
+              {zh ? "思考过程" : "Reasoning"}
             </summary>
             <p className="mt-1.5 whitespace-pre-wrap text-[11px] leading-relaxed text-[#7A7B81]">
               {message.thinking}
@@ -451,7 +481,9 @@ function Message({ message }: { message: ChatMessage }) {
         ) : null}
 
         {message.error ? (
-          <p className="mt-1 text-[10.5px] text-[#C0392B]">这一轮生成失败，可以直接重发。</p>
+          <p className="mt-1 text-[10.5px] text-[#C0392B]">
+            {zh ? "这一轮生成失败，可以直接重发。" : "This round failed; you can resend directly."}
+          </p>
         ) : null}
       </div>
     </div>

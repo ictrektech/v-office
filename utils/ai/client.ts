@@ -391,6 +391,27 @@ export async function rebuildFinalDocx(sid: string): Promise<void> {
   throw new Error(body.message || body.detail || `重建失败（${resp.status}）`);
 }
 
+/**
+ * 按 md 源重建同名 Word（专利交底 / 申请文件 / 审查答复）。
+ *
+ * 与软著的「整案重建」不同：这里只重建用户改过的那一份，改哪儿点哪儿。
+ * 失败时返回 422，message 是脚本输出的错误尾部（如申请表四件套的行内公式
+ * 分隔符不合规）。
+ */
+export async function rebuildPatentDocx(sid: string, path: string): Promise<void> {
+  const resp = await aiFetch(`/sessions/${encodeURIComponent(sid)}/rebuild-docx`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (resp.ok) return;
+  const body = (await resp.json().catch(() => ({}))) as {
+    detail?: string;
+    message?: string;
+  };
+  throw new Error(body.message || body.detail || `重建失败（${resp.status}）`);
+}
+
 /** 内容的 sha256（十六进制），作 md 写回的乐观锁基准 */
 export async function sha256Hex(text: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
@@ -636,6 +657,8 @@ export interface ChatOptions {
   save?: boolean;
   /** 初稿是否自动存进我的文档（写作栏目自管保存时设 false） */
   autosave?: boolean;
+  /** 站点/VOS 的解析语言：服务端据此要求 AI 用该语言产出面向用户的文字 */
+  language?: string;
   onEvent: (event: AiEvent) => void;
   signal?: AbortSignal;
 }
@@ -648,12 +671,12 @@ export interface ChatOptions {
  */
 export async function chatStream(
   sid: string,
-  { prompt, resume = true, anchor = "", selection = "", save = false, autosave = true, onEvent, signal }: ChatOptions,
+  { prompt, resume = true, anchor = "", selection = "", save = false, autosave = true, language = "", onEvent, signal }: ChatOptions,
 ): Promise<void> {
   const resp = await aiFetch(`/sessions/${encodeURIComponent(sid)}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, resume, anchor, selection, save, autosave }),
+    body: JSON.stringify({ prompt, resume, anchor, selection, save, autosave, language }),
     signal,
   });
   if (!resp.ok || !resp.body) {

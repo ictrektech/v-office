@@ -169,10 +169,10 @@ export async function listLocalMaterials(): Promise<LocalMaterialRecord[]> {
 }
 
 /** 按文件名取回 File（点击历史项时重新作为材料） */
-export async function loadLocalMaterial(name: string): Promise<File> {
+export async function loadLocalMaterial(name: string, zh: boolean = true): Promise<File> {
   const db = await getDB();
   const v = await db.get(STORE, name);
-  if (!v) throw new Error("记录不存在");
+  if (!v) throw new Error(zh ? "记录不存在" : "Record not found");
   return v.file;
 }
 

@@ -10,29 +10,37 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, ArrowUpRight, Search, Trash2 } from "lucide-react";
+import { useIsChineseUI } from "@/store";
 import { deleteAiSession, listAiSessions, type AiSessionMeta } from "@/utils/ai/client";
 
 type TabKey = "all" | "disclosure" | "application" | "oa" | "full" | "copyright";
 
-const SKILLS: Record<string, { label: string; tab: Exclude<TabKey, "all"> }> = {
-  "patent-docket": { label: "全流程", tab: "full" },
-  "patent-disclosure": { label: "交底书", tab: "disclosure" },
-  "patent-application": { label: "申请文件", tab: "application" },
-  "patent-oa": { label: "审查答复", tab: "oa" },
-  "software-copyright": { label: "软件著作权", tab: "copyright" },
+const SKILLS: Record<string, { label: string; labelEn: string; tab: Exclude<TabKey, "all"> }> = {
+  "patent-docket": { label: "全流程", labelEn: "Full Process", tab: "full" },
+  "patent-disclosure": { label: "交底书", labelEn: "Invention Disclosure", tab: "disclosure" },
+  "patent-application": { label: "申请文件", labelEn: "Application Documents", tab: "application" },
+  "patent-oa": { label: "审查答复", labelEn: "Office Action Response", tab: "oa" },
+  "software-copyright": { label: "软件著作权", labelEn: "Software Copyright", tab: "copyright" },
 };
 
-const TABS: { key: TabKey; label: string }[] = [
-  { key: "all", label: "全部" },
-  { key: "full", label: "全流程" },
-  { key: "disclosure", label: "交底书" },
-  { key: "application", label: "申请文件" },
-  { key: "oa", label: "审查答复" },
-  { key: "copyright", label: "软件著作权" },
+const TABS: { key: TabKey; label: string; labelEn: string }[] = [
+  { key: "all", label: "全部", labelEn: "All" },
+  { key: "full", label: "全流程", labelEn: "Full Process" },
+  { key: "disclosure", label: "交底书", labelEn: "Invention Disclosure" },
+  { key: "application", label: "申请文件", labelEn: "Application Documents" },
+  { key: "oa", label: "审查答复", labelEn: "Office Action Response" },
+  { key: "copyright", label: "软件著作权", labelEn: "Software Copyright" },
 ];
 
-const GROUPS = ["今天", "昨天", "近 7 天", "更早"] as const;
+const GROUPS = ["today", "yesterday", "week", "earlier"] as const;
 type GroupKey = (typeof GROUPS)[number];
+
+const GROUP_LABELS: Record<GroupKey, { zh: string; en: string }> = {
+  today: { zh: "今天", en: "Today" },
+  yesterday: { zh: "昨天", en: "Yesterday" },
+  week: { zh: "近 7 天", en: "Past 7 days" },
+  earlier: { zh: "更早", en: "Earlier" },
+};
 
 const DAY = 86_400_000;
 
@@ -42,13 +50,13 @@ function toMs(value?: number): number {
 }
 
 function groupOf(ms: number): GroupKey {
-  if (!ms) return "更早";
+  if (!ms) return "earlier";
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  if (ms >= today) return "今天";
-  if (ms >= today - DAY) return "昨天";
-  if (ms >= today - 6 * DAY) return "近 7 天";
-  return "更早";
+  if (ms >= today) return "today";
+  if (ms >= today - DAY) return "yesterday";
+  if (ms >= today - 6 * DAY) return "week";
+  return "earlier";
 }
 
 function formatTime(ms: number): string {
@@ -64,6 +72,7 @@ function hrefOf(item: AiSessionMeta, tab: Exclude<TabKey, "all">): string {
 }
 
 export function HistoryView() {
+  const zh = useIsChineseUI();
   const router = useRouter();
   const [sessions, setSessions] = useState<AiSessionMeta[]>([]);
   const [loading, setLoading] = useState(true);
@@ -82,7 +91,13 @@ export function HistoryView() {
       })
       .catch((reason) => {
         if (!alive) return;
-        setError(reason instanceof Error ? reason.message : "无法读取历史记录");
+        setError(
+          reason instanceof Error
+            ? reason.message
+            : zh
+              ? "无法读取历史记录"
+              : "Unable to load history",
+        );
       })
       .finally(() => alive && setLoading(false));
     return () => {
@@ -127,7 +142,7 @@ export function HistoryView() {
       await deleteAiSession(id);
       setSessions((list) => list.filter((item) => item.id !== id));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "删除失败");
+      setError(reason instanceof Error ? reason.message : zh ? "删除失败" : "Delete failed");
     } finally {
       setDeleting("");
       setConfirmId("");
@@ -144,19 +159,23 @@ export function HistoryView() {
               if (window.history.length > 1) router.back();
               else router.push("/patent");
             }}
-            title="返回"
+            title={zh ? "返回" : "Back"}
             className="-ml-1.5 flex h-7 w-7 items-center justify-center rounded-md text-[#5F6066] transition hover:bg-[#F4F4F5] hover:text-[#151517]"
           >
             <ArrowLeft className="h-4 w-4" />
           </button>
-          <span className="text-[11.5px] font-medium text-[#8A8B91]">专利工作台</span>
+          <span className="text-[11.5px] font-medium text-[#8A8B91]">
+            {zh ? "专利工作台" : "Patent Workbench"}
+          </span>
         </div>
 
         <h1 className="mt-3 text-[23px] font-bold leading-tight tracking-[-0.01em] text-[#0F0F11]">
-          历史记录
+          {zh ? "历史记录" : "History"}
         </h1>
         <p className="mt-1.5 text-[11.5px] leading-relaxed text-[#8A8B91]">
-          每个阶段各存一条会话，生成的文档留在这条记录里；只有你自己删除才会清掉。
+          {zh
+            ? "每个阶段各存一条会话，生成的文档留在这条记录里；只有你自己删除才会清掉。"
+            : "Each stage keeps one conversation, and generated documents stay in that record; they are only cleared when you delete them yourself."}
         </p>
 
         <div className="mt-6 flex flex-wrap items-center gap-2">
@@ -171,7 +190,7 @@ export function HistoryView() {
                   : "text-[#5F6066] hover:bg-[#F4F4F5] hover:text-[#151517]"
               }`}
             >
-              {item.label}
+              {zh ? item.label : item.labelEn}
             </button>
           ))}
 
@@ -180,33 +199,51 @@ export function HistoryView() {
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索标题"
+              placeholder={zh ? "搜索标题" : "Search titles"}
               className="min-w-0 flex-1 bg-transparent text-[12px] text-[#151517] outline-none placeholder:text-[#B0B1B7]"
             />
           </label>
         </div>
 
         {loading ? (
-          <p className="mt-8 text-[11.5px] text-[#9A9BA1]">正在加载…</p>
+          <p className="mt-8 text-[11.5px] text-[#9A9BA1]">
+            {zh ? "正在加载…" : "Loading…"}
+          </p>
         ) : error ? (
           <div className="mt-8 rounded-xl border border-[#EAEAEC] px-4 py-6 text-center">
             <p className="text-[12px] text-[#5F6066]">{error}</p>
-            <p className="mt-1 text-[10.5px] text-[#9A9BA1]">检查 AI 服务是否已连接</p>
+            <p className="mt-1 text-[10.5px] text-[#9A9BA1]">
+              {zh ? "检查 AI 服务是否已连接" : "Check whether the AI service is connected"}
+            </p>
           </div>
         ) : total === 0 ? (
           <div className="mt-8 rounded-xl border border-[#EAEAEC] px-4 py-10 text-center">
             <p className="text-[12px] text-[#5F6066]">
-              {sessions.length === 0 ? "还没有历史记录" : "没有匹配的会话"}
+              {sessions.length === 0
+                ? zh
+                  ? "还没有历史记录"
+                  : "No history yet"
+                : zh
+                  ? "没有匹配的会话"
+                  : "No matching conversations"}
             </p>
             <p className="mt-1 text-[10.5px] text-[#9A9BA1]">
-              {sessions.length === 0 ? "在任一阶段开始一次对话后，这里就会留档" : "换个关键词或切回「全部」"}
+              {sessions.length === 0
+                ? zh
+                  ? "在任一阶段开始一次对话后，这里就会留档"
+                  : "Start a conversation in any stage and it will be recorded here"
+                : zh
+                  ? "换个关键词或切回「全部」"
+                  : 'Try another keyword or switch back to "All"'}
             </p>
           </div>
         ) : (
           <div className="mt-6 space-y-6">
             {grouped.map((group) => (
               <section key={group.key}>
-                <h2 className="mb-2 text-[11px] font-semibold text-[#9A9BA1]">{group.key}</h2>
+                <h2 className="mb-2 text-[11px] font-semibold text-[#9A9BA1]">
+                  {zh ? GROUP_LABELS[group.key].zh : GROUP_LABELS[group.key].en}
+                </h2>
                 <div className="divide-y divide-[#F1F1F3] rounded-xl border border-[#EAEAEC] bg-white">
                   {group.items.map((item) => {
                     const kind = SKILLS[item.skill ?? ""];
@@ -220,16 +257,24 @@ export function HistoryView() {
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
                             <span className="truncate text-[13px] font-medium text-[#0F0F11]">
-                              {item.title || "未命名会话"}
+                              {item.title || (zh ? "未命名会话" : "Untitled conversation")}
                             </span>
                             <span className="flex-none rounded bg-[#F4F4F5] px-1.5 py-0.5 text-[9.5px] font-medium text-[#5F6066]">
-                              {kind.label}
+                              {zh ? kind.label : kind.labelEn}
                             </span>
                           </div>
                           <p className="mt-1 text-[10.5px] text-[#9A9BA1]">
                             {formatTime(ms)}
-                            {item.files ? ` · ${item.files} 个文件` : ""}
-                            {item.turn ? ` · ${item.turn} 轮对话` : ""}
+                            {item.files
+                              ? zh
+                                ? ` · ${item.files} 个文件`
+                                : ` · ${item.files} files`
+                              : ""}
+                            {item.turn
+                              ? zh
+                                ? ` · ${item.turn} 轮对话`
+                                : ` · ${item.turn} turns`
+                              : ""}
                           </p>
                         </div>
                         <button
@@ -244,17 +289,23 @@ export function HistoryView() {
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                           {deleting === item.id
-                            ? "删除中"
+                            ? zh
+                              ? "删除中"
+                              : "Deleting"
                             : confirmId === item.id
-                              ? "确认删除"
-                              : "删除"}
+                              ? zh
+                                ? "确认删除"
+                                : "Confirm delete"
+                              : zh
+                                ? "删除"
+                                : "Delete"}
                         </button>
                         <button
                           type="button"
                           onClick={() => router.push(hrefOf(item, kind.tab))}
                           className="flex flex-none items-center gap-1 rounded-md px-2.5 py-1.5 text-[11.5px] text-[#5F6066] transition hover:bg-[#F4F4F5] hover:text-[#151517]"
                         >
-                          继续办理
+                          {zh ? "继续办理" : "Continue"}
                           <ArrowUpRight className="h-3.5 w-3.5" />
                         </button>
                       </div>

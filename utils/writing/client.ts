@@ -157,6 +157,12 @@ export class WritingClient {
   private streaming = false;
   private materials: string[] = [];
 
+  /**
+   * 站点/VOS 的解析语言：随每轮请求发给服务端，决定成稿正文与审查意见的语言。
+   * 页面每次 new 时把当前解析语言传进来（语言可能在会话中途被切换）。
+   */
+  constructor(private language: string = "", private zh: boolean = true) {}
+
   onEvent(listener: EventListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -198,6 +204,7 @@ export class WritingClient {
         prompt,
         resume,
         autosave: false,  // 写作栏目自己管存稿（见 writing-view 的「保存到我的文档」）
+        language: this.language,
         signal: controller.signal,
         onEvent: (event: AiEvent) => {
           switch (event.type) {
@@ -211,11 +218,13 @@ export class WritingClient {
             case "retry":
               this.emit({
                 _event: "writing_warning",
-                message: `模型未响应，正在重试（第 ${event.attempt ?? 2} 次）`,
+                message: this.zh
+                  ? `模型未响应，正在重试（第 ${event.attempt ?? 2} 次）`
+                  : `The model is not responding — retrying (attempt ${event.attempt ?? 2})`,
               });
               break;
             case "error":
-              failure = String(event.message ?? "生成失败");
+              failure = String(event.message ?? (this.zh ? "生成失败" : "Generation failed"));
               if (event.text) text = String(event.text);
               break;
             default:
@@ -224,7 +233,9 @@ export class WritingClient {
         },
       });
     } catch (err) {
-      failure = `连接中断：${String(err)}`;
+      failure = this.zh
+        ? `连接中断：${String(err)}`
+        : `Connection lost: ${String(err)}`;
     } finally {
       this.controller = null;
       this.streaming = false;
@@ -267,7 +278,10 @@ export class WritingClient {
    */
   async start(config: WritingConfig, uploadId?: string, _agent?: string): Promise<void> {
     if (!uploadId) {
-      this.emit({ _event: "writing_error", message: "缺少材料会话，请重新上传材料" });
+      this.emit({
+        _event: "writing_error",
+        message: this.zh ? "缺少材料会话，请重新上传材料" : "Missing material session — please upload the material again",
+      });
       return;
     }
     this.sessionId = uploadId;
@@ -278,7 +292,10 @@ export class WritingClient {
   /** 局部微调：同一会话里追加一轮，上下文由 agent 自己保留 */
   revise(instruction: string, config: WritingConfig): void {
     if (!this.sessionId) {
-      this.emit({ _event: "writing_error", message: "会话不存在，请重新开始" });
+      this.emit({
+        _event: "writing_error",
+        message: this.zh ? "会话不存在，请重新开始" : "Session not found — please start over",
+      });
       return;
     }
     const prompt = [
@@ -293,7 +310,9 @@ export class WritingClient {
   undo(_config?: WritingConfig): void {
     this.emit({
       _event: "writing_error",
-      message: "当前版本不支持撤销：会话上下文由 agent 保留，请直接用「局部微调」说明要改回什么",
+      message: this.zh
+        ? "当前版本不支持撤销：会话上下文由 agent 保留，请直接用「局部微调」说明要改回什么"
+        : "Undo is not supported in this version: the agent keeps the session context, so use “Fine-tune” to state what should be changed back",
     });
   }
 
@@ -388,6 +407,7 @@ function draftToMarkdown(blocks: { heading?: string; text?: string }[]): string 
 export async function restoreWriting(
   session?: string,
   config?: WritingConfig,
+  zh: boolean = true,
 ): Promise<RestoredWriting> {
   if (!session) return { restored: false };
   try {
@@ -405,7 +425,7 @@ export async function restoreWriting(
         .map((m, index) => ({
           key: `restored-${index}`,
           kind: m.role === "user" ? "parse" : "draft",
-          title: m.role === "user" ? "你的要求" : "写手起草",
+          title: m.role === "user" ? (zh ? "你的要求" : "Your request") : (zh ? "写手起草" : "Drafting"),
           status: "done",
           text: m.text,
           thinking: m.thinking ?? "",
@@ -429,7 +449,7 @@ export async function restoreWriting(
   }
 }
 
-export async function listMyWritingSessions(): Promise<MyWritingDoc[]> {
+export async function listMyWritingSessions(zh: boolean = true): Promise<MyWritingDoc[]> {
   const sessions = await listAiSessions();
   return sessions
     // 只看写作这条线：专利那几个技能包的会话归「AI 专利工作台」的最近案件，
@@ -437,7 +457,7 @@ export async function listMyWritingSessions(): Promise<MyWritingDoc[]> {
     .filter((s) => !(s.skill ?? "").startsWith("patent"))
     .map((s) => ({
       sessionId: s.id,
-      name: s.title || "未命名稿件",
+      name: s.title || (zh ? "未命名稿件" : "Untitled draft"),
       updatedAt: new Date((s.updated_at ?? Date.now() / 1000) * 1000).toISOString(),
       // 写作配置没有随会话落库，这里给一份最小的（只有文种与标题是必填）：
       // 上层「打开最近使用」要求 sessionId **和 config 都在**才肯恢复，缺 config

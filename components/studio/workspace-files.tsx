@@ -21,8 +21,8 @@ import {
   Loader2,
   RefreshCw,
 } from "lucide-react";
-import { useExtracted } from "next-intl";
 import { cn } from "@/lib/utils";
+import { useIsChineseUI } from "@/store";
 import {
   aiFileObjectUrl,
   listAiFiles,
@@ -63,7 +63,7 @@ export function WorkspaceFiles({
   refreshKey?: string | number;
   className?: string;
 }) {
-  const t = useExtracted();
+  const zh = useIsChineseUI();
   const [files, setFiles] = useState<AiFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -100,13 +100,13 @@ export function WorkspaceFiles({
       const bad = results.filter((r) => r.error);
       if (ok) {
         setNotice(
-          t(
-            { id: "Saved to my docs", message: "已收进我的文档：{n} 份", values: { n: String(ok) } },
-          ),
+          zh
+            ? `已收进我的文档：${ok} 份`
+            : `Saved to My Documents: ${ok} file(s)`,
         );
       }
       if (bad.length) {
-        setError(bad.map((b) => `${b.path}：${b.error}`).join("；"));
+        setError(bad.map((b) => `${b.path}${zh ? "：" : ": "}${b.error}`).join(zh ? "；" : "; "));
       }
     } catch (err) {
       setError(String(err instanceof Error ? err.message : err));
@@ -143,10 +143,9 @@ export function WorkspaceFiles({
         )}
       >
         <FileText className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
-        {t({
-          id: "Workspace files idle",
-          message: "交付件：助手跑完技能脚本后，Word / Excel / 图会出现在这里",
-        })}
+        {zh
+          ? "交付件：助手跑完技能脚本后，Word / Excel / 图会出现在这里"
+          : "Deliverables: Word / Excel / images from skill scripts appear here"}
         {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
       </p>
     );
@@ -157,13 +156,13 @@ export function WorkspaceFiles({
       "rounded-xl border border-black/[0.06] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] dark:border-white/10 dark:bg-[#171719]", "flex flex-col overflow-hidden", className)}>
       <h2 className={"flex items-center gap-2 border-b border-black/[0.05] px-4 py-3 text-[14px] font-semibold text-[#1A1A1A] dark:border-white/5 dark:text-white"}>
         <FileText className="h-4 w-4 text-[#E2562B]" strokeWidth={2} />
-        {t({ id: "Workspace files", message: "交付件" })}
+        {zh ? "交付件" : "Deliverables"}
         <span className="ml-auto flex items-center gap-2 text-[11.5px] font-normal text-[#9A9AA0]">
           {files.length ? files.length : null}
           <button
             type="button"
             onClick={() => void load()}
-            title={t({ id: "Refresh", message: "刷新" })}
+            title={zh ? "刷新" : "Refresh"}
             className="transition hover:text-[#E2562B]"
           >
             {loading ? (
@@ -205,14 +204,14 @@ export function WorkspaceFiles({
                       {busy === f.path ? (
                         <Loader2 className="h-3 w-3 animate-spin" />
                       ) : (
-                        t({ id: "Save to docs", message: "存到我的文档" })
+                        zh ? "存到我的文档" : "Save to My Documents"
                       )}
                     </button>
                     <button
                       type="button"
                       onClick={() => void download(f.path)}
                       disabled={busy !== null}
-                      title={t({ id: "Download", message: "下载" })}
+                      title={zh ? "下载" : "Download"}
                       className="shrink-0 rounded-md p-1 text-[#9A9AA0] transition hover:text-[#E2562B] disabled:opacity-40"
                     >
                       <Download className="h-3.5 w-3.5" />
@@ -232,16 +231,14 @@ export function WorkspaceFiles({
               ) : (
                 <Check className="h-3.5 w-3.5" />
               )}
-              {t({ id: "Save all to docs", message: "全部收进我的文档" })}
+              {zh ? "全部收进我的文档" : "Save all to My Documents"}
             </button>
           </>
         ) : (
           <p className="rounded-lg border border-dashed border-black/[0.1] px-3 py-6 text-center text-[11.5px] leading-relaxed text-[#9A9AA0] dark:border-white/10">
-            {t({
-              id: "Workspace files empty",
-              message:
-                "还没有产出的文件。助手跑完技能脚本后，Word / Excel / 图会出现在这里。",
-            })}
+            {zh
+              ? "还没有产出的文件。助手跑完技能脚本后，Word / Excel / 图会出现在这里。"
+              : "No files yet. Word / Excel / images from skill scripts will appear here."}
           </p>
         )}
 

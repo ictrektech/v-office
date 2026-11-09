@@ -11,6 +11,7 @@
 
 import { useMemo, useState } from "react";
 import { Check } from "lucide-react";
+import { useIsChineseUI } from "@/store";
 import {
   EMPTY_INFO,
   PROMPTS,
@@ -42,7 +43,17 @@ const FIELD_HINT: Record<keyof SoftwareInfo, string> = {
   runEnv: "软件实际运行环境",
 };
 
+const FIELD_HINT_EN: Record<keyof SoftwareInfo, string> = {
+  name: "Required; used for the final file name and page header",
+  version: "e.g. V1.0",
+  owner: "Copyright owner's full name (natural person's name)",
+  finishDate: "YYYY-MM-DD",
+  devEnv: "Your development machine configuration; do not leave placeholders",
+  runEnv: "Actual software runtime environment",
+};
+
 export function CopyrightInfoCard({ sessionId }: { sessionId: string }) {
+  const zh = useIsChineseUI();
   /* 初值按会话 id 从本地读；换案件时父级用 key 重挂本组件，不走 effect 同步 */
   const [info, setInfo] = useState<SoftwareInfo>(() => localInfo(sessionId));
 
@@ -52,32 +63,45 @@ export function CopyrightInfoCard({ sessionId }: { sessionId: string }) {
     if (sessionId) writeSoftwareInfo(sessionId, next);
   };
 
-  const fields: { key: keyof SoftwareInfo; label: string; required?: boolean }[] = [
-    { key: "name", label: "软件全称", required: true },
-    { key: "version", label: "版本号" },
-    { key: "owner", label: "著作权人" },
-    { key: "finishDate", label: "开发完成日期" },
-    { key: "devEnv", label: "开发环境" },
-    { key: "runEnv", label: "运行环境" },
+  const fields: {
+    key: keyof SoftwareInfo;
+    label: string;
+    labelEn: string;
+    required?: boolean;
+  }[] = [
+    { key: "name", label: "软件全称", labelEn: "Software full name", required: true },
+    { key: "version", label: "版本号", labelEn: "Version" },
+    { key: "owner", label: "著作权人", labelEn: "Copyright owner" },
+    { key: "finishDate", label: "开发完成日期", labelEn: "Completion date" },
+    { key: "devEnv", label: "开发环境", labelEn: "Development environment" },
+    { key: "runEnv", label: "运行环境", labelEn: "Runtime environment" },
   ];
 
   return (
     <section className="mt-9">
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-[17px] font-semibold tracking-[-0.01em] text-[#0E0E10]">申请信息</h2>
-        <span className="text-[12.5px] text-[#8E8E93]">存在本机，开始办理时自动带给助手</span>
+        <h2 className="text-[17px] font-semibold tracking-[-0.01em] text-[#0E0E10]">
+          {zh ? "申请信息" : "Application information"}
+        </h2>
+        <span className="text-[12.5px] text-[#8E8E93]">
+          {zh
+            ? "存在本机，开始办理时自动带给助手"
+            : "Stored locally; automatically passed to the assistant when processing starts"}
+        </span>
       </div>
       <div className="grid grid-cols-2 gap-x-6 gap-y-4 rounded-[22px] border border-[#ECECEF] bg-white px-5 py-4">
         {fields.map((field) => (
           <label key={field.key} className="min-w-0">
             <span className="flex items-center gap-1.5 text-[12.5px] text-[#6E6E73]">
-              {field.label}
+              {zh ? field.label : field.labelEn}
               {field.required ? <span className="text-[#C0392B]">*</span> : null}
             </span>
             <input
               value={info[field.key]}
               onChange={(event) => patch(field.key, event.target.value)}
-              placeholder={FIELD_HINT[field.key]}
+              placeholder={
+                zh ? FIELD_HINT[field.key] : FIELD_HINT_EN[field.key]
+              }
               className="mt-1.5 h-9 w-full rounded-[10px] border border-[#E4E4E8] px-3 text-[13.5px] text-[#1C1C1E] outline-none transition placeholder:text-[#B4B4BA] focus:border-[#C9C9CF]"
             />
           </label>
@@ -107,6 +131,7 @@ export function CopyrightProgressCard({
   stagedKey = null,
   marksVersion = 0,
 }: ProgressProps) {
+  const zh = useIsChineseUI();
   /* 点击记录按「会话 + 版本号」读取：这一步真正发出并成功后才算数，父级写盘后
      递增版本号，这里跟着重读一次（不必再用 effect 同步，省一轮渲染） */
   const clicked = useMemo<
@@ -138,15 +163,19 @@ export function CopyrightProgressCard({
     <section className="mt-9">
       <div className="mb-3 flex items-center justify-between">
         <h2 className="flex items-center gap-2 text-[17px] font-semibold tracking-[-0.01em] text-[#0E0E10]">
-          办理进度
+          {zh ? "办理进度" : "Processing progress"}
           <span className="rounded-full bg-[#F1F1F4] px-2 py-0.5 text-[12px] font-medium text-[#5F6066]">
             {doneCount}/{STEPS.length}
           </span>
         </h2>
         <span className="text-[12.5px] text-[#8E8E93]">
           {streaming
-            ? "助手还在回复，发送会排队等本轮结束"
-            : "点一下把指令放进对话框，可补充要求再发送"}
+            ? zh
+              ? "助手还在回复，发送会排队等本轮结束"
+              : "The assistant is still replying; messages will be queued until this round ends"
+            : zh
+              ? "点一下把指令放进对话框，可补充要求再发送"
+              : "Click to put the instruction in the chat box; add requirements before sending"}
         </span>
       </div>
 
@@ -155,6 +184,7 @@ export function CopyrightProgressCard({
           const done = Boolean(marks[step.key]?.done);
           const active = current === step.key;
           const staged = stagedKey === step.key;
+          const displayTitle = zh ? step.title : step.titleEn;
           return (
             <div
               key={step.key}
@@ -179,38 +209,40 @@ export function CopyrightProgressCard({
 
               <div className="min-w-0 flex-1">
                 <p className="flex flex-wrap items-center gap-2 text-[14px] font-medium text-[#1C1C1E]">
-                  {step.title}
+                  {displayTitle}
                   {/* 截图有两个按钮，靠徽章说明已放入；其余步骤按钮自己就是状态 */}
                   {staged && step.key === "shots" ? (
                     <span className="rounded-full bg-[#EAF6EF] px-2 py-0.5 text-[11.5px] font-medium text-[#2E8B4F]">
-                      已放入对话框
+                      {zh ? "已放入对话框" : "Added to chat"}
                     </span>
                   ) : null}
                 </p>
-                <p className="mt-0.5 text-[12.5px] leading-[1.6] text-[#6E6E73]">{step.desc}</p>
+                <p className="mt-0.5 text-[12.5px] leading-[1.6] text-[#6E6E73]">
+                  {zh ? step.desc : step.descEn}
+                </p>
               </div>
 
               {step.key === "shots" ? (
                 <div className="mt-0.5 flex flex-none items-center gap-1.5">
                   <button
                     type="button"
-                    onClick={() => onStage("shots", step.title, SHOT_PROMPTS.upload)}
+                    onClick={() => onStage("shots", displayTitle, SHOT_PROMPTS.upload)}
                     className="h-8 rounded-full border border-[#E4E4E8] px-3 text-[12.5px] font-medium text-[#3C3C43] transition hover:border-[#D2D2D8] hover:bg-[#F5F5F7]"
                   >
-                    已传截图
+                    {zh ? "已传截图" : "Screenshots uploaded"}
                   </button>
                   <button
                     type="button"
-                    onClick={() => onStage("shots", step.title, SHOT_PROMPTS.skip)}
+                    onClick={() => onStage("shots", displayTitle, SHOT_PROMPTS.skip)}
                     className="h-8 rounded-full bg-[#111113] px-3 text-[12.5px] font-medium text-white transition hover:bg-black"
                   >
-                    跳过截图
+                    {zh ? "跳过截图" : "Skip screenshots"}
                   </button>
                 </div>
               ) : (
                 <button
                   type="button"
-                  onClick={() => onStage(step.key, step.title, promptFor(step.key))}
+                  onClick={() => onStage(step.key, displayTitle, promptFor(step.key))}
                   className={[
                     "mt-0.5 flex h-8 flex-none items-center rounded-full px-3 text-[12.5px] font-medium transition",
                     done && !staged
@@ -220,7 +252,17 @@ export function CopyrightProgressCard({
                         : "border border-[#E4E4E8] text-[#6E6E73] hover:border-[#D2D2D8] hover:bg-[#F5F5F7]",
                   ].join(" ")}
                 >
-                  {staged ? "已放入对话框" : done ? "重新发送" : "发送到对话框"}
+                  {staged
+                    ? zh
+                      ? "已放入对话框"
+                      : "Added to chat"
+                    : done
+                      ? zh
+                        ? "重新发送"
+                        : "Resend"
+                      : zh
+                        ? "发送到对话框"
+                        : "Send to chat"}
                 </button>
               )}
             </div>

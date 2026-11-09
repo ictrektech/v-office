@@ -26,12 +26,14 @@ import {
   PenLine,
   PenTool,
   Plus,
+  RefreshCw,
   Image as ImageIcon,
   UserRound,
   Users,
   X,
   type LucideIcon,
 } from "lucide-react";
+import { useIsChineseUI } from "@/store";
 import type { AiMaterial } from "@/utils/ai/client";
 import {
   docketPhaseLabel,
@@ -50,6 +52,7 @@ import {
   baseName,
   canOpenOnline,
   formatClock,
+  isDraftFile,
   rowFileIcon,
   type OutputRow,
   type PreviewTarget,
@@ -97,6 +100,15 @@ interface CaseOverviewProps {
     /** 过程记录：没配进申请材料的中间稿 md，折叠展示 */
     processRows?: OutputRow[];
   };
+  /** 专利各阶段：md 源 → 同名 Word 的按行重建（软著走上面的申请材料面板） */
+  docxRebuild?: {
+    /** 哪些 md 源比同名 docx 新（源已更新、待重建） */
+    stale: ReadonlySet<string>;
+    /** 只重建这一份 md；返回错误信息（null = 成功） */
+    onRebuild: (path: string) => Promise<string | null>;
+    /** 助手正在回复时禁用 */
+    disabled?: boolean;
+  };
 }
 
 const SLOT_ICONS: Record<SlotKey, LucideIcon> = {
@@ -135,7 +147,9 @@ export function CaseOverview({
   onOpenOnline,
   onDownload,
   copyright,
+  docxRebuild,
 }: CaseOverviewProps) {
+  const zh = useIsChineseUI();
   const [modeOpen, setModeOpen] = useState(false);
   const [draftOpen, setDraftOpen] = useState(false);
   const [processOpen, setProcessOpen] = useState(false);
@@ -144,6 +158,9 @@ export function CaseOverview({
   const [openingRow, setOpeningRow] = useState<string | null>(null);
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildError, setRebuildError] = useState("");
+  /** 专利按行重建：正在重建的那份 md 路径（按钮转圈用） */
+  const [rebuildingPath, setRebuildingPath] = useState<string | null>(null);
+  const [rebuildSourceError, setRebuildSourceError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const slots = slotsFor(config.key);
 
@@ -168,7 +185,7 @@ export function CaseOverview({
   const fileRowOf = (path: string, mtime: number): OutputRow => ({
     id: `file:${path}`,
     name: baseName(path),
-    stage: config.label,
+    stage: zh ? config.label : config.labelEn,
     time: mtime,
     kind: "file",
     path,
@@ -182,6 +199,26 @@ export function CaseOverview({
     setRebuilding(false);
     if (message) setRebuildError(message);
   };
+
+  /** 专利按行重建：只把这一份 md 重建成同名 Word，不动其他文件 */
+  const rebuildRow = async (row: OutputRow) => {
+    if (!docxRebuild || !row.path || rebuildingPath) return;
+    setRebuildingPath(row.path);
+    setRebuildSourceError("");
+    const message = await docxRebuild.onRebuild(row.path);
+    if (message) setRebuildSourceError(message);
+    setRebuildingPath(null);
+  };
+
+  /**
+   * 这一行是不是「可改可重建」的 md 源：
+   * 全流程的 `_draft.md` 和问题清单/生成报告这类旁路文档不算交付源。
+   */
+  const isRebuildableSource = (row: OutputRow) =>
+    Boolean(docxRebuild && row.kind === "file" && row.path) &&
+    /\.md$/i.test(row.name) &&
+    !/_draft\.md$/i.test(row.name) &&
+    !isDraftFile(row.path ?? "");
 
   /**
    * 「哪个文件属于哪一行」记在 localStorage。
@@ -230,7 +267,7 @@ export function CaseOverview({
     <div className="font-round mx-auto w-full max-w-[clamp(680px,70vw,1120px)] px-10 pb-24 pt-10">
       <div className="flex items-baseline justify-between gap-4">
         <p className="text-[13px] font-medium tracking-[0.01em] text-[#6E6E73]">
-          进行中 · {config.label}
+          {zh ? "进行中" : "In progress"} · {zh ? config.label : config.labelEn}
         </p>
         <p className="truncate text-[12.5px] text-[#8E8E93]">{meta}</p>
       </div>
@@ -244,34 +281,50 @@ export function CaseOverview({
             <div className="min-w-0">
               <p className="flex items-center gap-2 text-[12.5px] text-[#6E6E73]">
                 <span className="h-1.5 w-1.5 flex-none rounded-full bg-[#34A853]" />
-                案卷 {docket.caseId || "未命名"}
+                {zh ? "案卷" : "Case"} {docket.caseId || (zh ? "未命名" : "Untitled")}
               </p>
               <p className="mt-1 text-[17px] font-semibold tracking-[-0.01em] text-[#0E0E10]">
-                {docketPhaseLabel(docket.phase)}
+                {docketPhaseLabel(docket.phase, zh)}
               </p>
             </div>
             <span className="flex-none rounded-full bg-[#F1F1F4] px-2.5 py-1 text-[12px] font-medium text-[#5F6066]">
-              第 {docket.round || 1} / {docket.maxRounds || 3} 轮
+              {zh
+                ? `第 ${docket.round || 1} / ${docket.maxRounds || 3} 轮`
+                : `Round ${docket.round || 1} / ${docket.maxRounds || 3}`}
             </span>
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12.5px] text-[#6E6E73]">
             <span>
-              未决问题 {docket.openIssues} / {docket.totalIssues}
+              {zh ? "未决问题" : "Open issues"} {docket.openIssues} / {docket.totalIssues}
             </span>
-            <span>{isDocketTerminal(docket.phase) ? "已收口" : "进行中"}</span>
+            <span>
+              {isDocketTerminal(docket.phase)
+                ? zh
+                  ? "已收口"
+                  : "Closed"
+                : zh
+                  ? "进行中"
+                  : "In progress"}
+            </span>
             <span className="truncate text-[#8E8E93]">{docket.path}</span>
           </div>
         </section>
       ) : config.key === "full" ? (
         <p className="mt-7 rounded-[18px] border border-dashed border-[#E4E4E8] px-4 py-3 text-[12.5px] leading-relaxed text-[#8E8E93]">
-          案卷尚未建立：在对话里说一句开始，助手会生成 docket.yaml，阶段与轮次会显示在这里。
+          {zh
+            ? "案卷尚未建立：在对话里说一句开始，助手会生成 docket.yaml，阶段与轮次会显示在这里。"
+            : 'No case has been created yet: say "start" in the chat and the assistant will generate docket.yaml; the stage and round will appear here.'}
         </p>
       ) : null}
 
       <section className="mt-9">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-[17px] font-semibold tracking-[-0.01em] text-[#0E0E10]">本次任务</h2>
-          <span className="text-[12.5px] text-[#8E8E93]">每个阶段一条会话</span>
+          <h2 className="text-[17px] font-semibold tracking-[-0.01em] text-[#0E0E10]">
+            {zh ? "本次任务" : "This task"}
+          </h2>
+          <span className="text-[12.5px] text-[#8E8E93]">
+            {zh ? "每个阶段一条会话" : "One conversation per stage"}
+          </span>
         </div>
 
         <div className="relative">
@@ -280,9 +333,11 @@ export function CaseOverview({
             onClick={() => setModeOpen((value) => !value)}
             className="flex h-[54px] w-full items-center gap-3 rounded-[20px] border border-[#E4E4E8] bg-white px-4.5 text-left shadow-[0_1px_3px_rgba(15,15,17,0.04)] transition hover:border-[#D2D2D8]"
           >
-            <span className="text-[14.5px] font-semibold text-[#0E0E10]">{config.label}</span>
+            <span className="text-[14.5px] font-semibold text-[#0E0E10]">
+              {zh ? config.label : config.labelEn}
+            </span>
             <span className="min-w-0 truncate text-[13px] font-normal text-[#6E6E73]">
-              {config.hint}
+              {zh ? config.hint : config.hintEn}
             </span>
             <ChevronDown className="ml-auto h-[18px] w-[18px] flex-none text-[#8E8E93]" />
           </button>
@@ -303,10 +358,10 @@ export function CaseOverview({
                   >
                     <span className="min-w-0 flex-1">
                       <span className="block text-[14px] font-medium text-[#1C1C1E]">
-                        {stage.label}
+                        {zh ? stage.label : stage.labelEn}
                       </span>
                       <span className="mt-1 block text-[12.5px] leading-[1.6] text-[#6E6E73]">
-                        {stage.hint}
+                        {zh ? stage.hint : stage.hintEn}
                       </span>
                     </span>
                     {stage.key === config.key ? (
@@ -320,7 +375,7 @@ export function CaseOverview({
                   onClick={() => setModeOpen(false)}
                   className="flex w-full items-center gap-2 rounded-2xl px-3 py-2.5 text-left text-[12.5px] text-[#8E8E93] transition hover:bg-[#F5F5F7]"
                 >
-                  收起
+                  {zh ? "收起" : "Collapse"}
                 </button>
               </div>
             </>
@@ -340,12 +395,16 @@ export function CaseOverview({
       <section className="mt-9">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="flex items-center gap-2 text-[17px] font-semibold tracking-[-0.01em] text-[#0E0E10]">
-            材料
+            {zh ? "材料" : "Materials"}
             <span className="rounded-full bg-[#F1F1F4] px-2 py-0.5 text-[12px] font-medium text-[#5F6066]">
               {materials.length}
             </span>
           </h2>
-          <span className="text-[12.5px] text-[#8E8E93]">按当前阶段要求 · 每行都可传多份</span>
+          <span className="text-[12.5px] text-[#8E8E93]">
+            {zh
+              ? "按当前阶段要求 · 每行都可传多份"
+              : "Per current stage requirements · Multiple files allowed per row"}
+          </span>
         </div>
 
         <div className="overflow-hidden rounded-[22px] border border-[#ECECEF] bg-white">
@@ -379,19 +438,27 @@ export function CaseOverview({
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <p className="text-[15px] font-medium tracking-[-0.005em] text-[#1C1C1E]">
-                      {slot.label}
+                      {zh ? slot.label : slot.labelEn}
                     </p>
                     {slot.required ? (
                       <span className="rounded-md bg-[#FFF4E5] px-1.5 py-0.5 text-[11.5px] font-medium text-[#A2621A]">
-                        必需
+                        {zh ? "必需" : "Required"}
                       </span>
                     ) : null}
                     {files.length > 1 ? (
-                      <span className="text-[12px] text-[#8E8E93]">{files.length} 份</span>
+                      <span className="text-[12px] text-[#8E8E93]">
+                        {zh ? `${files.length} 份` : `${files.length} files`}
+                      </span>
                     ) : null}
                   </div>
                   <p className="mt-1 text-[13px] leading-[1.6] text-[#6E6E73]">
-                    {dragging ? "松手即上传到这一行" : slot.hint}
+                    {dragging
+                      ? zh
+                        ? "松手即上传到这一行"
+                        : "Drop to upload to this row"
+                      : zh
+                        ? slot.hint
+                        : slot.hintEn}
                   </p>
 
                   {files.length > 0 ? (
@@ -404,7 +471,7 @@ export function CaseOverview({
                           <span className="max-w-[240px] truncate">{file.name}</span>
                           <button
                             type="button"
-                            title={`移除 ${file.name}`}
+                            title={zh ? `移除 ${file.name}` : `Remove ${file.name}`}
                             onClick={() => onRemoveMaterial(file.name)}
                             className="flex h-5 w-5 flex-none items-center justify-center rounded-full text-[#8E8E93] transition hover:bg-[#E2E2E7] hover:text-[#1C1C1E]"
                           >
@@ -419,16 +486,18 @@ export function CaseOverview({
                 <button
                   type="button"
                   onClick={() => pickFile(slot.key)}
-                  title="可一次选多个文件，也可以反复添加"
+                  title={zh ? "可一次选多个文件，也可以反复添加" : "Select multiple files at once, or add repeatedly"}
                   className="mt-0.5 flex h-9 flex-none items-center gap-1 rounded-full border border-[#E4E4E8] px-3.5 text-[13px] font-medium text-[#3C3C43] transition hover:border-[#D2D2D8] hover:bg-[#F5F5F7]"
                 >
                   {files.length > 0 ? (
                     <>
                       <Plus className="h-4 w-4" />
-                      添加
+                      {zh ? "添加" : "Add"}
                     </>
-                  ) : (
+                  ) : zh ? (
                     "上传"
+                  ) : (
+                    "Upload"
                   )}
                 </button>
               </div>
@@ -437,8 +506,9 @@ export function CaseOverview({
         </div>
         {missing.length > 0 ? (
           <p className="mt-3 text-[13px] leading-relaxed text-[#8E8E93]">
-            还缺 {missing.map((slot) => slot.label).join("、")}
-            。不是摆设：助手跑到依赖它的那一步会直接停下向你要材料，不会跳过。
+            {zh
+              ? `还缺 ${missing.map((slot) => slot.label).join("、")}。不是摆设：助手跑到依赖它的那一步会直接停下向你要材料，不会跳过。`
+              : `Still missing: ${missing.map((slot) => slot.labelEn).join(", ")}. This is not decorative: when the assistant reaches a step that depends on it, it will stop and ask you for the materials rather than skip ahead.`}
           </p>
         ) : null}
         <input
@@ -471,7 +541,7 @@ export function CaseOverview({
         <section className="mt-9">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="flex items-center gap-2 text-[17px] font-semibold tracking-[-0.01em] text-[#0E0E10]">
-              申请材料
+              {zh ? "申请材料" : "Application materials"}
               <span className="rounded-full bg-[#F1F1F4] px-2 py-0.5 text-[12px] font-medium text-[#5F6066]">
                 {copyrightMaterials.pairs.length}
               </span>
@@ -481,11 +551,21 @@ export function CaseOverview({
                 type="button"
                 disabled={rebuilding}
                 onClick={() => void runRebuild()}
-                title="重算指纹并按当前 md 源重建正式 Word（页数门禁照旧，失败不影响上一版）"
+                title={
+                  zh
+                    ? "重算指纹并按当前 md 源重建正式 Word（页数门禁照旧，失败不影响上一版）"
+                    : "Recompute fingerprints and rebuild Final Word from the current md source (page checks unchanged; failures do not affect the previous version)"
+                }
                 className="flex h-8 items-center gap-1.5 rounded-full bg-[#111113] px-3.5 text-[12.5px] font-medium text-white transition hover:bg-black disabled:opacity-40"
               >
                 {rebuilding ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                {copyrightMaterials.stale ? "草稿已更新，重新生成 Word" : "重新生成 Word"}
+                {copyrightMaterials.stale
+                  ? zh
+                    ? "草稿已更新，重新生成 Word"
+                    : "Draft updated; regenerate Word"
+                  : zh
+                    ? "重新生成 Word"
+                    : "Regenerate Word"}
               </button>
             ) : null}
           </div>
@@ -493,7 +573,9 @@ export function CaseOverview({
           <div className="overflow-hidden rounded-[22px] border border-[#ECECEF] bg-white">
             {copyrightMaterials.pairs.length === 0 ? (
               <p className="px-5 py-14 text-center text-[13px] text-[#8E8E93]">
-                还没有申请材料：在对话里从第 1 步跑到第 8 步就有了。
+                {zh
+                  ? "还没有申请材料：在对话里从第 1 步跑到第 8 步就有了。"
+                  : "No application materials yet: run steps 1 through 8 in the chat to generate them."}
               </p>
             ) : (
               copyrightMaterials.pairs.map((pair) => {
@@ -511,10 +593,10 @@ export function CaseOverview({
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <p className="flex items-center gap-2 text-[14px] font-medium text-[#1C1C1E]">
-                          {pair.label}
+                          {zh ? pair.label : pair.labelEn}
                           {pair.stale ? (
                             <span className="rounded-full bg-[#FDF3EC] px-2 py-0.5 text-[11.5px] font-medium text-[#B4762A]">
-                              源已更新
+                              {zh ? "源已更新" : "Source updated"}
                             </span>
                           ) : null}
                         </p>
@@ -526,18 +608,26 @@ export function CaseOverview({
                                   pair.stale ? "bg-[#E8A33D]" : "bg-[#34A853]"
                                 }`}
                               />
-                              源 {baseName(pair.source.path)} · {formatClock(pair.source.mtime)}
+                              {zh ? "源" : "Source"} {baseName(pair.source.path)} ·{" "}
+                              {formatClock(pair.source.mtime)}
                             </p>
                           ) : (
-                            <p className="text-[#B4B4BA]">还没有 md 源</p>
+                            <p className="text-[#B4B4BA]">
+                              {zh ? "还没有 md 源" : "No md source yet"}
+                            </p>
                           )}
                           {pair.output ? (
                             <p className="flex items-center gap-1.5">
                               <span className="h-1.5 w-1.5 flex-none rounded-full bg-[#34A853]" />
-                              成品 {baseName(pair.output.path)} · {formatClock(pair.output.mtime)}
+                              {zh ? "成品" : "Output"} {baseName(pair.output.path)} ·{" "}
+                              {formatClock(pair.output.mtime)}
                             </p>
                           ) : (
-                            <p className="text-[#B4B4BA]">还没有成品，点右上角「重新生成 Word」</p>
+                            <p className="text-[#B4B4BA]">
+                              {zh
+                                ? "还没有成品，点右上角「重新生成 Word」"
+                                : 'No output yet; click "Regenerate Word" in the top right'}
+                            </p>
                           )}
                         </div>
                       </div>
@@ -545,7 +635,11 @@ export function CaseOverview({
                         {pair.source ? (
                           <button
                             type="button"
-                            title="打开 md 源：直接编辑、保存，然后点『重新生成 Word』"
+                            title={
+                              zh
+                                ? "打开 md 源：直接编辑、保存，然后点『重新生成 Word』"
+                                : "Open md source: edit and save directly, then click 'Regenerate Word'"
+                            }
                             onClick={() =>
                               onOpenPreview({
                                 kind: "file",
@@ -556,13 +650,13 @@ export function CaseOverview({
                             className="flex h-8 items-center gap-1.5 rounded-full border border-[#E4E4E8] px-3 text-[12.5px] font-medium text-[#3C3C43] transition hover:border-[#D2D2D8] hover:bg-[#F5F5F7]"
                           >
                             <PenLine className="h-3.5 w-3.5" />
-                            改源
+                            {zh ? "改源" : "Edit source"}
                           </button>
                         ) : null}
                         {outputTarget && canOpenOnline(outputTarget) ? (
                           <button
                             type="button"
-                            title="用 Collabora 在线打开"
+                            title={zh ? "用 Collabora 在线打开" : "Open online with Collabora"}
                             disabled={openingRow === pair.key}
                             onClick={() => {
                               setOpeningRow(pair.key);
@@ -582,7 +676,7 @@ export function CaseOverview({
                         {outputRow ? (
                           <button
                             type="button"
-                            title="下载成品"
+                            title={zh ? "下载成品" : "Download output"}
                             onClick={() => onDownload(outputRow)}
                             className="flex h-8 w-8 items-center justify-center rounded-[10px] text-[#8E8E93] transition hover:bg-[#F2F2F4] hover:text-[#1C1C1E]"
                           >
@@ -606,7 +700,7 @@ export function CaseOverview({
       <section className="mt-9">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="flex items-center gap-2 text-[17px] font-semibold tracking-[-0.01em] text-[#0E0E10]">
-            产出物
+            {zh ? "产出物" : "Deliverables"}
             <span className="rounded-full bg-[#F1F1F4] px-2 py-0.5 text-[12px] font-medium text-[#5F6066]">
               {rows.length}
             </span>
@@ -616,14 +710,26 @@ export function CaseOverview({
               type="button"
               disabled={rebuilding}
               onClick={() => void runRebuild()}
-              title="按当前草稿重算指纹并重建正式 Word（页数门禁照旧，失败不影响上一版）"
+              title={
+                zh
+                  ? "按当前草稿重算指纹并重建正式 Word（页数门禁照旧，失败不影响上一版）"
+                  : "Recompute fingerprints from the current draft and rebuild Final Word (page checks unchanged; failures do not affect the previous version)"
+              }
               className="flex h-8 items-center gap-1.5 rounded-full bg-[#111113] px-3.5 text-[12.5px] font-medium text-white transition hover:bg-black disabled:opacity-40"
             >
               {rebuilding ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              {copyright.stale ? "草稿已更新，重新生成 Word" : "重新生成 Word"}
+              {copyright.stale
+                ? zh
+                  ? "草稿已更新，重新生成 Word"
+                  : "Draft updated; regenerate Word"
+                : zh
+                  ? "重新生成 Word"
+                  : "Regenerate Word"}
             </button>
           ) : (
-            <span className="text-[12.5px] text-[#8E8E93]">点任意一行预览</span>
+            <span className="text-[12.5px] text-[#8E8E93]">
+              {zh ? "点任意一行预览" : "Click any row to preview"}
+            </span>
           )}
         </div>
 
@@ -631,18 +737,22 @@ export function CaseOverview({
           <table className="w-full table-fixed border-collapse text-left">
             <thead>
               <tr className="border-b border-[#F2F2F4] bg-[#FCFCFD] text-[12.5px] text-[#8E8E93]">
-                <th className="w-[44%] px-5 py-3 font-normal">文件</th>
-                <th className="w-[16%] py-3 font-normal">阶段</th>
-                <th className="w-[14%] py-3 font-normal">状态</th>
-                <th className="w-[14%] py-3 font-normal">更新</th>
-                <th className="w-[12%] px-5 py-3 text-right font-normal">操作</th>
+                <th className="w-[44%] px-5 py-3 font-normal">{zh ? "文件" : "File"}</th>
+                <th className="w-[16%] py-3 font-normal">{zh ? "阶段" : "Stage"}</th>
+                <th className="w-[14%] py-3 font-normal">{zh ? "状态" : "Status"}</th>
+                <th className="w-[14%] py-3 font-normal">{zh ? "更新" : "Updated"}</th>
+                <th className="w-[12%] px-5 py-3 text-right font-normal">
+                  {zh ? "操作" : "Actions"}
+                </th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-4 py-14 text-center text-[13px] text-[#8E8E93]">
-                    还没有产出，先在对话里说一句开始
+                    {zh
+                      ? "还没有产出，先在对话里说一句开始"
+                      : 'No deliverables yet; say "start" in the chat first'}
                   </td>
                 </tr>
               ) : (
@@ -652,6 +762,10 @@ export function CaseOverview({
                       ? { kind: "artifact", key: row.artifactKey ?? "", name: row.name }
                       : { kind: "file", path: row.path ?? "", name: row.name };
                   const Icon = rowFileIcon(row.name, row.kind);
+                  const rebuildable = isRebuildableSource(row);
+                  const sourceStale = Boolean(
+                    row.path && docxRebuild?.stale.has(row.path),
+                  );
                   return (
                     <tr
                       key={row.id}
@@ -673,8 +787,17 @@ export function CaseOverview({
                       </td>
                       <td className="py-3.5 pr-3 text-[13px] text-[#5F6066]">
                         <span className="flex items-center gap-1.5">
-                          <span className="h-1.5 w-1.5 rounded-full bg-[#34A853]" />
-                          已生成
+                          {sourceStale ? (
+                            <>
+                              <span className="h-1.5 w-1.5 rounded-full bg-[#E8A33D]" />
+                              {zh ? "源已更新" : "Source updated"}
+                            </>
+                          ) : (
+                            <>
+                              <span className="h-1.5 w-1.5 rounded-full bg-[#34A853]" />
+                              {zh ? "已生成" : "Generated"}
+                            </>
+                          )}
                         </span>
                       </td>
                       <td className="py-3.5 pr-3 text-[12.5px] text-[#8E8E93]">
@@ -682,10 +805,49 @@ export function CaseOverview({
                       </td>
                       <td className="px-5 py-3.5">
                         <div className="flex items-center justify-end gap-1">
+                          {rebuildable ? (
+                            <>
+                              <button
+                                type="button"
+                                title={
+                                  zh
+                                    ? "在网页里改这份 md 源；保存后回到这里点「重建 Word」"
+                                    : "Edit this md source in the browser; save, then click 'Rebuild Word' here"
+                                }
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  onOpenPreview(target);
+                                }}
+                                className="flex h-8 w-8 items-center justify-center rounded-[10px] text-[#8E8E93] transition hover:bg-[#F2F2F4] hover:text-[#1C1C1E]"
+                              >
+                                <PenLine className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                title={
+                                  zh
+                                    ? "只按这一份 md 重建同名 Word，不影响其他交付件"
+                                    : "Rebuild only this Word from its md source; other deliverables are untouched"
+                                }
+                                disabled={Boolean(docxRebuild?.disabled) || rebuildingPath === row.path}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void rebuildRow(row);
+                                }}
+                                className="flex h-8 w-8 items-center justify-center rounded-[10px] text-[#8E8E93] transition hover:bg-[#F2F2F4] hover:text-[#1C1C1E] disabled:opacity-40"
+                              >
+                                {rebuildingPath === row.path ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="h-4 w-4" />
+                                )}
+                              </button>
+                            </>
+                          ) : null}
                           {canOpenOnline(target) ? (
                             <button
                               type="button"
-                              title="用 Collabora 在线打开"
+                              title={zh ? "用 Collabora 在线打开" : "Open online with Collabora"}
                               disabled={openingRow === row.id}
                               onClick={(event) => {
                                 event.stopPropagation();
@@ -705,7 +867,7 @@ export function CaseOverview({
                           ) : null}
                           <button
                             type="button"
-                            title="下载"
+                            title={zh ? "下载" : "Download"}
                             onClick={(event) => {
                               event.stopPropagation();
                               onDownload(row);
@@ -723,8 +885,15 @@ export function CaseOverview({
             </tbody>
           </table>
         </div>
+        {rebuildSourceError ? (
+          <p className="mt-3 whitespace-pre-wrap rounded-[18px] bg-[#FDF3F2] px-4 py-3 text-[12.5px] leading-relaxed text-[#C0392B]">
+            {rebuildSourceError}
+          </p>
+        ) : null}
         <p className="mt-3 text-[12.5px] leading-relaxed text-[#8E8E93]">
-          Word / Excel / PPT 可直接在线编辑；其余格式先下载。
+          {zh
+            ? "Word / Excel / PPT 可直接在线编辑；md 源改完点右侧刷新图标即可只重建这一份，其余格式先下载。"
+            : "Word / Excel / PPT can be edited online directly; after editing an md source, click the refresh icon to rebuild just that file. Other formats must be downloaded first."}
         </p>
       </section>
       )}
@@ -737,13 +906,13 @@ export function CaseOverview({
             className="mb-3 flex w-full items-center justify-between text-left"
           >
             <h2 className="flex items-center gap-2 text-[17px] font-semibold tracking-[-0.01em] text-[#0E0E10]">
-              过程记录
+              {zh ? "过程记录" : "Process records"}
               <span className="rounded-full bg-[#F1F1F4] px-2 py-0.5 text-[12px] font-medium text-[#5F6066]">
                 {copyrightMaterials.processRows.length}
               </span>
             </h2>
             <span className="flex items-center gap-1.5 text-[12.5px] text-[#8E8E93]">
-              {processOpen ? "收起" : "展开"}
+              {processOpen ? (zh ? "收起" : "Collapse") : zh ? "展开" : "Expand"}
               <ChevronDown
                 className={`h-4 w-4 transition-transform ${processOpen ? "rotate-180" : ""}`}
               />
@@ -771,12 +940,12 @@ export function CaseOverview({
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[13.5px] text-[#3C3C43]">{row.name}</p>
                       <p className="mt-0.5 text-[12px] text-[#8E8E93]">
-                        过程记录 · {formatClock(row.time)}
+                        {zh ? "过程记录" : "Process record"} · {formatClock(row.time)}
                       </p>
                     </div>
                     <button
                       type="button"
-                      title="下载"
+                      title={zh ? "下载" : "Download"}
                       onClick={(event) => {
                         event.stopPropagation();
                         onDownload(row);
@@ -791,7 +960,9 @@ export function CaseOverview({
             </div>
           ) : (
             <p className="rounded-[18px] border border-dashed border-[#E4E4E8] px-4 py-3 text-[12.5px] text-[#8E8E93]">
-              业务理解、选材清单、自检记录等中间稿在这里，不算正式产出。
+              {zh
+                ? "业务理解、选材清单、自检记录等中间稿在这里，不算正式产出。"
+                : "Intermediate drafts such as business understanding, material selection lists, and self-check records are here; they are not formal deliverables."}
             </p>
           )}
         </section>
@@ -805,13 +976,13 @@ export function CaseOverview({
             className="mb-3 flex w-full items-center justify-between text-left"
           >
             <h2 className="flex items-center gap-2 text-[17px] font-semibold tracking-[-0.01em] text-[#0E0E10]">
-              旁路文档
+              {zh ? "旁路文档" : "Side documents"}
               <span className="rounded-full bg-[#F1F1F4] px-2 py-0.5 text-[12px] font-medium text-[#5F6066]">
                 {draftRows.length}
               </span>
             </h2>
             <span className="flex items-center gap-1.5 text-[12.5px] text-[#8E8E93]">
-              {draftOpen ? "收起" : "展开"}
+              {draftOpen ? (zh ? "收起" : "Collapse") : zh ? "展开" : "Expand"}
               <ChevronDown
                 className={`h-4 w-4 transition-transform ${draftOpen ? "rotate-180" : ""}`}
               />
@@ -835,12 +1006,12 @@ export function CaseOverview({
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[13.5px] text-[#3C3C43]">{row.name}</p>
                       <p className="mt-0.5 text-[12px] text-[#8E8E93]">
-                        草稿 · {formatClock(row.time)}
+                        {zh ? "草稿" : "Draft"} · {formatClock(row.time)}
                       </p>
                     </div>
                     <button
                       type="button"
-                      title="下载"
+                      title={zh ? "下载" : "Download"}
                       onClick={(event) => {
                         event.stopPropagation();
                         onDownload(row);
@@ -855,7 +1026,9 @@ export function CaseOverview({
             </div>
           ) : (
             <p className="rounded-[18px] border border-dashed border-[#E4E4E8] px-4 py-3 text-[12.5px] text-[#8E8E93]">
-              对话成稿与问题清单等旁路文档在这里，不算正式产出。
+              {zh
+                ? "对话成稿与问题清单等旁路文档在这里，不算正式产出。"
+                : "Side documents such as chat drafts and issue lists are here; they are not formal deliverables."}
             </p>
           )}
         </section>

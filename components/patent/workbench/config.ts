@@ -22,48 +22,71 @@ export type StageKey = "disclosure" | "application" | "oa" | "full" | "copyright
 export interface StageConfig {
   key: StageKey;
   label: string;
+  labelEn: string;
   /** 后端技能包目录名 */
   skill: string;
   /** 新建会话时的默认标题 */
   sessionTitle: string;
+  sessionTitleEn: string;
   hint: string;
+  hintEn: string;
 }
 
 export const STAGES: Record<StageKey, StageConfig> = {
   disclosure: {
     key: "disclosure",
     label: "交底书",
+    labelEn: "Invention Disclosure",
     skill: "patent-disclosure",
     sessionTitle: "专利交底书",
+    sessionTitleEn: "Patent Invention Disclosure",
     hint: "只产出交底书与查新定位，不进入申请文件。",
+    hintEn:
+      "Produces only the invention disclosure and prior-art positioning; does not proceed to application documents.",
   },
   application: {
     key: "application",
     label: "申请文件",
+    labelEn: "Application Documents",
     skill: "patent-application",
     sessionTitle: "专利申请文件",
+    sessionTitleEn: "Patent Application Documents",
     hint: "需要已有交底书；依次生成权利要求书、说明书、摘要与附图。",
+    hintEn:
+      "Requires an existing invention disclosure; generates claims, specification, abstract, and drawings in order.",
   },
   oa: {
     key: "oa",
     label: "审查答复",
+    labelEn: "Office Action Response",
     skill: "patent-oa",
     sessionTitle: "专利审查答复",
+    sessionTitleEn: "Patent Office Action Response",
     hint: "上传审查意见通知书与对比文件，逐条答复后出意见陈述。",
+    hintEn:
+      "Upload the office action notice and prior-art references; respond item by item, then produce an opinion statement.",
   },
   full: {
     key: "full",
     label: "全流程",
+    labelEn: "Full Process",
     skill: "patent-docket",
     sessionTitle: "专利全流程",
+    sessionTitleEn: "Patent Full Process",
     hint: "一条龙：交底 → 申请文件 → 问题清单修订，最多 3 轮。",
+    hintEn:
+      "All-in-one: disclosure → application documents → issue-list revisions, up to 3 rounds.",
   },
   copyright: {
     key: "copyright",
     label: "软件著作权",
+    labelEn: "Software Copyright",
     skill: "software-copyright",
     sessionTitle: "软件著作权申请",
+    sessionTitleEn: "Software Copyright Application",
     hint: "传源码包，8 步出申请表、操作手册与前后 30 页代码材料。",
+    hintEn:
+      "Upload the source archive; 8 steps produce the application form, user manual, and the first/last 30 pages of code materials.",
   },
 };
 

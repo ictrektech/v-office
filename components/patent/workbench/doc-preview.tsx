@@ -13,6 +13,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { ArrowLeft, Download, ExternalLink, FileText, Loader2, PenLine, X } from "lucide-react";
+import { useIsChineseUI } from "@/store";
 import { fetchAiFile, saveAiFile, sha256Hex } from "@/utils/ai/client";
 import { canOpenOnline, type PreviewTarget } from "./config";
 
@@ -48,6 +49,7 @@ export function DocPreview({
   onOpenOnline,
   onFileSaved,
 }: DocPreviewProps) {
+  const zh = useIsChineseUI();
   const [state, setState] = useState<PreviewState>({ status: "loading" });
   const [opening, setOpening] = useState(false);
   const [notice, setNotice] = useState("");
@@ -75,10 +77,14 @@ export function DocPreview({
       await saveAiFile(sessionId, target.path, draft, baseSha);
       setState({ status: "text", content: draft });
       setEditing(false);
-      setNotice("已保存。回到案件页点「重新生成 Word」就能出新文档。");
+      setNotice(
+        zh
+          ? "已保存。回到案件页点「重新生成 Word」就能出新文档。"
+          : 'Saved. Go back to the case page and click "Regenerate Word" to produce a new document.',
+      );
       onFileSaved?.();
     } catch (reason) {
-      setNotice(reason instanceof Error ? reason.message : "保存失败");
+      setNotice(reason instanceof Error ? reason.message : zh ? "保存失败" : "Save failed");
     } finally {
       setSaving(false);
     }
@@ -90,7 +96,9 @@ export function DocPreview({
     try {
       await onOpenOnline(target);
     } catch (reason) {
-      setNotice(reason instanceof Error ? reason.message : "在线打开失败");
+      setNotice(
+        reason instanceof Error ? reason.message : zh ? "在线打开失败" : "Failed to open online",
+      );
     } finally {
       setOpening(false);
     }
@@ -134,7 +142,7 @@ export function DocPreview({
       if (alive) {
         setState({
           status: "error",
-          message: error instanceof Error ? error.message : "预览失败",
+          message: error instanceof Error ? error.message : zh ? "预览失败" : "Preview failed",
         });
       }
     });
@@ -154,14 +162,14 @@ export function DocPreview({
           className="-ml-2 flex h-8 items-center gap-1 rounded-full px-2.5 text-[13px] text-[#3C3C43] transition hover:bg-[#F2F2F4] hover:text-[#111113]"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
-          返回
+          {zh ? "返回" : "Back"}
         </button>
         <span className="h-4 w-px bg-[#ECECEF]" />
         <span className="min-w-0 truncate text-[13.5px] font-semibold text-[#111113]">
           {target.name}
         </span>
         <span className="flex-none rounded-full bg-[#EAF6EF] px-2 py-0.5 text-[11px] text-[#2E8B4F]">
-          已生成
+          {zh ? "已生成" : "Generated"}
         </span>
         <div className="ml-auto flex items-center gap-1.5">
           {editable && !editing ? (
@@ -171,7 +179,7 @@ export function DocPreview({
               className="flex h-8 items-center gap-1.5 rounded-full bg-[#111113] px-3.5 text-[12px] font-medium text-white transition hover:bg-black"
             >
               <PenLine className="h-3.5 w-3.5" />
-              编辑
+              {zh ? "编辑" : "Edit"}
             </button>
           ) : null}
           {editing ? (
@@ -183,7 +191,7 @@ export function DocPreview({
                 className="flex h-8 items-center gap-1.5 rounded-full border border-[#E7E7EA] px-3.5 text-[12px] text-[#3C3C43] transition hover:border-[#D6D6DA] hover:bg-[#F5F5F7] disabled:opacity-50"
               >
                 <X className="h-3.5 w-3.5" />
-                取消
+                {zh ? "取消" : "Cancel"}
               </button>
               <button
                 type="button"
@@ -192,7 +200,13 @@ export function DocPreview({
                 className="flex h-8 items-center gap-1.5 rounded-full bg-[#111113] px-3.5 text-[12px] font-medium text-white transition hover:bg-black disabled:opacity-50"
               >
                 {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                {saving ? "保存中…" : "保存"}
+                {saving
+                  ? zh
+                    ? "保存中…"
+                    : "Saving…"
+                  : zh
+                    ? "保存"
+                    : "Save"}
               </button>
             </>
           ) : null}
@@ -204,7 +218,13 @@ export function DocPreview({
               className="flex h-8 items-center gap-1.5 rounded-full bg-[#111113] px-3.5 text-[12px] font-medium text-white transition hover:bg-black disabled:opacity-50"
             >
               <ExternalLink className="h-3.5 w-3.5" />
-              {opening ? "打开中…" : "在线打开"}
+              {opening
+                ? zh
+                  ? "打开中…"
+                  : "Opening…"
+                : zh
+                  ? "在线打开"
+                  : "Open online"}
             </button>
           ) : null}
           <button
@@ -213,7 +233,7 @@ export function DocPreview({
             className="flex h-8 items-center gap-1.5 rounded-full border border-[#E7E7EA] px-3.5 text-[12px] text-[#3C3C43] transition hover:border-[#D6D6DA] hover:bg-[#F5F5F7]"
           >
             <Download className="h-3.5 w-3.5" />
-            下载
+            {zh ? "下载" : "Download"}
           </button>
         </div>
       </div>
@@ -267,8 +287,13 @@ function PreviewBody({
   opening: boolean;
   onOpen: () => void;
 }) {
+  const zh = useIsChineseUI();
   if (state.status === "loading") {
-    return <p className="py-16 text-center text-[13px] text-[#A1A1A6]">正在读取文件…</p>;
+    return (
+      <p className="py-16 text-center text-[13px] text-[#A1A1A6]">
+        {zh ? "正在读取文件…" : "Reading file…"}
+      </p>
+    );
   }
   if (state.status === "error") {
     return <p className="py-16 text-center text-[13px] text-[#C0392B]">{state.message}</p>;
@@ -278,7 +303,9 @@ function PreviewBody({
       <div className="flex flex-col items-center gap-3 py-16 text-center">
         <FileText className="h-5 w-5 text-[#A1A1A6]" />
         <p className="max-w-[320px] text-[13px] leading-relaxed text-[#8E8E93]">
-          这种格式不便在网页预览，可以在线用 Collabora 打开，或下载后查看
+          {zh
+            ? "这种格式不便在网页预览，可以在线用 Collabora 打开，或下载后查看"
+            : "This format cannot be previewed in the browser; open it online with Collabora or download it to view."}
         </p>
         {onlineOpenable ? (
           <button
@@ -288,7 +315,13 @@ function PreviewBody({
             className="flex h-9 items-center gap-1.5 rounded-full bg-[#111113] px-4 text-[12.5px] font-medium text-white transition hover:bg-black disabled:opacity-50"
           >
             <ExternalLink className="h-3.5 w-3.5" />
-            {opening ? "打开中…" : "在线打开"}
+            {opening
+              ? zh
+                ? "打开中…"
+                : "Opening…"
+              : zh
+                ? "在线打开"
+                : "Open online"}
           </button>
         ) : null}
         <button
@@ -297,7 +330,7 @@ function PreviewBody({
           className="flex h-9 items-center gap-1.5 rounded-full border border-[#E7E7EA] px-4 text-[12.5px] text-[#3C3C43] transition hover:border-[#D6D6DA] hover:bg-[#F5F5F7]"
         >
           <Download className="h-3.5 w-3.5" />
-          下载文件
+          {zh ? "下载文件" : "Download file"}
         </button>
       </div>
     );
@@ -305,7 +338,11 @@ function PreviewBody({
   if (state.status === "image") {
     return (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src={state.url} alt="文档预览" className="mx-auto max-h-[640px] w-auto" />
+      <img
+        src={state.url}
+        alt={zh ? "文档预览" : "Document preview"}
+        className="mx-auto max-h-[640px] w-auto"
+      />
     );
   }
   return <MarkdownView markdown={state.content} />;

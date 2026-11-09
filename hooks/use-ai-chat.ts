@@ -43,6 +43,7 @@ import {
   type AiTranscriptMessage,
 } from "@/utils/ai/client";
 import type { AgentChange } from "@/utils/patent/types";
+import { useResolvedLanguage, useIsChineseUI } from "@/store";
 
 /** 面板里的变更卡：AgentChange + 落文需要的额外字段 */
 export type ChangeLike = AgentChange & { key?: string; full?: boolean; fullText?: string };
@@ -193,7 +194,7 @@ let seq = 0;
 const nextId = () => `m${Date.now().toString(36)}${(seq++).toString(36)}`;
 
 /** 把 patch 映射成面板能画的变更卡 */
-function toChange(patch: AiPatch, messageId: string): ChangeLike {
+function toChange(patch: AiPatch, messageId: string, zh: boolean): ChangeLike {
   const op = (patch.op || "replace").toLowerCase();
   const full = patch.full || patch.anchor === "all";
   const text = patch.text || "";
@@ -201,12 +202,18 @@ function toChange(patch: AiPatch, messageId: string): ChangeLike {
     id: `${messageId}-${patch.anchor}-${op}-${Math.random().toString(36).slice(2, 6)}`,
     key: `${messageId}:${patch.anchor}:${op}`,
     operation: op === "insert" ? "insert" : op === "delete" ? "delete" : "replace",
-    anchor: full ? "全文" : String(patch.anchor || ""),
+    anchor: full ? (zh ? "全文" : "Full text") : String(patch.anchor || ""),
     before: patch.before || "",
     // after 只用于展示（全文可能几万字，别塞进 DOM）；落文用 fullText
     after: full && text.length > 400 ? `${text.slice(0, 400)}…` : text,
     fullText: text,
-    reason: full ? "整篇重写" : "按你的要求修改",
+    reason: full
+      ? zh
+        ? "整篇重写"
+        : "Full rewrite"
+      : zh
+        ? "按你的要求修改"
+        : "Revised as requested",
     // 服务端已把改动落到草稿与 docx（以 Word 修订呈现），卡片只是摘要，
     // 不再有「点接受」这一步——审阅在编辑器里用 Word 原生修订完成。
     status: (patch as { status?: ChangeLike["status"] }).status === "applied" ? "applied" : "proposed",
@@ -284,6 +291,9 @@ export function useAiChat(options: {
     resumeFrom = "",
     fresh,
   } = options;
+  // 站点/VOS 的解析语言：随每一轮发给服务端，决定 AI 面向用户的输出语言
+  const language = useResolvedLanguage();
+  const zh = useIsChineseUI();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState<AiDraft | null>(null);
   const [materials, setMaterials] = useState<AiMaterial[]>([]);
@@ -443,11 +453,16 @@ export function useAiChat(options: {
         if (!alive) return;
         setHealth(h);
         if (!h.pi.available) {
-          setBlocked("服务端未安装 pi，请联系管理员");
+          setBlocked(zh ? "服务端未安装 pi，请联系管理员" : "pi is not installed on the server; please contact the administrator");
           return;
         }
       } catch {
-        if (alive) setBlocked("AI 服务不可用（后端未启动或未部署）");
+        if (alive)
+          setBlocked(
+            zh
+              ? "AI 服务不可用（后端未启动或未部署）"
+              : "AI service unavailable (backend not started or not deployed)",
+          );
         return;
       }
       try {
@@ -477,7 +492,8 @@ export function useAiChat(options: {
           }
         }
       } catch {
-        if (alive) setBlocked("无法创建 AI 会话");
+        if (alive)
+          setBlocked(zh ? "无法创建 AI 会话" : "Unable to create an AI session");
       }
     })();
     return () => {
@@ -524,9 +540,11 @@ export function useAiChat(options: {
         patchMessage(agentId, {
           streaming: false,
           error: true,
-          text:
-            "连接中断（页面刷新、网络切换或代理超时），本轮已停止。" +
-            "已生成的内容仍保留在文档里，可继续发指令让 AI 接着写。",
+          text: zh
+            ? "连接中断（页面刷新、网络切换或代理超时），本轮已停止。" +
+              "已生成的内容仍保留在文档里，可继续发指令让 AI 接着写。"
+            : "Connection interrupted (page refresh, network switch, or proxy timeout); this round has stopped. " +
+              "Generated content remains in the document; you can continue sending instructions for the AI to keep writing.",
         });
         controller.abort();
       }, STREAM_WATCHDOG_TICK_MS);
@@ -542,6 +560,7 @@ export function useAiChat(options: {
           anchor: options.anchor || "",
           selection: options.selection || "",
           save: !!options.save,
+          language,
           signal: controller.signal,
           onEvent: (event: AiEvent) => {
             lastEventAt = Date.now();
@@ -589,7 +608,7 @@ export function useAiChat(options: {
                 break;
               }
               case "patch": {
-                const change = toChange(event.patch as AiPatch, agentId);
+                const change = toChange(event.patch as AiPatch, agentId, zh);
                 setMessages((prev) =>
                   prev.map((m) =>
                     m.id === agentId ? { ...m, changes: [...(m.changes ?? []), change] } : m,
@@ -617,14 +636,20 @@ export function useAiChat(options: {
                   // 没动，得单独发信号让编辑器换版本重载，否则用户看到的还是旧版
                   setScopedStyleSeq((n) => n + 1);
                 }
-                addNote(String(event.message ?? "已更新整篇样式"));
+                addNote(
+                  String(event.message ?? (zh ? "已更新整篇样式" : "Updated document styles")),
+                );
                 break;
               }
               case "saved":
                 setLastSaved(String(event.name ?? ""));
                 break;
               case "retry":
-                addNote(`模型未响应，自动重试第 ${event.attempt ?? 2} 次`);
+                addNote(
+                  zh
+                    ? `模型未响应，自动重试第 ${event.attempt ?? 2} 次`
+                    : `Model did not respond; automatically retrying attempt ${event.attempt ?? 2}`,
+                );
                 break;
               case "tools": {
                 // 兜底（拿不到逐条 tool 事件时才用）：让步数动起来即可。
@@ -651,7 +676,9 @@ export function useAiChat(options: {
                 // 并让 send 返回 false，调用方不再推进流程步骤。
                 if (event.kind === "aborted") break;
                 sawError = true;
-                const reason = String(event.message ?? "已中止本轮");
+                const reason = String(
+                  event.message ?? (zh ? "已中止本轮" : "This round was stopped"),
+                );
                 const partial = String(event.text ?? "");
                 setMessages((prev) =>
                   prev.map((m) =>
@@ -670,7 +697,7 @@ export function useAiChat(options: {
               }
               case "error": {
                 sawError = true;
-                const message = String(event.message ?? "出错了");
+                const message = String(event.message ?? (zh ? "出错了" : "Something went wrong"));
                 const partial = String(event.text ?? "");
                 setMessages((prev) =>
                   prev.map((m) =>
@@ -695,7 +722,11 @@ export function useAiChat(options: {
         });
       } catch (err) {
         sawError = true;
-        patchMessage(agentId, { streaming: false, error: true, text: `发送失败：${String(err)}` });
+        patchMessage(agentId, {
+          streaming: false,
+          error: true,
+          text: zh ? `发送失败：${String(err)}` : `Failed to send: ${String(err)}`,
+        });
       } finally {
         clearInterval(watchdog);
         abortRef.current = null;
@@ -707,7 +738,9 @@ export function useAiChat(options: {
                   ...m,
                   streaming: false,
                   error: m.error || (sawError ? true : undefined),
-                  text: m.text || (sawError ? m.text : "（本轮没有输出）"),
+                  text:
+                    m.text ||
+                    (sawError ? m.text : zh ? "（本轮没有输出）" : "(No output this round)"),
                 }
               : m,
           ),
@@ -716,7 +749,7 @@ export function useAiChat(options: {
       }
       return !sawError && !controller.signal.aborted;
     },
-    [ensureSession, patchMessage, refresh, streaming],
+    [ensureSession, patchMessage, refresh, streaming, zh],
   );
 
   const stop = useCallback(() => {
@@ -913,20 +946,40 @@ export function useAiChat(options: {
         setDraft(res.draft);
         if (res.saved) setLastSaved(res.saved);
         if (res.skipped.length) {
-          const detail = res.skipped.map((s) => `第 ${s.anchor} 段：${s.reason}`).join("；");
+          const detail = res.skipped
+            .map((s) =>
+              zh
+                ? `第 ${s.anchor} 段：${s.reason}`
+                : `Section ${s.anchor}: ${s.reason}`,
+            )
+            .join(zh ? "；" : "; ");
           setMessages((prev) => [
             ...prev,
-            { id: nextId(), role: "agent", text: `有变更没能应用：${detail}`, at: now(), error: true },
+            {
+              id: nextId(),
+              role: "agent",
+              text: zh ? `有变更没能应用：${detail}` : `Some changes could not be applied: ${detail}`,
+              at: now(),
+              error: true,
+            },
           ]);
         }
       } catch (err) {
         setMessages((prev) => [
           ...prev,
-          { id: nextId(), role: "agent", text: `应用变更失败：${String(err)}`, at: now(), error: true },
+          {
+            id: nextId(),
+            role: "agent",
+            text: zh
+              ? `应用变更失败：${String(err)}`
+              : `Failed to apply changes: ${String(err)}`,
+            at: now(),
+            error: true,
+          },
         ]);
       }
     },
-    [markChange],
+    [markChange, zh],
   );
 
   const acceptChange = useCallback(

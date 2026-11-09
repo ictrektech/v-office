@@ -37,8 +37,25 @@ const PHASE_LABEL: Record<string, string> = {
   terminal_blocked: "已阻塞",
 };
 
-export function docketPhaseLabel(phase: string): string {
-  return PHASE_LABEL[phase] ?? phase;
+const PHASE_LABEL_EN: Record<string, string> = {
+  intake: "Case intake",
+  bootstrap_disclosure: "Preparing disclosure draft",
+  wait_disclosure: "Waiting for disclosure draft",
+  dispatch_disclosure: "Dispatching disclosure revision",
+  wait_disclosure_fix: "Waiting for disclosure revision",
+  bootstrap_application: "Preparing application documents",
+  wait_application: "Waiting for application documents",
+  dispatch_application: "Dispatching application revision",
+  triage: "Triage issue list",
+  ask_human: "Waiting for technical facts",
+  round_close: "Closing current round",
+  terminal_complete: "Completed",
+  terminal_max_rounds: "Round limit reached",
+  terminal_blocked: "Blocked",
+};
+
+export function docketPhaseLabel(phase: string, zh = true): string {
+  return (zh ? PHASE_LABEL[phase] : PHASE_LABEL_EN[phase]) ?? phase;
 }
 
 export function isDocketTerminal(phase: string): boolean {

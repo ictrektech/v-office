@@ -335,7 +335,72 @@ SYSTEM_POLICY = """你是 V-Office 内置的写作助手，只服务三件事：
 - 交付物必须干净：正文整篇放进 `<final-doc>…</final-doc>`，**前后不要**写计划、理由、
   自评，也不要写「我先读一下技能」「Reason for each choice」这类过程说明——
   它们会被当成正文落进文档，变成开头的垃圾段落（实测发生过）。
-- 输出用简体中文；成稿用 Markdown，标题层级与文种规范对齐技能里的要求。"""
+- 面向用户的文字按本轮消息里「输出语言」的要求书写（没给要求时用简体中文）；
+  成稿用 Markdown，标题层级与文种规范对齐技能里的要求。"""
+
+
+# 站点/VOS 语言 → 提示词里的语言名。模型认语言名比认 BCP-47 标签更稳。
+_OUTPUT_LANGUAGES = {
+    "zh-cn": "简体中文",
+    "zh-tw": "繁體中文",
+    "zh-hk": "繁體中文",
+    "en": "English",
+    "ja": "日本語",
+    "ko": "한국어",
+    "ru": "русский язык",
+    "es": "español",
+    "fr": "français",
+    "de": "Deutsch",
+    "pt": "português",
+    "pt-br": "português (Brasil)",
+    "pt-pt": "português (Portugal)",
+    "it": "italiano",
+    "nl": "Nederlands",
+    "pl": "polski",
+    "sv": "svenska",
+    "da": "dansk",
+    "no": "norsk",
+    "fi": "suomi",
+    "cs": "čeština",
+    "sk": "slovenčina",
+    "hu": "magyar",
+    "ro": "română",
+    "tr": "Türkçe",
+    "uk": "українська",
+    "el": "Ελληνικά",
+    "ar": "العربية",
+    "he": "עברית",
+    "fa": "فارسی",
+    "hi": "हिन्दी",
+    "bn": "বাংলা",
+    "th": "ไทย",
+    "vi": "Tiếng Việt",
+    "id": "Bahasa Indonesia",
+    "ms": "Bahasa Melayu",
+    "fil": "Filipino",
+    "sw": "Kiswahili",
+}
+
+
+def _output_language(locale: str) -> str:
+    """把站点/VOS 语言解析成提示词里的语言名；未知语言回落英文。"""
+    code = (locale or "").strip().lower().replace("_", "-")
+    if not code:
+        return "简体中文"
+    if code in _OUTPUT_LANGUAGES:
+        return _OUTPUT_LANGUAGES[code]
+    # pt-BR / es-419 / zh-Hant 这类变体按主语言兜底
+    return _OUTPUT_LANGUAGES.get(code.split("-")[0], "English")
+
+
+def _language_rule(locale: str) -> str:
+    name = _output_language(locale)
+    return (
+        "# 输出语言（优先级最高）\n"
+        f"本轮所有面向用户的文字（成稿正文、审查意见、对话回复与进度说明）"
+        f"必须使用{name}书写；不要因为材料、模板或技能文档是中文就改用中文。"
+        "代码、命令、文件路径与材料原文引用保持原样。"
+    )
 
 
 def _policy_prompt(extra: str = "") -> str:
@@ -1388,6 +1453,7 @@ def _build_turn_prompt(
     anchor: str = "",
     selection: str = "",
     include_materials: bool = True,
+    language: str = "",
 ) -> str:
     """每轮发给 agent 的东西：指令 + 位置 + 当前草稿（带编号）+ 材料 + 输出契约。
 
@@ -1436,6 +1502,10 @@ def _build_turn_prompt(
     template = template_context(username, sid)
     if template:
         parts.append(template)
+
+    # 输出语言每轮都带上：会话可能横跨站点语言切换，且技能文档/模板通常是中文，
+    # 不显式要求时模型会顺着它们写中文。
+    parts.append(_language_rule(language))
 
     parts.append(OUTPUT_CONTRACT)
     return "\n\n".join(p for p in parts if p)
@@ -2761,6 +2831,7 @@ async def stream_turn(
     autosave: bool = True,
     resume: bool = True,
     auth_token: str = "",
+    language: str = "",
 ) -> AsyncIterator[dict]:
     """带并发闸门 + 一次性兜底重试 + 落地（草稿/变更/落盘）的回合流。"""
     settings = load_settings(username)
@@ -2795,6 +2866,7 @@ async def stream_turn(
                     username, sid, instruction,
                     anchor=anchor, selection=selection,
                     include_materials=True,
+                    language=language,
                 )
                 async for item in _run_turn(username, sid, prompt,
                                             resume=resume and attempt == 0,
@@ -2862,6 +2934,7 @@ async def sse_turn(
     autosave: bool = True,
     resume: bool = True,
     auth_token: str = "",
+    language: str = "",
 ) -> AsyncIterator[str]:
     """SSE 包装：始终以一个终止事件收尾，前端不用猜。"""
     yield _sse({"type": "ready", "session": sid})
@@ -2870,6 +2943,7 @@ async def sse_turn(
             username, sid, instruction,
             anchor=anchor, selection=selection, save=save,
             autosave=autosave, resume=resume, auth_token=auth_token,
+            language=language,
         ):
             if item["type"] == "final":
                 # 注意顺序：type 放最后，否则会被 item 里的 "final" 覆盖
@@ -2932,6 +3006,8 @@ class ChatRequest(BaseModel):
     save: bool = False
     # 写作栏目自己管保存（有独立存稿链路）→ autosave=False
     autosave: bool = True
+    # 站点/VOS 的解析语言（如 zh-CN / en）：决定本轮面向用户的输出语言
+    language: str = ""
 
 
 @router.get("/health")
@@ -3572,6 +3648,7 @@ async def chat(request: Request, sid: str, body: ChatRequest) -> StreamingRespon
             autosave=body.autosave,
             resume=resume,
             auth_token=auth_token,
+            language=body.language,
         ),
         media_type="text/event-stream",
         headers={
@@ -3863,6 +3940,94 @@ async def rebuild_final_docx(request: Request, sid: str) -> JSONResponse:
     if proc.returncode != 0:
         tail = "\n".join(text.splitlines()[-30:]) or f"exit {proc.returncode}"
         return JSONResponse({"ok": False, "message": tail}, status_code=422)
+    return JSONResponse({"ok": True})
+
+
+# ── 专利：单个 md 源 → 同名 Word（用户点按钮触发，不走 agent）──────────────
+#
+# 软著的重建是「整案重来」（8 步门禁、页数校验），专利不一样：用户往往只改
+# 权利要求书的一条、说明书的一段。这里按 md 文件逐个重建，改哪儿就重建哪儿，
+# 不必把整案再跑一轮。工具按文件名分流，和技能落盘时用的是同一套脚本。
+
+# 申请文件四件套：由 emit_application_docx.py 统一出 Word（说明书附图里的
+# PNG 也靠它嵌进去），所以点其中任意一份都重建整个目录。
+_APPLICATION_STEMS = ("权利要求书", "说明书", "说明书摘要", "说明书附图")
+
+
+class RebuildDocxRequest(BaseModel):
+    """要重建的 md 源（相对会话目录的路径）。"""
+
+    path: str
+
+
+async def _run_skill_script(
+    script: Path, args: list[str], *, cwd: Path, uid: int, gid: int
+) -> tuple[int, str]:
+    """跑技能里的转换脚本并收口超时/日志（与 rebuild-final 同一套约束）。"""
+    priv = {"user": uid, "group": gid} if uid > 0 and os.geteuid() == 0 else {}
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, str(script), *args,
+        cwd=str(cwd),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,  # 超时可整组杀
+        **priv,
+    )
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=REBUILD_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        _kill_tree(proc)
+        raise HTTPException(status_code=504, detail="重建超时，请稍后重试")
+    return proc.returncode, out.decode("utf-8", "replace").strip()
+
+
+@router.post("/sessions/{sid}/rebuild-docx")
+async def rebuild_source_docx(
+    request: Request, sid: str, body: RebuildDocxRequest
+) -> JSONResponse:
+    """把会话里某一份 md 源重建成同名 Word（专利交底 / 申请文件 / 审查答复通用）。"""
+    username = await _user(request)
+    if sid in _running:
+        raise HTTPException(status_code=409, detail="助手正在本会话回复，等本轮结束再重建")
+    root = session_dir(username, sid).resolve()
+    target = (root / body.path).resolve()
+    # 路径校验与 get_file / save_session_file 同款：必须落在会话目录内
+    if target != root and not target.is_relative_to(root):
+        raise HTTPException(status_code=400, detail="bad path")
+    rel = target.relative_to(root)
+    if rel.parts and (rel.parts[0] in _PRIVATE_DIRS or rel.parts[0].startswith(".")):
+        raise HTTPException(status_code=400, detail="bad path")
+    if target.suffix.lower() != ".md" or not target.is_file():
+        raise HTTPException(status_code=404, detail="md 源不存在，先刷新列表")
+
+    skills = Path(SKILLS_DIR)
+    stem = target.stem
+    if stem in _APPLICATION_STEMS:
+        script = skills / "patent-application" / "tools" / "emit_application_docx.py"
+        args = ["--dir", str(target.parent)]
+    elif stem.startswith("意见陈述"):
+        script = skills / "patent-oa" / "tools" / "emit_opinion_docx.py"
+        args = ["-i", str(target), "-o", str(target.with_suffix(".docx"))]
+    else:
+        # 交底书 / 全流程产物：与生成时的 mermaid_render 落盘口径一致，
+        # 隐藏注释里的图片引用会按 md 所在目录解析
+        script = skills / "patent-disclosure" / "tools" / "md_to_docx.py"
+        args = ["-i", str(target), "-o", str(target.with_suffix(".docx"))]
+    if not script.is_file():
+        raise HTTPException(
+            status_code=503, detail=f"技能脚本未就绪（缺少 {script.name}）"
+        )
+
+    uid, gid = await user_ids(username)
+    returncode, text = await _run_skill_script(
+        script, args, cwd=script.parent, uid=uid, gid=gid
+    )
+    if returncode != 0:
+        tail = "\n".join(text.splitlines()[-30:]) or f"exit {returncode}"
+        return JSONResponse({"ok": False, "message": tail}, status_code=422)
+    LOG.info(
+        "ai: rebuild-docx user=%s sid=%s path=%s", username, sid, body.path
+    )
     return JSONResponse({"ok": True})
 
 

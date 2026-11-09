@@ -61,3 +61,6 @@ public/ai-assistant
 
 # 热修复备份（仅本地排查用，已在 .gitignore）
 /.hotfix-backup/
+
+# 本地跑批产物（docket 等实测输出，只在本地，不进镜像）
+/outputs/

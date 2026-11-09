@@ -16,10 +16,10 @@
  */
 
 import { useMemo, useState } from "react";
-import { useExtracted } from "next-intl";
 import { Check, FileText, Loader2, Sparkles, Trash2, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AiArtifact } from "@/utils/ai/client";
+import { useIsChineseUI } from "@/store";
 import { vp } from "./visual-spec";
 
 /** 一份产物的声明（栏目侧从模板产出契约派生） */
@@ -69,7 +69,7 @@ export function ArtifactBoard({
    */
   extraTitle?: string;
 }) {
-  const t = useExtracted();
+  const zh = useIsChineseUI();
   const [error, setError] = useState<string | null>(null);
 
   const byKey = useMemo(() => {
@@ -116,15 +116,12 @@ export function ArtifactBoard({
               {found ? (
                 <span className="inline-flex items-center gap-1 rounded-full bg-[#E8F9EC] px-2 py-0.5 text-[12px] font-semibold text-[#34C759]">
                   <Check className="h-3 w-3" />
-                  {t({
-                    id: "Artifact ready",
-                    message: "已完成",
-                  })}
+                  {zh ? "已完成" : "Ready"}
                 </span>
               ) : null}
               {isActive ? (
                 <span className="rounded-full bg-[#D4542F]/10 px-2 py-0.5 text-[12px] font-semibold text-[#D4542F]">
-                  {t({ id: "Editing", message: "编辑中" })}
+                  {zh ? "编辑中" : "Editing"}
                 </span>
               ) : null}
             </h3>
@@ -135,15 +132,10 @@ export function ArtifactBoard({
             ) : null}
             <p className="mt-1 text-[13px] text-[#94A3B8]">
               {found
-                ? t({
-                    id: "Artifact stats",
-                    message: "{chars} 字 · {at} 更新",
-                    values: {
-                      chars: String(found.chars ?? 0),
-                      at: new Date((found.updated_at ?? 0) * 1000).toLocaleString(),
-                    },
-                  })
-                : t({ id: "Not drafted yet", message: "还没起草" })}
+                ? zh
+                  ? `${found.chars ?? 0} 字 · ${new Date((found.updated_at ?? 0) * 1000).toLocaleString()} 更新`
+                  : `${found.chars ?? 0} chars · updated ${new Date((found.updated_at ?? 0) * 1000).toLocaleString()}`
+                : zh ? "还没起草" : "Not drafted yet"}
             </p>
           </div>
         </div>
@@ -161,8 +153,8 @@ export function ArtifactBoard({
               <Sparkles className="h-4 w-4" />
             )}
             {found
-              ? t({ id: "Redraft", message: "重新起草" })
-              : t({ id: "Draft it", message: "起草这份" })}
+              ? zh ? "重新起草" : "Redraft"
+              : zh ? "起草这份" : "Draft this"}
           </button>
           {found ? (
             <>
@@ -173,7 +165,7 @@ export function ArtifactBoard({
                 className="inline-flex items-center gap-1.5 rounded-full bg-white px-3.5 py-2 text-[14px] font-medium text-[#1C1C1E] ring-1 ring-black/[0.07] transition hover:bg-[#F2F2F7] active:scale-[0.98] disabled:opacity-40 dark:bg-white/10 dark:text-white"
               >
                 <FileText className="h-4 w-4" />
-                {t({ id: "Preview", message: "预览" })}
+                {zh ? "预览" : "Preview"}
               </button>
               <button
                 type="button"
@@ -181,7 +173,7 @@ export function ArtifactBoard({
                 disabled={!!busyKey}
                 className="inline-flex items-center gap-1.5 rounded-full bg-white px-3.5 py-2 text-[14px] font-medium text-[#1C1C1E] ring-1 ring-black/[0.07] transition hover:bg-[#F2F2F7] active:scale-[0.98] disabled:opacity-40 dark:bg-white/10 dark:text-white"
               >
-                {t({ id: "Save to my documents", message: "保存到我的文档" })}
+                {zh ? "保存到我的文档" : "Save to My Documents"}
               </button>
             </>
           ) : null}
@@ -194,7 +186,7 @@ export function ArtifactBoard({
               }}
               disabled={!!busyKey}
               className="ml-auto inline-flex h-9 w-9 items-center justify-center rounded-full text-[#8E8E93] transition hover:bg-[#F2F2F7] hover:text-[#FF3B30] disabled:opacity-40"
-              title={t({ id: "Remove", message: "Remove" })}
+              title={zh ? "移除" : "Remove"}
             >
               <Trash2 className="h-4 w-4" />
             </button>
@@ -210,22 +202,18 @@ export function ArtifactBoard({
         <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
           <div>
             <h2 className="text-[22px] font-semibold tracking-[-0.01em] text-[#0F172A] dark:text-white">
-              {t({ id: "Deliverables", message: "Deliverables" })}
+              {zh ? "交付物" : "Deliverables"}
             </h2>
             <p className="mt-1 text-[15px] text-[#6E6E73] dark:text-slate-400">
-              {t({
-                id: "Deliverables hint",
-                message:
-                  "Draft them one by one — each file is kept on its own, so editing one never touches another.",
-              })}
+              {zh
+                ? "一份一份起草——每份文件各自独立保存，改其中一份不会动到另一份。"
+                : "Draft them one by one — each file is kept on its own, so editing one never touches another."}
             </p>
           </div>
           <span className={cn(vp.chip, "border-none bg-[#FDF1EC] px-3.5 py-2 text-[14px] font-semibold text-[#D4542F]")}>
-            {t({
-              id: "N of M deliverables",
-              message: "{done} / {total} drafted",
-              values: { done: String(doneCount), total: String(main.length) },
-            })}
+            {zh
+              ? `${doneCount} / ${main.length} 已起草`
+              : `${doneCount} / ${main.length} drafted`}
           </span>
         </div>
 
@@ -240,7 +228,7 @@ export function ArtifactBoard({
         {extra.length ? (
           <>
             <h3 className="mb-3 mt-8 text-[17px] font-semibold text-[#0F172A] dark:text-white">
-              {extraTitle ?? t({ id: "Open questions", message: "Open questions" })}
+              {extraTitle ?? (zh ? "待确认问题" : "Open questions")}
             </h3>
             <div className="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-4">{extra.map(card)}</div>
           </>
@@ -260,7 +248,7 @@ export function ArtifactBoard({
               onClick={onClosePreview}
               className="ml-auto rounded-full bg-black/[0.05] px-3.5 py-2 text-[14px] font-medium text-[#475569] transition hover:bg-black/[0.08] dark:bg-white/10 dark:text-slate-300"
             >
-              {t({ id: "Close", message: "Close" })}
+              {zh ? "关闭" : "Close"}
             </button>
           </div>
           <div className="relative flex-1 overflow-y-auto px-6 py-6 custom-scrollbar">

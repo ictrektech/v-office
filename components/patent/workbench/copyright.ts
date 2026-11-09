@@ -22,7 +22,9 @@ export type StepKey =
 export interface StepMeta {
   key: StepKey;
   title: string;
+  titleEn: string;
   desc: string;
+  descEn: string;
 }
 
 export interface StepMark {
@@ -31,18 +33,63 @@ export interface StepMark {
 }
 
 export const STEPS: StepMeta[] = [
-  { key: "analyze", title: "项目分析", desc: "识别框架、源码文件数与源程序总行数" },
-  { key: "business", title: "业务理解", desc: "行业、目标用户、核心功能与手册模块" },
-  { key: "selection", title: "代码选材", desc: "挑选最能体现真实功能的源码文件" },
-  { key: "extract", title: "抽取代码材料", desc: "前 30 页 + 后 30 页，共 60 页" },
-  { key: "application", title: "申请表信息", desc: "软件全称、版本、环境与功能说明" },
-  { key: "manual", title: "操作手册", desc: "按真实页面逐章写，并完成自检" },
+  {
+    key: "analyze",
+    title: "项目分析",
+    titleEn: "Project analysis",
+    desc: "识别框架、源码文件数与源程序总行数",
+    descEn: "Identify the framework, source file count, and total lines of source code",
+  },
+  {
+    key: "business",
+    title: "业务理解",
+    titleEn: "Business understanding",
+    desc: "行业、目标用户、核心功能与手册模块",
+    descEn: "Industry, target users, core features, and manual modules",
+  },
+  {
+    key: "selection",
+    title: "代码选材",
+    titleEn: "Code selection",
+    desc: "挑选最能体现真实功能的源码文件",
+    descEn: "Select the source files that best reflect real functionality",
+  },
+  {
+    key: "extract",
+    title: "抽取代码材料",
+    titleEn: "Extract code materials",
+    desc: "前 30 页 + 后 30 页，共 60 页",
+    descEn: "First 30 pages + last 30 pages, 60 pages total",
+  },
+  {
+    key: "application",
+    title: "申请表信息",
+    titleEn: "Application form information",
+    desc: "软件全称、版本、环境与功能说明",
+    descEn: "Software full name, version, environment, and feature description",
+  },
+  {
+    key: "manual",
+    title: "操作手册",
+    titleEn: "User manual",
+    desc: "按真实页面逐章写，并完成自检",
+    descEn: "Write chapter by chapter based on real pages, then complete self-check",
+  },
   {
     key: "shots",
     title: "截图",
+    titleEn: "Screenshots",
     desc: "上传真实界面截图插入手册；跳过则手册留占位，正式提交前需补图",
+    descEn:
+      "Upload real interface screenshots to insert into the manual; if skipped, placeholders remain and images must be added before formal submission",
   },
-  { key: "build", title: "正式资料", desc: "生成 Word / TXT，校验页数" },
+  {
+    key: "build",
+    title: "正式资料",
+    titleEn: "Final documents",
+    desc: "生成 Word / TXT，校验页数",
+    descEn: "Generate Word / TXT and verify page counts",
+  },
 ];
 
 /** 每一步发给 agent 的指令，措辞对齐技能里的「页面按钮 → 指令」表 */
@@ -215,18 +262,55 @@ export function hasFinalMaterials(files: ReadonlyArray<{ path: string }>): boole
 export interface CopyrightPair {
   key: string;
   label: string;
+  labelEn: string;
   source?: { path: string; mtime: number };
   output?: { path: string; mtime: number };
   /** 源比成品新：改过 md 还没重建 */
   stale: boolean;
 }
 
-const OUTPUT_PAIRS: Array<{ key: string; label: string; source: string; output: RegExp }> = [
-  { key: "manual", label: "操作手册", source: "操作手册.md", output: /操作手册\.docx$/ },
-  { key: "code-head", label: "代码（前 30 页）", source: "代码-前30页.md", output: /代码\(前30页\)\.docx$/ },
-  { key: "code-tail", label: "代码（后 30 页）", source: "代码-后30页.md", output: /代码\(后30页\)\.docx$/ },
-  { key: "code-all", label: "代码（全部）", source: "代码-全部.md", output: /代码\(全部\)\.docx$/ },
-  { key: "app-info", label: "申请表", source: "申请表信息.md", output: /申请表信息\.txt$/ },
+const OUTPUT_PAIRS: Array<{
+  key: string;
+  label: string;
+  labelEn: string;
+  source: string;
+  output: RegExp;
+}> = [
+  {
+    key: "manual",
+    label: "操作手册",
+    labelEn: "User manual",
+    source: "操作手册.md",
+    output: /操作手册\.docx$/,
+  },
+  {
+    key: "code-head",
+    label: "代码（前 30 页）",
+    labelEn: "Code (first 30 pages)",
+    source: "代码-前30页.md",
+    output: /代码\(前30页\)\.docx$/,
+  },
+  {
+    key: "code-tail",
+    label: "代码（后 30 页）",
+    labelEn: "Code (last 30 pages)",
+    source: "代码-后30页.md",
+    output: /代码\(后30页\)\.docx$/,
+  },
+  {
+    key: "code-all",
+    label: "代码（全部）",
+    labelEn: "Code (all)",
+    source: "代码-全部.md",
+    output: /代码\(全部\)\.docx$/,
+  },
+  {
+    key: "app-info",
+    label: "申请表",
+    labelEn: "Application form",
+    source: "申请表信息.md",
+    output: /申请表信息\.txt$/,
+  },
 ];
 
 export function buildCopyrightPairs(
@@ -248,6 +332,7 @@ export function buildCopyrightPairs(
     pairs.push({
       key: spec.key,
       label: spec.label,
+      labelEn: spec.labelEn,
       source,
       output,
       stale: Boolean(source && output && source.mtime > output.mtime),

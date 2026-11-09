@@ -15,7 +15,9 @@ import type { StageKey } from "./config";
 export interface MaterialSlot {
   key: SlotKey;
   label: string;
+  labelEn: string;
   hint: string;
+  hintEn: string;
   /** 技能门禁会因缺这项而终止 */
   required?: boolean;
 }
@@ -44,74 +46,138 @@ const DISCLOSURE_SLOTS: MaterialSlot[] = [
   {
     key: "inventor",
     label: "发明人材料",
+    labelEn: "Inventor materials",
     hint: "技术方案、实验数据、现有说明，可多份",
+    hintEn: "Technical solution, experimental data, existing description; multiple files allowed",
   },
   {
     key: "project",
     label: "项目目录",
+    labelEn: "Project directory",
     hint: "源码/文档打包成 ZIP，可多份；服务端会解包",
+    hintEn: "Source code/docs packed as ZIP; multiple files allowed; the server unpacks them",
   },
-  { key: "tex", label: ".tex 源文件", hint: "可选，有 LaTeX 稿就传，可多份" },
+  {
+    key: "tex",
+    label: ".tex 源文件",
+    labelEn: ".tex source files",
+    hint: "可选，有 LaTeX 稿就传，可多份",
+    hintEn: "Optional; upload if you have LaTeX drafts; multiple files allowed",
+  },
   {
     key: "disclosure",
     label: "已有交底书",
+    labelEn: "Existing disclosure",
     hint: "上一版交底 .md / .docx，用于迭代",
+    hintEn: "Previous disclosure .md / .docx, used for iteration",
   },
-  { key: "other", label: "其他材料", hint: "标准、CAD、补充说明，可多份" },
+  {
+    key: "other",
+    label: "其他材料",
+    labelEn: "Other materials",
+    hint: "标准、CAD、补充说明，可多份",
+    hintEn: "Standards, CAD, supplementary notes; multiple files allowed",
+  },
 ];
 
 const APPLICATION_SLOTS: MaterialSlot[] = [
   {
     key: "disclosureDir",
     label: "同案交底目录",
+    labelEn: "Same-case disclosure directory",
     hint: "交底书 .md / .docx，可多份（技能按目录取稿）",
+    hintEn: "Disclosure .md / .docx; multiple files allowed (the skill reads from the directory)",
     required: true,
   },
   {
     key: "schema",
     label: "结构 / 外观 schema",
+    labelEn: "Structure / appearance schema",
     hint: "实用新型、外观需要；structure_schema / appearance_schema",
+    hintEn: "Required for utility model / design; structure_schema / appearance_schema",
   },
   {
     key: "figurePlan",
     label: "figure_plan",
+    labelEn: "figure_plan",
     hint: "附图规划，实用新型、外观需要",
+    hintEn: "Drawing plan; required for utility model / design",
   },
-  { key: "lineart", label: "入文线稿", hint: "实用新型、外观需要，可多张" },
-  { key: "photos", label: "入文实拍", hint: "仅外观需要，可多张" },
+  {
+    key: "lineart",
+    label: "入文线稿",
+    labelEn: "Line art for document",
+    hint: "实用新型、外观需要，可多张",
+    hintEn: "Required for utility model / design; multiple images allowed",
+  },
+  {
+    key: "photos",
+    label: "入文实拍",
+    labelEn: "Photos for document",
+    hint: "仅外观需要，可多张",
+    hintEn: "Required for design only; multiple images allowed",
+  },
   {
     key: "applicant",
     label: "申请人信息",
+    labelEn: "Applicant information",
     hint: "可选；未填只进问题清单，不拦流程",
+    hintEn: "Optional; if omitted, it only goes into the issue list and does not block the process",
   },
-  { key: "other", label: "其他材料", hint: "补充说明、参考稿，可多份" },
+  {
+    key: "other",
+    label: "其他材料",
+    labelEn: "Other materials",
+    hint: "补充说明、参考稿，可多份",
+    hintEn: "Supplementary notes, reference drafts; multiple files allowed",
+  },
 ];
 
 const OA_SLOTS: MaterialSlot[] = [
   {
     key: "oaNotice",
     label: "审查意见通知书",
+    labelEn: "Office action notice",
     hint: "OA 原件，PDF 优先；可多份",
+    hintEn: "Original OA, PDF preferred; multiple files allowed",
     required: true,
   },
   {
     key: "applicationDocs",
     label: "本申请文件",
+    labelEn: "Application documents",
     hint: "权利要求书、说明书、摘要，可多份",
+    hintEn: "Claims, specification, abstract; multiple files allowed",
     required: true,
   },
-  { key: "prior", label: "对比文件", hint: "D1、D2 等现有技术，可多份" },
+  {
+    key: "prior",
+    label: "对比文件",
+    labelEn: "Prior-art references",
+    hint: "D1、D2 等现有技术，可多份",
+    hintEn: "Prior art such as D1, D2; multiple files allowed",
+  },
   {
     key: "vector",
     label: "向量配置",
+    labelEn: "Vector configuration",
     hint: "可选，检索用 embedding 配置（json/yaml）",
+    hintEn: "Optional; embedding configuration for search (json/yaml)",
   },
   {
     key: "cases",
     label: "历史案例库",
+    labelEn: "Historical case library",
     hint: "可选，历史答复压缩包；少于 3 件会提示入库",
+    hintEn: "Optional; archive of past responses; fewer than 3 triggers an import prompt",
   },
-  { key: "other", label: "其他材料", hint: "补充说明、答复草稿，可多份" },
+  {
+    key: "other",
+    label: "其他材料",
+    labelEn: "Other materials",
+    hint: "补充说明、答复草稿，可多份",
+    hintEn: "Supplementary notes, response drafts; multiple files allowed",
+  },
 ];
 
 /**
@@ -125,22 +191,30 @@ const DOCKET_SLOTS: MaterialSlot[] = [
   {
     key: "inventor",
     label: "发明人材料",
+    labelEn: "Inventor materials",
     hint: "技术方案、实验数据、现有说明，可多份",
+    hintEn: "Technical solution, experimental data, existing description; multiple files allowed",
   },
   {
     key: "disclosure",
     label: "已有交底书",
+    labelEn: "Existing disclosure",
     hint: "有交底就传 .md / .docx；没有则从零开写",
+    hintEn: "Upload .md / .docx if available; otherwise drafting starts from scratch",
   },
   {
     key: "applicationDocs",
     label: "已有申请文件",
+    labelEn: "Existing application documents",
     hint: "已有四件套时传，按改稿走而不是重写",
+    hintEn: "Upload if the full set exists; revisions are made instead of a full rewrite",
   },
   {
     key: "other",
     label: "问题清单 / 其他",
+    labelEn: "Issue list / Other",
     hint: "问题清单、对比文件、补充说明，可多份",
+    hintEn: "Issue list, prior-art references, supplementary notes; multiple files allowed",
   },
 ];
 
@@ -156,18 +230,25 @@ const COPYRIGHT_SLOTS: MaterialSlot[] = [
   {
     key: "source",
     label: "项目源码包",
+    labelEn: "Project source archive",
     hint: "项目根目录打包成 ZIP（排除 node_modules/.git/dist），服务端解成 project/",
+    hintEn:
+      "Pack the project root as ZIP (exclude node_modules/.git/dist); the server unpacks it into project/",
     required: true,
   },
   {
     key: "screens",
     label: "软件截图",
+    labelEn: "Software screenshots",
     hint: "可选；第 6 步选了「我自行上传截图」时用，按页面顺序命名",
+    hintEn: 'Optional; used when "I will upload screenshots myself" is chosen in step 6; name by page order',
   },
   {
     key: "other",
     label: "需求 / 设计文档",
+    labelEn: "Requirements / design documents",
     hint: "可选；需求说明、设计文档、演示数据，可多份",
+    hintEn: "Optional; requirements, design documents, demo data; multiple files allowed",
   },
 ];
 

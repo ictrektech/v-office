@@ -64,6 +64,7 @@ import {
 import { isVOSMode } from "@/utils/vos/fastpath";
 import { exportAiDocx, importAiDraft } from "@/utils/ai/client";
 import { WorkspaceFiles } from "@/components/studio/workspace-files";
+import { useIsChineseUI, useResolvedLanguage } from "@/store";
 import {
   listDocumentKnowledgeBases,
   listKnowledgeBaseFiles,
@@ -108,6 +109,33 @@ const DOC_TYPES = [
   "经验交流材料",
 ];
 
+/** 文种英文显示名：只在渲染处取用，docType 的值仍保持中文 */
+const DOC_TYPE_LABELS_EN: Record<string, string> = {
+  红头文件: "Red-head Document",
+  通知: "Notice",
+  请示: "Request for Instructions",
+  批复: "Official Reply",
+  工作报告: "Work Report",
+  调研报告: "Research Report",
+  领导讲话稿: "Leadership Speech",
+  会议纪要: "Meeting Minutes",
+  可行性研究报告: "Feasibility Study",
+  项目立项建议书: "Project Proposal",
+  "工作/实施方案": "Work/Implementation Plan",
+  工作总结: "Work Summary",
+  述职报告: "Performance Report",
+  汇报材料: "Briefing Materials",
+  "管理制度/办法": "Policies & Measures",
+  工作简报: "Work Bulletin",
+  政策解读材料: "Policy Interpretation",
+  新闻宣传稿: "Press Release",
+  大事记: "Chronicle",
+  "倡议书/公开信": "Proposal/Open Letter",
+  数据统计报表: "Statistical Report",
+  会议方案: "Meeting Plan",
+  经验交流材料: "Experience Exchange",
+};
+
 /** 文种 → 单色线性图标 */
 const DOC_TYPE_ICONS: Record<string, LucideIcon> = {
   红头文件: Stamp,
@@ -141,12 +169,12 @@ const REDHEAD_DOC_TYPES = new Set([
 ]);
 
 /** 文种 → 版式说明（与后端 resolveLayout 对应） */
-function layoutHint(docType: string): string {
-  if (/述职/.test(docType)) return "Word / PDF（报告版式，文末署名落款）";
-  if (/演讲|讲话|发言/.test(docType)) return "Word / PDF（演讲版式，加宽行距）";
+function layoutHint(docType: string, zh: boolean = true): string {
+  if (/述职/.test(docType)) return zh ? "Word / PDF（报告版式，文末署名落款）" : "Word / PDF (report layout, signature at the end)";
+  if (/演讲|讲话|发言/.test(docType)) return zh ? "Word / PDF（演讲版式，加宽行距）" : "Word / PDF (speech layout, wider line spacing)";
   if (REDHEAD_DOC_TYPES.has(docType))
-    return "Word / PDF（GB/T 9704-2012 红头版式）";
-  return "Word / PDF（GB/T 9704-2012 版式）";
+    return zh ? "Word / PDF（GB/T 9704-2012 红头版式）" : "Word / PDF (GB/T 9704-2012 red-head layout)";
+  return zh ? "Word / PDF（GB/T 9704-2012 版式）" : "Word / PDF (GB/T 9704-2012 layout)";
 }
 
 const ACCEPT = ".docx,.pdf,.xlsx,.csv,.txt,.md";
@@ -176,6 +204,9 @@ interface StreamBlock {
 type MaterialTab = "local" | "docs" | "hkb";
 
 export function WritingView() {
+  // 站点/VOS 的解析语言：传给每个写作客户端，决定成稿语言
+  const language = useResolvedLanguage();
+  const zh = useIsChineseUI();
   // ── 配置态 ──
   const [docType, setDocType] = useState("政策解读材料");
   const [title, setTitle] = useState("");
@@ -269,7 +300,7 @@ export function WritingView() {
    */
   const loadServerDocs = useCallback((retries = 5) => {
     setServerDocsLoading(true);
-    listMyWritingSessions()
+    listMyWritingSessions(zh)
       .then((docs) => {
         setServerDocs(docs);
         setServerDocsLoading(false);
@@ -281,7 +312,7 @@ export function WritingView() {
           setServerDocsLoading(false);
         }
       });
-  }, []);
+  }, [zh]);
 
   // loadServerDocs 稳定引用：mount effect 依赖空数组，经 ref 调用避免依赖告警
   const loadServerDocsRef = useRef(loadServerDocs);
@@ -291,6 +322,12 @@ export function WritingView() {
   const refreshServerDocs = useCallback(() => {
     loadServerDocs();
   }, [loadServerDocs]);
+
+  // 水合完成前 zh 恒为 false：拿到真实语言后补拉一次，
+  // 免得中文用户在挂载时就按英文兜底，把「未命名稿件」拉成 "Untitled draft"。
+  useEffect(() => {
+    if (zh) loadServerDocsRef.current();
+  }, [zh]);
 
   // ── 材料选中即上传解析（本地文件 / 云文档统一走这里）──
   const selectMaterial = useCallback(
@@ -557,19 +594,23 @@ export function WritingView() {
         if (status === "start") {
           const labels: Record<string, string> = {
             // 三阶段新管线
-            draft: "写手起草（写手 agent）",
-            reviewfix: "审查改稿（审改团队）",
-            signoff: "审批定稿（定稿签发人）",
+            draft: zh ? "写手起草（写手 agent）" : "Drafting (writer agent)",
+            reviewfix: zh ? "审查改稿（审改团队）" : "Review & Revise (review team)",
+            signoff: zh ? "审批定稿（定稿签发人）" : "Approval & Finalize (finalizer)",
             // 旧五阶段（历史会话恢复）
-            review: "审查意见（审查 agent）",
-            rewrite: `推稿复写（第 ${round ?? 1} 轮 · 推稿团队）`,
-            audit: "审核复核（审核 agent）",
-            finalize: "审批定稿（定稿签发人）",
+            review: zh ? "审查意见（审查 agent）" : "Review comments (reviewer agent)",
+            rewrite: zh
+              ? `推稿复写（第 ${round ?? 1} 轮 · 推稿团队）`
+              : `Rewrite (round ${round ?? 1} · rewrite team)`,
+            audit: zh ? "审核复核（审核 agent）" : "Audit (auditor agent)",
+            finalize: zh ? "审批定稿（定稿签发人）" : "Approval & Finalize (finalizer)",
           };
           const instr = typeof data.instruction === "string" ? data.instruction : "";
           const title =
             stage === "revise"
-              ? `局部微调（${instr.slice(0, 24)}${instr.length > 24 ? "…" : ""}）`
+              ? zh
+                ? `局部微调（${instr.slice(0, 24)}${instr.length > 24 ? "…" : ""}）`
+                : `Fine-tune (${instr.slice(0, 24)}${instr.length > 24 ? "…" : ""})`
               : (labels[stage] ?? stage);
           patchSession(name, (cur) => ({
             items: [
@@ -586,7 +627,9 @@ export function WritingView() {
               },
             ],
             ...(stage === "revise" ? { revising: true } : {}),
-            stageLabel: `【${labelOf(stage, round)}】进行中…`,
+            stageLabel: zh
+              ? `【${labelOf(stage, round, zh)}】进行中…`
+              : `[${labelOf(stage, round, zh)}] in progress…`,
           }));
         } else {
           // revise 卡 key 含创建时间戳，done 事件无法按 key 回配——按 kind + active 匹配
@@ -673,9 +716,9 @@ export function WritingView() {
       }
       case "writing_error": {
         patchSession(name, {
-          error: String(data.message ?? "生成失败，请重试"),
+          error: String(data.message ?? (zh ? "生成失败，请重试" : "Generation failed — please retry")),
           // 微调/撤销失败时 result 已存在，error 卡不渲染——在微调区直接显示
-          reviseError: String(data.message ?? "操作失败，请重试"),
+          reviseError: String(data.message ?? (zh ? "操作失败，请重试" : "Operation failed — please retry")),
           // 兜底置 done，避免卡片永久 active 导致左栏一直转圈
           items: (sessionsRef.current[name]?.items ?? []).map((it) =>
             it.status === "active" ? { ...it, status: "done" } : it,
@@ -687,7 +730,7 @@ export function WritingView() {
         return;
       }
     }
-  }, [patchSession, refreshServerDocs]);
+  }, [patchSession, refreshServerDocs, zh]);
 
   /** 刷新恢复：从服务端版本栈拉回成稿 + 重连会话（微调/撤销可用） */
   const restoreFromServer = useCallback(
@@ -695,7 +738,7 @@ export function WritingView() {
       try {
         // 关键：同步写作配置，否则微调/撤销因配置缺失而静默失效
         configsRef.current.set(name, config);
-        const res = await restoreWriting(sessionId, config);
+        const res = await restoreWriting(sessionId, config, zh);
         if (!res?.restored || !res.content) return;
         patchSession(name, {
           // 完整恢复现场：五阶段过程卡片 + 成稿，如刚生成完
@@ -710,10 +753,12 @@ export function WritingView() {
         });
         // 静默重连会话：恢复后微调/撤销立即可用
         if (!clientsRef.current.has(name)) {
-          const client = new WritingClient();
+          const client = new WritingClient(language, zh);
           client.onClose(() => {
             if (!sessionsRef.current[name]?.error) {
-              patchSession(name, { error: "连接已断开，请检查 AI 服务后重试" });
+              patchSession(name, {
+                error: zh ? "连接已断开，请检查 AI 服务后重试" : "Connection lost — check the AI service and retry",
+              });
             }
           });
           client.onEvent((d) => handleEvent(d, name));
@@ -730,7 +775,7 @@ export function WritingView() {
         console.warn("[writing] 成稿恢复失败:", err);
       }
     },
-    [patchSession, handleEvent],
+    [patchSession, handleEvent, language, zh],
   );
 
   interface RecentEntry {
@@ -745,7 +790,7 @@ export function WritingView() {
   const openRecent = useCallback(
     (rec: RecentEntry) => {
       if (rec.hasLocal) {
-        void selectMaterial(rec.name, () => loadLocalMaterial(rec.name), { silent: true }).then(() => {
+        void selectMaterial(rec.name, () => loadLocalMaterial(rec.name, zh), { silent: true }).then(() => {
           if (rec.sessionId && rec.config) {
             void restoreFromServer(rec.name, rec.sessionId, rec.config);
           }
@@ -764,7 +809,7 @@ export function WritingView() {
         void restoreFromServer(rec.name, rec.sessionId, rec.config);
       }
     },
-    [selectMaterial, restoreFromServer],
+    [selectMaterial, restoreFromServer, zh],
   );
 
   const startWriting = useCallback(async () => {
@@ -798,11 +843,13 @@ export function WritingView() {
       };
       configsRef.current.set(name, config);
 
-      const client = new WritingClient();
+      const client = new WritingClient(language, zh);
       clientsRef.current.set(name, client);
       client.onClose(() => {
         if (!sessionsRef.current[name]?.error) {
-          patchSession(name, { error: "连接已断开，请检查 AI 服务后重试" });
+          patchSession(name, {
+            error: zh ? "连接已断开，请检查 AI 服务后重试" : "Connection lost — check the AI service and retry",
+          });
         }
       });
       client.onEvent((d) => handleEvent(d, name));
@@ -817,7 +864,7 @@ export function WritingView() {
     } finally {
       patchSession(name, { starting: false });
     }
-  }, [activeName, docType, title, publisher, docNumber, audience, style, requirements, lengthWords, handleEvent, patchSession]);
+  }, [activeName, docType, title, publisher, docNumber, audience, style, requirements, lengthWords, handleEvent, patchSession, language, zh]);
 
   // 确保该文件的写作客户端可用：没有则用记录的 sessionId 自动重连。
   // 已有 client 但 WS 已断（服务重启/网络闪断）时必须丢弃重连，
@@ -832,10 +879,12 @@ export function WritingView() {
       }
       const sid = sessionsRef.current[name]?.sessionId;
       if (!sid) return null;
-      const client = new WritingClient();
+      const client = new WritingClient(language, zh);
       client.onClose(() => {
         if (!sessionsRef.current[name]?.error) {
-          patchSession(name, { error: "连接已断开，请检查 AI 服务后重试" });
+          patchSession(name, {
+            error: zh ? "连接已断开，请检查 AI 服务后重试" : "Connection lost — check the AI service and retry",
+          });
         }
       });
       client.onEvent((d) => handleEvent(d, name));
@@ -849,7 +898,7 @@ export function WritingView() {
         return null;
       }
     },
-    [handleEvent, patchSession],
+    [handleEvent, patchSession, language, zh],
   );
 
   // 成稿后局部微调（写入当前查看文件的会话；连接断了自动重连）
@@ -866,7 +915,7 @@ export function WritingView() {
     const config = name ? configsRef.current.get(name) : undefined;
     const docType = config?.docType || "";
     const tpl = docType ? getWritingTemplateByName(docType) : undefined;
-    const title = (config?.title || docType || "公文").trim();
+    const title = (config?.title || docType || (zh ? "公文" : "Official Document")).trim();
     if (content?.trim()) {
       try {
         sessionStorage.setItem("ai-studio:handoff", JSON.stringify({ markdown: content, title }));
@@ -875,7 +924,7 @@ export function WritingView() {
       }
     }
     router.push(tpl ? `/writing/studio?template=${tpl.id}` : "/writing/studio");
-  }, [activeName, router]);
+  }, [activeName, router, zh]);
 
 const handleRevise = useCallback(
     async (instruction: string) => {
@@ -884,7 +933,9 @@ const handleRevise = useCallback(
       if (sessionsRef.current[name]?.revising) return;
       const config = configsRef.current.get(name);
       if (!config) {
-        patchSession(name, { reviseError: "写作配置缺失，请重新打开该文件或重新生成" });
+        patchSession(name, {
+          reviseError: zh ? "写作配置缺失，请重新打开该文件或重新生成" : "Writing settings are missing — reopen the file or regenerate",
+        });
         return;
       }
       // 立即反馈：输入框变「修订中…」，即使重连也要让用户看到点了有效
@@ -893,7 +944,9 @@ const handleRevise = useCallback(
       if (!client) {
         patchSession(name, {
           revising: false,
-          reviseError: "连接已断开且自动重连失败，请检查 AI 服务后重试",
+          reviseError: zh
+            ? "连接已断开且自动重连失败，请检查 AI 服务后重试"
+            : "Connection lost and auto-reconnect failed — check the AI service and retry",
         });
         return;
       }
@@ -906,7 +959,7 @@ const handleRevise = useCallback(
         });
       }
     },
-    [activeName, ensureClient, patchSession],
+    [activeName, ensureClient, patchSession, zh],
   );
 
   // 撤销最近一次修改（回退上一版成稿，无 LLM 调用；连接断了自动重连）
@@ -917,14 +970,18 @@ const handleRevise = useCallback(
       if (sessionsRef.current[name]?.revising) return;
       const undoConfig = configsRef.current.get(name);
       if (!undoConfig) {
-        patchSession(name, { reviseError: "写作配置缺失，请重新打开该文件或重新生成" });
+        patchSession(name, {
+          reviseError: zh ? "写作配置缺失，请重新打开该文件或重新生成" : "Writing settings are missing — reopen the file or regenerate",
+        });
         return;
       }
       patchSession(name, { reviseError: null });
       const client = await ensureClient(name);
       if (!client) {
         patchSession(name, {
-          reviseError: "连接已断开且自动重连失败，请检查 AI 服务后重试",
+          reviseError: zh
+            ? "连接已断开且自动重连失败，请检查 AI 服务后重试"
+            : "Connection lost and auto-reconnect failed — check the AI service and retry",
         });
         return;
       }
@@ -936,7 +993,7 @@ const handleRevise = useCallback(
         });
       }
     },
-    [activeName, ensureClient, patchSession],
+    [activeName, ensureClient, patchSession, zh],
   );
 
   const stopWriting = useCallback(() => {
@@ -951,11 +1008,14 @@ const handleRevise = useCallback(
       const content = name ? sessionsRef.current[name]?.result?.content : undefined;
       const config = name ? configsRef.current.get(name) : undefined;
       if (!content || !config) {
-        return { ok: false, message: "还没有成稿，先生成后（或微调后）再保存" };
+        return {
+          ok: false,
+          message: zh ? "还没有成稿，先生成后（或微调后）再保存" : "No final draft yet — generate or fine-tune it before saving",
+        };
       }
       const sid = name ? sessionsRef.current[name]?.sessionId : undefined;
       if (!sid) {
-        return { ok: false, message: "会话未就绪，请稍后重试" };
+        return { ok: false, message: zh ? "会话未就绪，请稍后重试" : "Session not ready — please retry shortly" };
       }
       try {
         // 存进「我的文档」的是 **Word**：成稿先同步成服务端草稿，再由服务端用技能包的
@@ -963,12 +1023,18 @@ const handleRevise = useCallback(
         // 服务端那份为准（用户在编辑器里打开的也是它）。
         await importAiDraft(sid, content, config.title || config.docType || "");
         const { saved } = await exportAiDocx(sid);
-        return { ok: true, message: `已保存到我的文档：${saved}` };
+        return {
+          ok: true,
+          message: zh ? `已保存到我的文档：${saved}` : `Saved to My Documents: ${saved}`,
+        };
       } catch (err) {
-        return { ok: false, message: err instanceof Error ? err.message : "保存失败" };
+        return {
+          ok: false,
+          message: err instanceof Error ? err.message : (zh ? "保存失败" : "Save failed"),
+        };
       }
     },
-    [activeName],
+    [activeName, zh],
   );
 
   const backToConfig = useCallback(() => {
@@ -992,9 +1058,9 @@ const handleRevise = useCallback(
 
   /** 左栏页签：本地 /（VOS）我的文档 /（hybrag 已安装）知识库 */
   const materialTabs: { id: MaterialTab; label: string }[] = [
-    { id: "local", label: "本地" },
-    ...(vosMode ? [{ id: "docs" as MaterialTab, label: "我的文档" }] : []),
-    ...(hybragOk ? [{ id: "hkb" as MaterialTab, label: "知识库" }] : []),
+    { id: "local", label: zh ? "本地" : "Local" },
+    ...(vosMode ? [{ id: "docs" as MaterialTab, label: zh ? "我的文档" : "My Documents" }] : []),
+    ...(hybragOk ? [{ id: "hkb" as MaterialTab, label: zh ? "知识库" : "Knowledge Base" }] : []),
   ];
   const materialTabIndex = Math.max(
     0,
@@ -1022,7 +1088,7 @@ const handleRevise = useCallback(
           className="inline-flex items-center gap-1.5 text-[13px] text-gray-400 hover:text-gray-900 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
-          返回
+          {zh ? "返回" : "Back"}
         </Link>
       </header>
 
@@ -1036,10 +1102,10 @@ const handleRevise = useCallback(
             </span>
             <div className="min-w-0">
               <div className="text-[15px] font-semibold text-[#1D1D1F] leading-tight">
-                AI 公文写作
+                {zh ? "AI 公文写作" : "AI Official Document Writing"}
               </div>
               <div className="text-[11px] text-gray-400 mt-0.5">
-                让公文写作更简单
+                {zh ? "让公文写作更简单" : "Official document writing, made simpler"}
               </div>
             </div>
           </div>
@@ -1047,7 +1113,7 @@ const handleRevise = useCallback(
           {/* 参考材料导航 */}
           <div className="flex items-center gap-2 rounded-lg bg-gray-100/80 px-3 py-2 mb-3">
             <Layers className="w-4 h-4 text-gray-700" strokeWidth={1.75} />
-            <span className="text-[13px] font-medium text-[#1D1D1F]">参考材料</span>
+            <span className="text-[13px] font-medium text-[#1D1D1F]">{zh ? "参考材料" : "Reference materials"}</span>
           </div>
 
           <Segmented
@@ -1088,10 +1154,10 @@ const handleRevise = useCallback(
                     strokeWidth={1.5}
                   />
                   <div className="text-[12.5px] text-gray-500">
-                    点击选择或拖拽文件到此处
+                    {zh ? "点击选择或拖拽文件到此处" : "Click to choose a file, or drag it here"}
                   </div>
                   <div className="mt-1 text-[11px] text-gray-300">
-                    支持 Word / PDF / 表格 / 文本
+                    {zh ? "支持 Word / PDF / 表格 / 文本" : "Supports Word / PDF / spreadsheets / text"}
                   </div>
                 </div>
                 <input
@@ -1111,7 +1177,7 @@ const handleRevise = useCallback(
               <div className="mt-4 flex-1 overflow-y-auto min-h-0">
                 <div className="flex items-center gap-1.5 text-[12px] text-gray-400 mb-1.5 px-1">
                   <History className="w-3.5 h-3.5" strokeWidth={1.5} />
-                  最近使用
+                  {zh ? "最近使用" : "Recently used"}
                 </div>
                 {(() => {
                   const seen = new Set<string>();
@@ -1147,16 +1213,16 @@ const handleRevise = useCallback(
                       return (
                         <div className="flex flex-col items-center justify-center py-10 text-center">
                           <span className="inline-block w-5 h-5 rounded-full border-2 border-gray-200 border-t-primary animate-spin" />
-                          <div className="mt-3 text-[13px] text-gray-400">正在加载最近文件…</div>
+                          <div className="mt-3 text-[13px] text-gray-400">{zh ? "正在加载最近文件…" : "Loading recent files…"}</div>
                         </div>
                       );
                     }
                     return (
                       <div className="flex flex-col items-center justify-center py-10 text-center">
                         <FolderOpen className="w-9 h-9 text-gray-200" strokeWidth={1.25} />
-                        <div className="mt-3 text-[13px] text-gray-400">无最近文件</div>
+                        <div className="mt-3 text-[13px] text-gray-400">{zh ? "无最近文件" : "No recent files"}</div>
                         <div className="mt-1 text-[11.5px] text-gray-300 leading-4">
-                          上传过的材料将显示在此处，以便快速访问
+                          {zh ? "上传过的材料将显示在此处，以便快速访问" : "Materials you upload will appear here for quick access"}
                         </div>
                       </div>
                     );
@@ -1204,7 +1270,7 @@ const handleRevise = useCallback(
                           )}
                           <button
                             onClick={() => void removeSession(rec.name, rec.sessionId)}
-                            title="从最近使用中删除"
+                            title={zh ? "从最近使用中删除" : "Remove from recently used"}
                             className="hidden group-hover:flex w-5 h-5 items-center justify-center rounded-md text-gray-300 hover:text-white hover:bg-[#D93025] transition-colors shrink-0"
                           >
                             <X className="w-3 h-3" strokeWidth={2.5} />
@@ -1224,15 +1290,15 @@ const handleRevise = useCallback(
             <div className="mt-4 flex-1 overflow-y-auto min-h-0">
               {storedFiles === null && (
                 <div className="text-[13px] text-gray-300 py-4 text-center">
-                  加载中…
+                  {zh ? "加载中…" : "Loading…"}
                 </div>
               )}
               {storedFiles !== null && storedFiles.length === 0 && (
                 <div className="flex flex-col items-center justify-center py-14 text-center">
                   <FolderOpen className="w-10 h-10 text-gray-200" strokeWidth={1.25} />
-                  <div className="mt-3 text-[13.5px] text-gray-500">无最近文件</div>
+                  <div className="mt-3 text-[13.5px] text-gray-500">{zh ? "无最近文件" : "No recent files"}</div>
                   <div className="mt-1 text-[12px] text-gray-300 leading-4">
-                    您打开的文件将显示在此处，以便快速访问
+                    {zh ? "您打开的文件将显示在此处，以便快速访问" : "Files you open will appear here for quick access"}
                   </div>
                 </div>
               )}
@@ -1260,7 +1326,7 @@ const handleRevise = useCallback(
               {!hkbKb ? (
                 <>
                   <div className="mb-2 px-1.5 text-[11px] font-medium tracking-wide text-gray-400">
-                    选择知识库
+                    {zh ? "选择知识库" : "Choose a knowledge base"}
                   </div>
 
                   {kbList === null && (
@@ -1275,12 +1341,12 @@ const handleRevise = useCallback(
                         <BookOpen className="h-6 w-6 text-[#FF7A45]/70" strokeWidth={1.6} />
                       </span>
                       <div className="mt-3.5 text-[13.5px] font-medium text-[#1D1D1F]">
-                        暂无知识库
+                        {zh ? "暂无知识库" : "No knowledge bases yet"}
                       </div>
                       <div className="mt-1 text-[12px] leading-5 text-gray-400">
-                        在 HybRAG 中创建知识库
+                        {zh ? "在 HybRAG 中创建知识库" : "Create a knowledge base in HybRAG"}
                         <br />
-                        并上传文档后显示在此处
+                        {zh ? "并上传文档后显示在此处" : "and upload documents to see them here"}
                       </div>
                     </div>
                   )}
@@ -1305,8 +1371,10 @@ const handleRevise = useCallback(
                             </span>
                             <span className="mt-0.5 block text-[11px] text-gray-400">
                               {typeof kb.knowledge_count === "number"
-                                ? `${kb.knowledge_count} 个文件`
-                                : "知识库"}
+                                ? zh
+                                  ? `${kb.knowledge_count} 个文件`
+                                  : `${kb.knowledge_count} files`
+                                : zh ? "知识库" : "Knowledge base"}
                             </span>
                           </span>
                           <ChevronRight
@@ -1324,7 +1392,7 @@ const handleRevise = useCallback(
                   <div className="mb-2.5 flex items-center gap-2.5">
                     <button
                       onClick={backToKnowledgeBases}
-                      aria-label="返回知识库列表"
+                      aria-label={zh ? "返回知识库列表" : "Back to knowledge bases"}
                       className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-500 transition-all duration-150 hover:bg-gray-200 hover:text-[#1D1D1F] active:scale-90"
                     >
                       <ChevronLeft className="h-4 w-4" strokeWidth={2.4} />
@@ -1335,7 +1403,7 @@ const handleRevise = useCallback(
                       </div>
                       {!!hkbFiles?.length && (
                         <div className="mt-0.5 text-[11px] text-gray-400">
-                          {hkbFiles.length} 个文件
+                          {zh ? `${hkbFiles.length} 个文件` : `${hkbFiles.length} files`}
                         </div>
                       )}
                     </div>
@@ -1351,7 +1419,7 @@ const handleRevise = useCallback(
                       <input
                         value={hkbQuery}
                         onChange={(e) => setHkbQuery(e.target.value)}
-                        placeholder="搜索文件"
+                        placeholder={zh ? "搜索文件" : "Search files"}
                         className="w-full rounded-[10px] bg-gray-100 py-1.5 pl-8 pr-3 text-[12.5px] text-[#1D1D1F] outline-none transition-all placeholder:text-gray-400 focus:bg-white focus:ring-2 focus:ring-[#FF7A45]/25"
                       />
                     </div>
@@ -1360,7 +1428,7 @@ const handleRevise = useCallback(
                   {hkbLoading && (
                     <div className="flex flex-col items-center justify-center py-12">
                       <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-gray-200 border-t-[#FF7A45]" />
-                      <div className="mt-3 text-[12.5px] text-gray-400">正在加载文件…</div>
+                      <div className="mt-3 text-[12.5px] text-gray-400">{zh ? "正在加载文件…" : "Loading files…"}</div>
                     </div>
                   )}
 
@@ -1369,7 +1437,7 @@ const handleRevise = useCallback(
                       <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50 ring-1 ring-red-100">
                         <X className="h-5 w-5 text-red-400" strokeWidth={2} />
                       </span>
-                      <div className="mt-3 text-[13px] font-medium text-[#1D1D1F]">加载失败</div>
+                      <div className="mt-3 text-[13px] font-medium text-[#1D1D1F]">{zh ? "加载失败" : "Load failed"}</div>
                       <div className="mt-1 text-[11.5px] leading-4 text-gray-400 break-all">
                         {hkbFilesError}
                       </div>
@@ -1377,7 +1445,7 @@ const handleRevise = useCallback(
                         onClick={() => void openKnowledgeBase(hkbKb)}
                         className="mt-3.5 rounded-full bg-[#1D1D1F] px-4 py-1.5 text-[12px] font-medium text-white transition-all duration-150 hover:bg-black active:scale-95"
                       >
-                        重试
+                        {zh ? "重试" : "Retry"}
                       </button>
                     </div>
                   )}
@@ -1388,10 +1456,10 @@ const handleRevise = useCallback(
                         <BookOpen className="h-6 w-6 text-gray-300" strokeWidth={1.6} />
                       </span>
                       <div className="mt-3.5 text-[13.5px] font-medium text-[#1D1D1F]">
-                        该知识库暂无文件
+                        {zh ? "该知识库暂无文件" : "No files in this knowledge base"}
                       </div>
                       <div className="mt-1 text-[12px] text-gray-400">
-                        在 HybRAG 中上传文档后即可引用
+                        {zh ? "在 HybRAG 中上传文档后即可引用" : "Upload documents in HybRAG to reference them"}
                       </div>
                     </div>
                   )}
@@ -1399,7 +1467,7 @@ const handleRevise = useCallback(
                   {!hkbLoading && !hkbFilesError && (hkbFiles?.length ?? 0) > 0 && (
                     hkbVisibleFiles.length === 0 ? (
                       <div className="py-10 text-center text-[12.5px] text-gray-400">
-                        没有匹配「{hkbQuery.trim()}」的文件
+                        {zh ? `没有匹配「${hkbQuery.trim()}」的文件` : `No files match “${hkbQuery.trim()}”`}
                       </div>
                     ) : (
                       <div className="overflow-hidden rounded-2xl bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04),0_10px_28px_-16px_rgba(0,0,0,0.18)] ring-1 ring-black/5">
@@ -1433,7 +1501,9 @@ const handleRevise = useCallback(
                                 </span>
                                 {parsing && (
                                   <span className="mt-0.5 block text-[11px] text-amber-500">
-                                    {file.status === "failed" ? "解析失败" : "解析中…"}
+                                    {file.status === "failed"
+                                      ? zh ? "解析失败" : "Parse failed"
+                                      : zh ? "解析中…" : "Parsing…"}
                                   </span>
                                 )}
                               </span>
@@ -1478,15 +1548,15 @@ const handleRevise = useCallback(
               </span>
               <div>
                 <h1 className="text-[22px] font-semibold text-[#1D1D1F] leading-tight">
-                  AI 公文写作
+                  {zh ? "AI 公文写作" : "AI Official Document Writing"}
                 </h1>
                 <p className="text-[12.5px] text-gray-400 mt-0.5">
-                  多 agent 五阶段协作 · 流式打磨交稿
+                  {zh ? "多 agent 五阶段协作 · 流式打磨交稿" : "Multi-agent, five-stage collaboration · streaming refinement"}
                 </p>
               </div>
             </div>
             <span className="inline-flex items-center rounded-full border border-primary/20 bg-primary/5 px-3.5 py-1.5 text-[12px] text-primary tracking-wide">
-              智能 · 高效 · 专业
+              {zh ? "智能 · 高效 · 专业" : "Intelligent · Efficient · Professional"}
             </span>
           </div>
           {/* 服务不可用提示：本应用 AI 服务探测失败（去设置里配模型网关） */}
@@ -1495,7 +1565,9 @@ const handleRevise = useCallback(
               <div className="flex items-center gap-2.5 min-w-0">
                 <span className="w-2 h-2 shrink-0 rounded-full bg-[#D93025]" />
                 <span className="text-[13px] text-[#8A2A22] truncate">
-                  AI 写作服务不可用——请在「设置 → AI 模型」里配置网关、模型与密钥
+                  {zh
+                    ? "AI 写作服务不可用——请在「设置 → AI 模型」里配置网关、模型与密钥"
+                    : "AI writing service unavailable — configure the gateway, model and key in Settings → AI Models"}
                 </span>
               </div>
               <button
@@ -1505,7 +1577,7 @@ const handleRevise = useCallback(
                 }}
                 className="shrink-0 rounded-lg border border-[#E5B9B9] bg-white px-3 py-1.5 text-[12.5px] text-[#8A2A22] hover:bg-[#FBEBEB] active:scale-[0.97] transition"
               >
-                重试
+                {zh ? "重试" : "Retry"}
               </button>
             </div>
           )}
@@ -1641,26 +1713,26 @@ function typeTint(docType: string): string {
   return TYPE_TINTS[docType] ?? "bg-primary/10 text-primary";
 }
 
-function labelOf(stage: string, round?: number): string {
+function labelOf(stage: string, round?: number, zh: boolean = true): string {
   switch (stage) {
     // 三阶段新管线
     case "draft":
-      return "写手起草";
+      return zh ? "写手起草" : "Drafting";
     case "reviewfix":
-      return "审查改稿";
+      return zh ? "审查改稿" : "Review & Revise";
     case "signoff":
-      return "审批定稿";
+      return zh ? "审批定稿" : "Approval & Finalize";
     // 旧五阶段（历史会话恢复）
     case "review":
-      return "审查把关";
+      return zh ? "审查把关" : "Review";
     case "rewrite":
-      return `推稿复写${round ? ` 第${round}轮` : ""}`;
+      return zh ? `推稿复写${round ? ` 第${round}轮` : ""}` : `Rewrite${round ? ` (round ${round})` : ""}`;
     case "audit":
-      return "审核复核";
+      return zh ? "审核复核" : "Audit";
     case "finalize":
-      return "审批定稿";
+      return zh ? "审批定稿" : "Approval & Finalize";
     case "revise":
-      return "局部微调";
+      return zh ? "局部微调" : "Fine-tune";
     default:
       return stage;
   }
@@ -1777,10 +1849,11 @@ function StoredFileList({
   selected: string | null;
   onSelect: (name: string) => void;
 }) {
+  const zh = useIsChineseUI();
   if (files.length === 0) {
     return (
       <div className="text-[13px] text-gray-300 py-4 text-center">
-        暂无文档
+        {zh ? "暂无文档" : "No documents"}
       </div>
     );
   }
@@ -1822,25 +1895,29 @@ function fmtSize(size: number): string {
 
 // ── 材料状态展示（左栏卡片 + 设置卡内联条）──────────────────────────────────
 
-function fmtChars(n: number): string {
-  if (n >= 10_000) return `${(n / 10_000).toFixed(1)} 万字`;
-  return `${n} 字`;
+function fmtChars(n: number, zh: boolean): string {
+  if (n >= 10_000) return zh ? `${(n / 10_000).toFixed(1)} 万字` : `${Math.round(n / 1000)}k chars`;
+  return zh ? `${n} 字` : `${n} chars`;
 }
 
 function MaterialStatusLine({
   material,
+  zh,
 }: {
   material: Material;
+  zh: boolean;
 }): { text: string; tone: "muted" | "warn" } {
   if (material.status === "uploading")
-    return { text: "上传解析中…", tone: "muted" };
+    return { text: zh ? "上传解析中…" : "Uploading and parsing…", tone: "muted" };
   if (material.status === "error")
     return { text: material.error, tone: "warn" };
   if (material.parseError)
     return { text: material.parseError, tone: "warn" };
   return {
     // 材料原件现在是直接送进助手工作目录的，服务端不再做"解析成文本"这一步
-    text: material.chars ? `已解析 ${fmtChars(material.chars)}` : "已送入助手工作目录",
+    text: material.chars
+      ? zh ? `已解析 ${fmtChars(material.chars, zh)}` : `Parsed ${fmtChars(material.chars, zh)}`
+      : zh ? "已送入助手工作目录" : "Sent to the assistant workspace",
     tone: "muted",
   };
 }
@@ -1854,7 +1931,8 @@ function MaterialCard({
   onRemove: () => void;
   onRetry: (name: string) => void;
 }) {
-  const line = MaterialStatusLine({ material });
+  const zh = useIsChineseUI();
+  const line = MaterialStatusLine({ material, zh });
   const warn = line.tone === "warn";
   const canRetry =
     material.status === "error" ||
@@ -1885,7 +1963,7 @@ function MaterialCard({
             className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-[#FFD5CC] bg-white px-2 py-0.5 text-[11px] text-[#D93025] hover:bg-[#FFF5F3] active:scale-[0.97] transition"
           >
             <Loader2 className="w-3 h-3" strokeWidth={2} />
-            重试解析
+            {zh ? "重试解析" : "Retry parsing"}
           </button>
         )}
       </div>
@@ -1951,11 +2029,16 @@ function SectionHeader({
 }
 
 function ConfigStep(p: ConfigStepProps) {
+  const zh = useIsChineseUI();
   return (
     <div className="flex flex-col gap-5 pb-2">
       {/* 选择文种 */}
       <section className="bg-white rounded-2xl border border-black/6 shadow-sm p-6">
-        <SectionHeader icon={FileStack} title="选择文种" subtitle="不同文种有不同的格式与写作规范" />
+        <SectionHeader
+          icon={FileStack}
+          title={zh ? "选择文种" : "Document type"}
+          subtitle={zh ? "不同文种有不同的格式与写作规范" : "Each document type has its own format and drafting rules"}
+        />
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
           {DOC_TYPES.map((t) => {
             const Icon = DOC_TYPE_ICONS[t] ?? FileStack;
@@ -1979,7 +2062,7 @@ function ConfigStep(p: ConfigStepProps) {
                 >
                   <Icon className="w-4 h-4" strokeWidth={1.75} />
                 </span>
-                <span className="truncate">{t}</span>
+                <span className="truncate">{zh ? t : DOC_TYPE_LABELS_EN[t] ?? t}</span>
                 {active && (
                   <span className="absolute -top-1.5 -right-1.5 flex w-[18px] h-[18px] rounded-full bg-[#FF7A45] items-center justify-center">
                     <Check className="w-3 h-3 text-white" strokeWidth={2.5} />
@@ -1995,47 +2078,59 @@ function ConfigStep(p: ConfigStepProps) {
       <section className="bg-white rounded-2xl border border-black/6 shadow-sm p-6">
         <SectionHeader
           icon={PenLine}
-          title="写作要求"
-          subtitle="请填写公文标题与核心需求，AI 将根据您的要求生成公文"
+          title={zh ? "写作要求" : "Writing requirements"}
+          subtitle={zh
+            ? "请填写公文标题与核心需求，AI 将根据您的要求生成公文"
+            : "Enter the document title and core requirements; the AI will draft the document accordingly"}
         />
         <textarea
           value={p.title}
           onChange={(e) => p.onTitle(e.target.value)}
           rows={4}
-          placeholder="如：解读某市四年度政策，重点说明背景、主要内容和落实要求..."
+          placeholder={zh
+            ? "如：解读某市四年度政策，重点说明背景、主要内容和落实要求..."
+            : "e.g. interpret a city's four-year policy, focusing on background, main content and implementation requirements…"}
           className="w-full rounded-xl border border-gray-200 px-4 py-3 text-[15px] text-[#1D1D1F] outline-none focus:border-[#FF7A45] focus:ring-2 focus:ring-[#FF7A45]/10 transition resize-none placeholder:text-gray-300"
         />
       </section>
 
       {/* 基础信息 */}
       <section className="bg-white rounded-2xl border border-black/6 shadow-sm p-6">
-        <SectionHeader icon={Settings2} title="基础信息" subtitle="补充公文的基础要素（可留空）" />
+        <SectionHeader
+          icon={Settings2}
+          title={zh ? "基础信息" : "Basic information"}
+          subtitle={zh ? "补充公文的基础要素（可留空）" : "Additional essentials for the document (optional)"}
+        />
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
           <div>
-            <label className="block text-[13px] text-gray-500 mb-1.5">发布机关</label>
+            <label className="block text-[13px] text-gray-500 mb-1.5">{zh ? "发布机关" : "Issuing authority"}</label>
             <input
               value={p.publisher}
               onChange={(e) => p.onPublisher(e.target.value)}
-              placeholder={REDHEAD_DOC_TYPES.has(p.docType) ? "红头标志（可留空）" : "可留空"}
+              placeholder={
+                REDHEAD_DOC_TYPES.has(p.docType)
+                  ? zh ? "红头标志（可留空）" : "Red-head mark (optional)"
+                  : zh ? "可留空" : "Optional"
+              }
               className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-[#FF7A45] focus:ring-2 focus:ring-[#FF7A45]/10 transition placeholder:text-gray-300"
             />
           </div>
           <div>
-            <label className="block text-[13px] text-gray-500 mb-1.5">受文 / 解读对象</label>
+            <label className="block text-[13px] text-gray-500 mb-1.5">{zh ? "受文 / 解读对象" : "Recipient / audience"}</label>
             <input
               value={p.audience}
               onChange={(e) => p.onAudience(e.target.value)}
-              placeholder="自动 / 不指定"
+              placeholder={zh ? "自动 / 不指定" : "Auto / unspecified"}
               className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-[#FF7A45] focus:ring-2 focus:ring-[#FF7A45]/10 transition placeholder:text-gray-300"
             />
           </div>
           <div>
-            <label className="block text-[13px] text-gray-500 mb-1.5">行文口径 / 解读形式</label>
+            <label className="block text-[13px] text-gray-500 mb-1.5">{zh ? "行文口径 / 解读形式" : "Tone / interpretation format"}</label>
             <input
               value={p.style}
               onChange={(e) => p.onStyle(e.target.value)}
-              placeholder="自动 / 不指定"
+              placeholder={zh ? "自动 / 不指定" : "Auto / unspecified"}
               className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-[#FF7A45] focus:ring-2 focus:ring-[#FF7A45]/10 transition placeholder:text-gray-300"
             />
           </div>
@@ -2044,12 +2139,12 @@ function ConfigStep(p: ConfigStepProps) {
         {REDHEAD_DOC_TYPES.has(p.docType) && (
           <div>
             <label className="block text-[13px] text-gray-500 mb-1.5">
-              发文字号 <span className="text-gray-300">（可留空）</span>
+              {zh ? "发文字号" : "Document number"} <span className="text-gray-300">{zh ? "（可留空）" : "(optional)"}</span>
             </label>
             <input
               value={p.docNumber}
               onChange={(e) => p.onDocNumber(e.target.value)}
-              placeholder="如：X政发〔2026〕5号"
+              placeholder={zh ? "如：X政发〔2026〕5号" : "e.g. X Zheng Fa [2026] No. 5"}
               className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-[#FF7A45] focus:ring-2 focus:ring-[#FF7A45]/10 transition placeholder:text-gray-300"
             />
           </div>
@@ -2058,22 +2153,32 @@ function ConfigStep(p: ConfigStepProps) {
 
       {/* 其他要求 */}
       <section className="bg-white rounded-2xl border border-black/6 shadow-sm p-6">
-        <SectionHeader icon={MessageSquare} title="其他要求" subtitle="如有其他特殊要求，请在此处填写" />
+        <SectionHeader
+          icon={MessageSquare}
+          title={zh ? "其他要求" : "Other requirements"}
+          subtitle={zh ? "如有其他特殊要求，请在此处填写" : "Add any other special requirements here"}
+        />
         <textarea
           value={p.requirements}
           onChange={(e) => p.onRequirements(e.target.value)}
           rows={3}
-          placeholder="例如：结合本单位实际情况，重点写保障措施部分；文中数据以上年度报表为准…"
+          placeholder={zh
+            ? "例如：结合本单位实际情况，重点写保障措施部分；文中数据以上年度报表为准…"
+            : "e.g. focus on the safeguards section given our organization's situation; use last year's report for all figures…"}
           className="w-full rounded-xl border border-gray-200 px-3.5 py-2.5 text-[15px] text-[#1D1D1F] outline-none focus:border-[#FF7A45] focus:ring-2 focus:ring-[#FF7A45]/10 transition resize-none placeholder:text-gray-300"
         />
       </section>
 
       {/* 篇幅设置 */}
       <section className="bg-white rounded-2xl border border-black/6 shadow-sm p-6">
-        <SectionHeader icon={Settings2} title="篇幅设置" subtitle="控制生成文档的长度" />
+        <SectionHeader
+          icon={Settings2}
+          title={zh ? "篇幅设置" : "Length"}
+          subtitle={zh ? "控制生成文档的长度" : "Control the length of the generated document"}
+        />
         <div className="flex items-end gap-4">
           <div className="flex-1 max-w-xs">
-            <label className="block text-[13px] text-gray-500 mb-1.5">篇幅（字，0 = 自动）</label>
+            <label className="block text-[13px] text-gray-500 mb-1.5">{zh ? "篇幅（字，0 = 自动）" : "Length (characters, 0 = auto)"}</label>
             <input
               type="number"
               min={0}
@@ -2098,7 +2203,7 @@ function ConfigStep(p: ConfigStepProps) {
           }
         >
           <Sparkles className="w-5 h-5" strokeWidth={1.75} />
-          {p.starting ? "正在准备…" : "开始生成"}
+          {p.starting ? (zh ? "正在准备…" : "Preparing…") : (zh ? "开始生成" : "Start generating")}
         </button>
       </div>
     </div>
