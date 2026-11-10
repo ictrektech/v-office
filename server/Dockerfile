@@ -161,6 +161,7 @@ RUN python3 ./tools/rewrite_skills.py \
 # 而本地跑源码完全看不出来。哪些 .py 不该进镜像交给 .dockerignore 排除，
 # 而不是指望"以后加文件的人记得在这里补一行"。
 COPY *.py ./
+COPY api-guide.html ./
 
 ENV DATA_ROOT=/data
 ENV VOS_OIDC_USERINFO_URL=http://172.17.0.1:8105/v1000/oauth2/userinfo

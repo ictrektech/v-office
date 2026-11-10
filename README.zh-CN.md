@@ -106,3 +106,7 @@
 <p align="center">
   用心打造更好的办公体验。❤️
 </p>
+
+## 完整 API 参考
+
+应用内 API 接入指南提供[完整流程、鉴权、冲突与全部原生接口字段](ictrek.app/docs/api-reference.zh.md)，也可通过 `/api/v1/guide#zh` 查看；`/api/v1/docs` 读取实时 `/openapi.json`，兼容 VOS 代理前缀。本轮只更新代码，随应用下次发版进入安装界面。

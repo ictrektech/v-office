@@ -106,3 +106,7 @@ Special thanks to the following projects that made this possible:
 <p align="center">
   Built with ❤️ for a better office experience.
 </p>
+
+## Complete API reference
+
+The in-app API Guide links to [workflows, authentication, concurrency and all native operation fields](ictrek.app/docs/api-reference.en.md), also served at `/api/v1/guide#en`. `/api/v1/docs` reads the live `/openapi.json`; VOS proxy prefixes are preserved. These documentation changes ship with the next app release.

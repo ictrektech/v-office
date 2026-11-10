@@ -107,6 +107,8 @@ export function ApiGuideView() {
         </div>
       </div>
 
+      <a className="text-primary underline" href={`${base}/api/v1/guide#${zh ? "zh" : "en"}`} target="_blank" rel="noreferrer">{zh ? "完整接入流程、错误与所有接口" : "Complete workflows, errors and all operations"}</a>
+
       <section className="grid gap-4 md:grid-cols-2">
         <div className="rounded-2xl border border-primary/20 bg-primary/5 p-5">
           <div className="mb-3 flex items-center gap-2 font-semibold">
@@ -138,7 +140,10 @@ export function ApiGuideView() {
         </div>
       </section>
 
-      <section className="space-y-4">
+      <section className="space-y-4" id="full-api-contract">
+        <a href={`${base}/api/v1/docs`} target="_blank" rel="noopener noreferrer" className="font-semibold text-primary">
+          {zh ? "完整 API 字段参考：文件、共享源、AI 会话与 WOPI" : "Complete API field reference: files, sources, AI sessions and WOPI"}
+        </a>
         <h2 className="text-xl font-bold">{zh ? "接口地址" : "Endpoint"}</h2>
         <CopyCode>{examples.setup}</CopyCode>
         <div className="overflow-hidden rounded-2xl border border-border">

@@ -2874,7 +2874,21 @@ async def wopi_file_operations(name: str, request: Request) -> Response:
     return Response(status_code=200, content=b"")
 
 
+# 文档元数据与交互入口不改变业务处理器或响应序列化。
+from api_documentation import build_openapi as _build_openapi
+from fastapi.openapi.docs import get_swagger_ui_html
+app.openapi = lambda: _build_openapi(app, ai_router)
+
+@app.get("/api/v1/docs", include_in_schema=False)
+async def complete_api_documentation():
+    return get_swagger_ui_html(openapi_url="../../openapi.json", title="V-Office API")
+
+
+@app.get("/api/v1/guide", include_in_schema=False)
+async def complete_api_guide():
+    return FileResponse(Path(__file__).with_name("api-guide.html"), media_type="text/html")
+
+
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(app, host="0.0.0.0", port=5000)
